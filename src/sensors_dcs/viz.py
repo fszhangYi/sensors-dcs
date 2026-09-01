@@ -91,7 +91,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .agent-meta strong { color: var(--accent); font-weight: 600; }
     .agent-bars { display: grid; gap: 0.55rem; }
-    #agents { display: grid; gap: 1rem; }
+    # agents grid: stack on narrow, 2–3 cols when wide (multi-camera)
+    #agents {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+      align-items: start;
+    }
     .row { display: grid; grid-template-columns: 4.5rem 1fr 5rem; gap: 0.75rem; align-items: center; }
     .row span { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 0.85rem; }
     .track {
@@ -109,6 +115,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
       font-size: 0.78rem; line-height: 1.45; color: #c5d0e0;
       max-height: 280px;
     }
+    .cam-preview {
+      margin-top: 0.75rem; width: 100%; max-width: 640px;
+      aspect-ratio: 16 / 9; object-fit: contain;
+      background: #0b1017; border: 1px solid var(--line); border-radius: 10px;
+      display: block;
+    }
+    .cam-meta { margin-top: 0.4rem; color: var(--muted); font-size: 0.82rem; }
   </style>
 </head>
 <body>
@@ -181,7 +194,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
         '<div>后端 hz：<strong class="k-hz">—</strong></div>' +
         '<div>dry_run：<strong class="k-dry">—</strong></div>' +
         '</div>' +
-        '<div class="agent-bars"></div>';
+        '<div class="agent-bars"></div>' +
+        '<img class="cam-preview" hidden alt="camera preview" />' +
+        '<div class="cam-meta" hidden></div>';
       agentsEl.appendChild(card);
       return card;
     }
@@ -214,8 +229,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
       card.querySelector('.k-seq').textContent = String(frame.seq);
       card.querySelector('.k-hz').textContent = hzText;
       card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
+      const img = card.querySelector('.cam-preview');
+      const camMeta = card.querySelector('.cam-meta');
+      if (img) img.hidden = true;
+      if (camMeta) camMeta.hidden = true;
       const joints = (frame.payload && frame.payload.joints_rad) || [];
       const barsRoot = card.querySelector('.agent-bars');
+      barsRoot.hidden = false;
       ensureRows(barsRoot, joints.length, (i) => 'j' + i);
       joints.forEach((rad, i) => {
         const norm = Math.max(0, Math.min(1, (rad + 1.2) / 2.4));
@@ -229,13 +249,42 @@ PREVIEW_HTML = """<!DOCTYPE html>
       card.querySelector('.k-seq').textContent = String(frame.seq);
       card.querySelector('.k-hz').textContent = hzText;
       card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
+      const img = card.querySelector('.cam-preview');
+      const camMeta = card.querySelector('.cam-meta');
+      if (img) img.hidden = true;
+      if (camMeta) camMeta.hidden = true;
       const pos = frame.payload && frame.payload.position_norm;
       const barsRoot = card.querySelector('.agent-bars');
+      barsRoot.hidden = false;
       ensureRows(barsRoot, 1, () => 'pos');
       const p = pos == null ? 0 : Number(pos);
       // DH AG95 norm ≈ 0..0.637
       const width = Math.max(0, Math.min(1, p / 0.637)) * 100;
       setBar(barsRoot.children[0], width, pos == null ? '—' : p.toFixed(3));
+    }
+
+    function renderRealsense(card, frame, hzText) {
+      card.querySelector('h2').textContent = frame.agent_id + ' · RealSense';
+      card.querySelector('.k-kind').textContent = frame.kind;
+      card.querySelector('.k-seq').textContent = String(frame.seq);
+      card.querySelector('.k-hz').textContent = hzText;
+      card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
+      const barsRoot = card.querySelector('.agent-bars');
+      barsRoot.hidden = true;
+      barsRoot.innerHTML = '';
+      const p = frame.payload || {};
+      const img = card.querySelector('.cam-preview');
+      const camMeta = card.querySelector('.cam-meta');
+      if (img) {
+        img.hidden = false;
+        if (p.jpeg_b64) img.src = 'data:image/jpeg;base64,' + p.jpeg_b64;
+      }
+      if (camMeta) {
+        camMeta.hidden = false;
+        const sn = p.serial || '—';
+        const wh = (p.width && p.height) ? (p.width + '×' + p.height) : '—';
+        camMeta.textContent = 'serial ' + sn + ' · ' + wh + '@' + (p.fps != null ? p.fps : '—');
+      }
     }
 
     function updateBackHz(agentId, frame, target) {
@@ -281,12 +330,19 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const card = ensureCard(frame.agent_id, frame.kind);
         if (frame.kind === 'gripper_read') {
           renderGripperRead(card, frame, hzText);
+        } else if (frame.kind === 'realsense') {
+          renderRealsense(card, frame, hzText);
         } else {
           renderGello(card, frame, hzText);
         }
       });
 
-      rawEl.textContent = JSON.stringify(msg, null, 2);
+      rawEl.textContent = JSON.stringify(msg, (k, v) => {
+        if (k === 'jpeg_b64' && typeof v === 'string') {
+          return '<jpeg ' + v.length + ' chars>';
+        }
+        return v;
+      }, 2);
     }
 
     function connect() {
@@ -376,5 +432,112 @@ def create_viz_app(hub: VizHub, status_fn: Callable[[], dict[str, Any]]) -> Fast
             hub.unregister(ws)
         except Exception:  # noqa: BLE001
             hub.unregister(ws)
+
+    return app
+
+
+ERROR_HTML = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>sensors-dcs · 配置错误</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --text: #e7ecf3;
+      --muted: #8b9bb4;
+      --accent: #3d9a8b;
+      --danger: #d9776c;
+      --line: #2a3a4f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      background: radial-gradient(1200px 600px at 10% -10%, #2a1c1c 0%, var(--bg) 55%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      padding: 1.25rem 1.5rem 0.5rem;
+      border-bottom: 1px solid var(--line);
+    }
+    header h1 { margin: 0; font-size: 1.35rem; font-weight: 600; color: var(--danger); }
+    header p { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.9rem; }
+    main { padding: 1rem 1.5rem 2rem; display: grid; gap: 1rem; max-width: 920px; }
+    .card {
+      background: color-mix(in srgb, var(--panel) 88%, transparent);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 1rem 1.1rem;
+    }
+    .card h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+    .path { color: var(--accent); font-size: 0.9rem; word-break: break-all; }
+    pre {
+      margin: 0; padding: 1rem; overflow: auto; white-space: pre-wrap; word-break: break-word;
+      background: #0b1017; border: 1px solid var(--line); border-radius: 10px;
+      font-size: 0.82rem; line-height: 1.45; color: #f0c4be;
+    }
+    .hint { color: var(--muted); font-size: 0.85rem; line-height: 1.5; }
+    code { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>配置错误</h1>
+    <p>程序未退出；请修正 YAML 后重新启动。Agent 未启动。</p>
+  </header>
+  <main>
+    <div class="card">
+      <h2>配置文件</h2>
+      <div class="path" id="cfgPath">—</div>
+    </div>
+    <div class="card">
+      <h2>错误详情</h2>
+      <pre id="errMsg">—</pre>
+    </div>
+    <div class="card hint">
+      DCS 启动 YAML 需含 <code>sensors_config</code> 与 <code>agents</code>。
+      不要用 <code>sensors_*.yaml</code>（设备清单）直接启动。
+      桌面端可用 <code>sensors-dcs.exe -c &lt;dcs.yaml&gt;</code>
+      或环境变量 <code>SENSORS_DCS_CONFIG</code>。
+    </div>
+  </main>
+  <script>
+    fetch('/api/status').then(r => r.json()).then(j => {
+      document.getElementById('cfgPath').textContent = j.config_path || '—';
+      document.getElementById('errMsg').textContent = j.error || '—';
+    }).catch(e => {
+      document.getElementById('errMsg').textContent = String(e);
+    });
+  </script>
+</body>
+</html>
+"""
+
+
+def create_error_app(*, error: str, config_path: str | None = None) -> FastAPI:
+    """Minimal UI when YAML / boot fails — keep process alive for the user."""
+    app = FastAPI(title="sensors-dcs error", version="0.1.0")
+    payload = {
+        "ok": False,
+        "boot_error": True,
+        "error": error,
+        "config_path": config_path,
+    }
+
+    @app.get("/", response_class=HTMLResponse)
+    async def index() -> str:
+        return ERROR_HTML
+
+    @app.get("/api/status")
+    async def status() -> dict[str, Any]:
+        return payload
+
+    @app.get("/api/health")
+    async def health() -> dict[str, Any]:
+        return {"ok": False, "boot_error": True}
 
     return app

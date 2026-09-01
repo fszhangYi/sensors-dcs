@@ -110,6 +110,11 @@ class Orchestrator:
                     pos = fr.payload.get("position_norm")
                     ptxt = "—" if pos is None else f"{float(pos):+.3f}"
                     parts.append(f"{aid}[{tag}] seq={fr.seq} pos={ptxt}")
+                elif fr.kind == "realsense":
+                    sn = fr.payload.get("serial") or "—"
+                    shape = fr.payload.get("color_shape")
+                    stxt = "x".join(str(x) for x in shape) if shape else "—"
+                    parts.append(f"{aid}[{tag}] seq={fr.seq} sn={sn} rgb={stxt}")
                 else:
                     joints = fr.payload.get("joints_rad")
                     if joints is None:

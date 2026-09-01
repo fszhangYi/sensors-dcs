@@ -1,3 +1,6 @@
 # Gello agent needs Dynamixel + serial
 pyserial>=3.5
 dynamixel-sdk>=3.7
+# RealSense agent (optional on Wine Windows builds — dry_run works without it)
+# pyrealsense2
+opencv-python-headless>=4.8

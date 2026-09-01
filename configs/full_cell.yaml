@@ -1,0 +1,43 @@
+# sensors-dcs — gello + gripper_read + multi RealSense
+version: 1
+site: dcs-full-cell
+
+sensors_config: ./sensors_full_cell.yaml
+# true = 合成假数据；false = 真机（串口 + RealSense serial）
+dry_run: true
+
+runtime:
+  control_host: "0.0.0.0"
+  control_port: 7010
+  viz_host: "0.0.0.0"
+  viz_port: 7011
+  # 含多路 JPEG，推送略降
+  viz_hz: 10
+  console_hz: 5
+
+agents:
+  - id: gello
+    type: gello
+    sensor_id: gello-leader
+    hz: 50
+    buffer_frames: 64
+  - id: gripper-read
+    type: gripper_read
+    sensor_id: gripper-dh
+    hz: 50
+    buffer_frames: 64
+  - id: cam-left
+    type: realsense
+    sensor_id: rs-left
+    hz: 15
+    buffer_frames: 2
+  - id: cam-right
+    type: realsense
+    sensor_id: rs-right
+    hz: 15
+    buffer_frames: 2
+  - id: cam-middle
+    type: realsense
+    sensor_id: rs-middle
+    hz: 15
+    buffer_frames: 2

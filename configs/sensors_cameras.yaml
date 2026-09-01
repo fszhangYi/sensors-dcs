@@ -1,0 +1,40 @@
+# hik-sensors bundle — multi RealSense (one device per camera)
+version: 1
+site: dcs-camera-multi
+dry_run: true
+
+defaults:
+  realsense:
+    width: 1280
+    height: 720
+    fps: 15
+    exposure: 200
+    gain: 64
+    enable_depth: true
+    align_to_color: true
+    timeout_ms: 5000
+
+devices:
+  - id: rs-left
+    kind: realsense
+    name: "RealSense · Left"
+    params:
+      role: left
+      # Replace before --no-dry-run
+      serial: "TODO_LEFT_SERIAL"
+
+  - id: rs-right
+    kind: realsense
+    name: "RealSense · Right"
+    params:
+      role: right
+      # Replace before --no-dry-run
+      serial: "TODO_RIGHT_SERIAL"
+
+  - id: rs-middle
+    kind: realsense
+    name: "RealSense · Middle"
+    params:
+      role: middle
+      # Hardcoded for this cell
+      serial: "336222075436"

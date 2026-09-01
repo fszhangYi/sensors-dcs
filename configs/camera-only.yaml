@@ -1,0 +1,22 @@
+# sensors-dcs — camera-only (RealSense agent)
+version: 1
+site: dcs-camera-only
+
+sensors_config: ./sensors_camera.yaml
+# true = 合成预览图；false = 真机（需接 serial=336222075436）
+dry_run: true
+
+runtime:
+  control_host: "0.0.0.0"
+  control_port: 7010
+  viz_host: "0.0.0.0"
+  viz_port: 7011
+  viz_hz: 15
+  console_hz: 5
+
+agents:
+  - id: camera
+    type: realsense
+    sensor_id: rs-main
+    hz: 15
+    buffer_frames: 2

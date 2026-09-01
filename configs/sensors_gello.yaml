@@ -16,7 +16,7 @@ devices:
     name: "Gello · Leader"
     # Windows 示例：COM3
     # Linux 示例：/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTAA088F-if00-port0
-    endpoint: "COM4"
+    endpoint: "COM3"
     params:
       # Windows 用 COM 口时可留空；Linux by-id 可填 FTDI 串号片段
       port_substr: ""

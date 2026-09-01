@@ -7,6 +7,7 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 HARDWARE_PACKAGES = (
     "dynamixel_sdk",
     "serial",
+    "cv2",
 )
 
 CORE_PACKAGES = ("numpy",)
@@ -61,6 +62,7 @@ def extend_analysis(
         "serial.serialutil",
         "serial.tools",
         "serial.tools.list_ports",
+        "cv2",
     ]
     if missing:
         raise RuntimeError(

@@ -134,6 +134,12 @@ def ensure_runtime_env(*, desktop: bool = False) -> Path:
         "sensors_gello.yaml",
         "gello_gripper.yaml",
         "sensors_gello_gripper.yaml",
+        "camera-only.yaml",
+        "sensors_camera.yaml",
+        "camera-multi.yaml",
+        "sensors_cameras.yaml",
+        "full_cell.yaml",
+        "sensors_full_cell.yaml",
     ):
         _seed_file(root / "configs" / name, data / "configs" / name)
 
@@ -149,6 +155,9 @@ def ensure_runtime_env(*, desktop: bool = False) -> Path:
     for dcs_name, sensors_name in (
         ("gello_only.yaml", "sensors_gello.yaml"),
         ("gello_gripper.yaml", "sensors_gello_gripper.yaml"),
+        ("camera-only.yaml", "sensors_camera.yaml"),
+        ("camera-multi.yaml", "sensors_cameras.yaml"),
+        ("full_cell.yaml", "sensors_full_cell.yaml"),
     ):
         seeded = data / "configs" / dcs_name
         sensors_local = data / "configs" / sensors_name
