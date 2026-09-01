@@ -158,18 +158,21 @@ PREVIEW_HTML = """<!DOCTYPE html>
 <body>
   <header>
     <h1>sensors-dcs · Agents</h1>
-    <p>低频整帧预览。连接 <code>/ws</code>。点「开始」刷新，「结束」冻结。相机固定四宫格；状态卡不含相机预览。</p>
+    <p>低频整帧预览。连接 <code>/ws</code>。「开始/结束」控制录制流水线写盘。相机固定四宫格；状态卡不含相机预览。</p>
   </header>
   <main>
     <div class="actions">
       <button type="button" class="primary" id="btnStart">开始</button>
       <button type="button" id="btnStop" disabled>结束</button>
-      <span class="hint" id="runHint">预览已暂停 — 点「开始」刷新画面</span>
+      <span class="hint" id="runHint">空闲 — 点「开始」录制当前 episode</span>
     </div>
     <div class="meta">
-      <div>状态：<strong id="status">connecting…</strong></div>
-      <div>预览：<strong id="preview">paused</strong></div>
+      <div>连接：<strong id="status">connecting…</strong></div>
+      <div>录制：<strong id="recState">idle</strong></div>
+      <div>保存路径：<strong id="saveDir">—</strong></div>
+      <div>episode：<strong id="episode">—</strong></div>
       <div>前端 hz：<strong id="hzFront">—</strong></div>
+      <div>已写帧：<strong id="written">0</strong></div>
     </div>
     <section class="cam-section">
       <h2>Camera preview · 2×2</h2>
@@ -182,14 +185,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const agentsEl = document.getElementById('agents');
     const camGridEl = document.getElementById('cam-grid');
     const statusEl = document.getElementById('status');
-    const previewEl = document.getElementById('preview');
+    const recStateEl = document.getElementById('recState');
+    const saveDirEl = document.getElementById('saveDir');
+    const episodeEl = document.getElementById('episode');
+    const writtenEl = document.getElementById('written');
     const hzFrontEl = document.getElementById('hzFront');
     const rawEl = document.getElementById('raw');
     const btnStart = document.getElementById('btnStart');
     const btnStop = document.getElementById('btnStop');
     const runHint = document.getElementById('runHint');
-    let updating = false;
     let lastMsgT = null, emaFront = null;
+    let busy = false;
     const backState = {};
     const CAM_SLOTS = [
       { key: 'left', label: 'Left' },
@@ -215,23 +221,53 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     initCamGrid();
 
-    function setUpdating(on) {
-      updating = !!on;
-      btnStart.disabled = updating;
-      btnStop.disabled = !updating;
-      previewEl.textContent = updating ? 'running' : 'paused';
-      runHint.textContent = updating
-        ? '预览刷新中 — 点「结束」冻结画面'
-        : '预览已暂停 — 点「开始」刷新画面';
-      if (updating) {
-        lastMsgT = null;
-        emaFront = null;
-        for (const k of Object.keys(backState)) delete backState[k];
+    function applyRecordUi(rec) {
+      if (!rec) return;
+      const st = rec.state || 'idle';
+      recStateEl.textContent = st;
+      saveDirEl.textContent = rec.save_dir || '—';
+      episodeEl.textContent = (rec.episode_index == null) ? '—' : String(rec.episode_index);
+      writtenEl.textContent = String(rec.written == null ? 0 : rec.written);
+      if (busy) return;
+      if (st === 'recording') {
+        btnStart.disabled = true;
+        btnStop.disabled = false;
+        runHint.textContent = '录制中 — 点「结束」停止流入并落盘';
+      } else if (st === 'flushing') {
+        btnStart.disabled = true;
+        btnStop.disabled = true;
+        runHint.textContent = '落盘中 — 完成前不可开始下一集';
+      } else {
+        btnStart.disabled = false;
+        btnStop.disabled = true;
+        runHint.textContent = '空闲 — 点「开始」录制 episode ' + episodeEl.textContent;
       }
     }
 
-    btnStart.addEventListener('click', () => setUpdating(true));
-    btnStop.addEventListener('click', () => setUpdating(false));
+    async function postRecord(path) {
+      busy = true;
+      btnStart.disabled = true;
+      btnStop.disabled = true;
+      runHint.textContent = path.indexOf('stop') >= 0 ? '正在停止并落盘…' : '正在开始录制…';
+      try {
+        const r = await fetch(path, { method: 'POST' });
+        const j = await r.json();
+        applyRecordUi(j);
+        if (!j.ok && j.error) runHint.textContent = j.error;
+      } catch (e) {
+        runHint.textContent = String(e);
+      } finally {
+        busy = false;
+        // refresh authoritative status
+        try {
+          const s = await fetch('/api/record/status').then((x) => x.json());
+          applyRecordUi(s);
+        } catch (e) {}
+      }
+    }
+
+    btnStart.addEventListener('click', () => postRecord('/api/record/start'));
+    btnStop.addEventListener('click', () => postRecord('/api/record/stop'));
 
     function fmtRate(meas, target) {
       const m = meas == null ? '—' : meas.toFixed(1);
@@ -356,7 +392,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
 
     function render(msg) {
-      if (!updating) return;
+      applyRecordUi(msg.record);
 
       const rates = msg.rates || {};
       const vizTarget = rates.viz_hz_target;
@@ -414,7 +450,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         try { render(JSON.parse(ev.data)); } catch (e) {}
       };
     }
-    setUpdating(false);
+    fetch('/api/record/status').then((r) => r.json()).then(applyRecordUi).catch(() => {});
     connect();
   </script>
 </body>
@@ -462,7 +498,12 @@ class VizHub:
             self.unregister(ws)
 
 
-def create_viz_app(hub: VizHub, status_fn: Callable[[], dict[str, Any]]) -> FastAPI:
+def create_viz_app(
+    hub: VizHub,
+    status_fn: Callable[[], dict[str, Any]],
+    *,
+    recorder: Any | None = None,
+) -> FastAPI:
     app = FastAPI(title="sensors-dcs viz", version="0.1.0")
 
     @app.on_event("startup")
@@ -476,6 +517,25 @@ def create_viz_app(hub: VizHub, status_fn: Callable[[], dict[str, Any]]) -> Fast
     @app.get("/api/status")
     async def status() -> dict[str, Any]:
         return status_fn()
+
+    @app.get("/api/record/status")
+    async def record_status() -> dict[str, Any]:
+        if recorder is None:
+            return {"ok": False, "error": "recorder unavailable", "state": "idle"}
+        return {"ok": True, **recorder.status()}
+
+    @app.post("/api/record/start")
+    async def record_start() -> dict[str, Any]:
+        if recorder is None:
+            return {"ok": False, "error": "recorder unavailable", "state": "idle"}
+        return recorder.start()
+
+    @app.post("/api/record/stop")
+    async def record_stop() -> dict[str, Any]:
+        if recorder is None:
+            return {"ok": False, "error": "recorder unavailable", "state": "idle"}
+        # Block until disk flush completes so UI can keep Start disabled.
+        return await asyncio.to_thread(recorder.stop)
 
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket) -> None:

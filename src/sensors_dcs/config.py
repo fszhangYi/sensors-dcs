@@ -33,12 +33,19 @@ class RuntimeConfig(BaseModel):
     console_hz: float = 5.0
 
 
+class RecordConfig(BaseModel):
+    save_dir: str = "./data"
+    episode_index: int = 0
+    queue_maxsize: int = 512
+
+
 class DcsConfig(BaseModel):
     version: int = 1
     site: str = "default"
     sensors_config: str
     dry_run: bool | None = None
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
+    record: RecordConfig = Field(default_factory=RecordConfig)
     agents: list[AgentConfig] = Field(default_factory=list)
 
     @field_validator("agents")
@@ -66,6 +73,15 @@ def resolve_sensors_config(raw: str | Path, *, config_file: Path) -> Path:
     # Prefer project-root style error when path looks like sensors/...
     if str(p).startswith("sensors/") or str(p).startswith("sensors\\"):
         return under_root
+    return beside
+
+
+def resolve_save_dir(raw: str | Path, *, config_file: Path) -> Path:
+    """Resolve record.save_dir: absolute, next to DCS YAML, or CWD."""
+    p = Path(raw).expanduser()
+    if p.is_absolute():
+        return p.resolve()
+    beside = (config_file.parent / p).resolve()
     return beside
 
 
@@ -100,7 +116,9 @@ def load_dcs_config(path: str | Path) -> DcsConfig:
             f"sensors_config not found: {sensors_path}\n"
             f"  (referenced from DCS config {root})"
         )
-    return cfg.model_copy(update={"sensors_config": str(sensors_path)})
+    save_dir = resolve_save_dir(cfg.record.save_dir, config_file=root)
+    record = cfg.record.model_copy(update={"save_dir": str(save_dir)})
+    return cfg.model_copy(update={"sensors_config": str(sensors_path), "record": record})
 
 
 def config_summary(cfg: DcsConfig) -> dict[str, Any]:
@@ -110,5 +128,6 @@ def config_summary(cfg: DcsConfig) -> dict[str, Any]:
         "dry_run": cfg.dry_run,
         "sensors_config": cfg.sensors_config,
         "runtime": cfg.runtime.model_dump(),
+        "record": cfg.record.model_dump(),
         "agents": [a.model_dump() for a in cfg.agents],
     }

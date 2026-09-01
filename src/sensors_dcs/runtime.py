@@ -15,11 +15,12 @@ from sensors import SensorManager  # noqa: E402
 from sensors_dcs.agents import build_agent
 from sensors_dcs.agents.base import BaseAgent
 from sensors_dcs.config import DcsConfig, config_summary
+from sensors_dcs.record import RecordController
 from sensors_dcs.viz import VizHub, create_viz_app
 
 
 class Orchestrator:
-    """MVP runtime: start listed agents + viz publisher."""
+    """MVP runtime: start listed agents + viz publisher + record consumer."""
 
     def __init__(self, cfg: DcsConfig) -> None:
         self.cfg = cfg
@@ -30,6 +31,11 @@ class Orchestrator:
             sensor = self.manager.get(acfg.sensor_id)
             self.agents[acfg.id] = build_agent(acfg, sensor)
         self.hub = VizHub()
+        self.recorder = RecordController(
+            cfg.record,
+            agents=self.agents,
+            site=cfg.site,
+        )
         self._stop = threading.Event()
         self._viz_thread: threading.Thread | None = None
         self._console_thread: threading.Thread | None = None
@@ -41,6 +47,7 @@ class Orchestrator:
             "agents": {aid: a.stats() for aid, a in self.agents.items()},
             "sensors_site": self.manager.bundle.site,
             "sensors_dry_run": self.manager.ctx.dry_run,
+            "record": self.recorder.status(),
         }
 
     def start(self) -> None:
@@ -56,13 +63,18 @@ class Orchestrator:
 
     def stop(self) -> None:
         self._stop.set()
+        # Finish any open episode before tearing down agents
+        if self.recorder.status().get("state") == "recording":
+            try:
+                self.recorder.stop(timeout=30.0)
+            except Exception:  # noqa: BLE001
+                pass
         if self._viz_thread and self._viz_thread.is_alive():
             self._viz_thread.join(timeout=2.0)
         if self._console_thread and self._console_thread.is_alive():
             self._console_thread.join(timeout=2.0)
         for agent in self.agents.values():
             agent.stop()
-        # close any sensors that agents did not own exclusively
         self.manager.close_all()
 
     def _viz_payload(self) -> dict[str, Any]:
@@ -86,6 +98,7 @@ class Orchestrator:
                 "agents": agent_rates,
             },
             "frames": frames,
+            "record": self.recorder.status(),
         }
 
     def _viz_loop(self) -> None:
@@ -98,6 +111,8 @@ class Orchestrator:
         period = 1.0 / max(0.1, self.cfg.runtime.console_hz)
         while not self._stop.is_set():
             parts = []
+            rs = self.recorder.status()
+            parts.append(f"rec={rs.get('state')} ep={rs.get('episode_index')}")
             for aid, agent in self.agents.items():
                 fr = agent.ring.latest.get()
                 if fr is None:
@@ -128,7 +143,7 @@ class Orchestrator:
     def serve(self) -> None:
         """Blocking: start agents + uvicorn viz server until SIGINT."""
         rt = self.cfg.runtime
-        app = create_viz_app(self.hub, self.status)
+        app = create_viz_app(self.hub, self.status, recorder=self.recorder)
         config = uvicorn.Config(
             app,
             host=rt.viz_host,
@@ -149,7 +164,8 @@ class Orchestrator:
         self.start()
         print(
             f"[sensors-dcs] site={self.cfg.site} dry_run={self.manager.ctx.dry_run} "
-            f"viz=http://{rt.viz_host}:{rt.viz_port}/",
+            f"viz=http://{rt.viz_host}:{rt.viz_port}/ "
+            f"save_dir={self.recorder.save_dir} episode={self.recorder.episode_index}",
             flush=True,
         )
         try:

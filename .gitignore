@@ -24,6 +24,11 @@ venv/
 sensors
 sensors/
 
+# Recorded episodes
+data/
+**/episode_*/
+NEXT_EPISODE
+
 # Desktop packaging
 release/
 packaging/dist*/

@@ -38,7 +38,8 @@ sensors-dcs run -c configs/full_cell.yaml
 ```
 
 浏览器打开：`http://<host>:7011/`  
-终端会以约 5Hz 打印状态；页面经 WebSocket 约 15Hz 刷新（关节条 / 夹爪 / 相机 JPEG）。
+页面显示保存路径与 episode；「开始/结束」控制流水线写盘（传感器常开）。  
+落盘完成前「开始」不可点；完成后 episode +1。
 
 真机 Gello（需 Dynamixel 串口 + SDK）：
 
