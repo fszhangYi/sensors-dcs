@@ -67,14 +67,24 @@ class Orchestrator:
 
     def _viz_payload(self) -> dict[str, Any]:
         frames = []
-        for agent in self.agents.values():
+        agent_rates: dict[str, Any] = {}
+        for aid, agent in self.agents.items():
             fr = agent.ring.latest.get()
             if fr is not None:
                 frames.append(fr.to_dict())
+            agent_rates[aid] = {
+                "hz_target": agent.hz,
+                "seq": fr.seq if fr is not None else None,
+                "t_wall": fr.t_wall if fr is not None else None,
+            }
         return {
             "schema": "sensors_dcs.viz.v1",
             "site": self.cfg.site,
             "t_wall": time.time(),
+            "rates": {
+                "viz_hz_target": self.cfg.runtime.viz_hz,
+                "agents": agent_rates,
+            },
             "frames": frames,
         }
 

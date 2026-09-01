@@ -3,7 +3,8 @@ version: 1
 site: dcs-gello-mvp
 
 sensors_config: ./sensors_gello.yaml
-dry_run: true
+# true = 合成假数据；false = 读真实 Dynamixel（需串口可用）
+dry_run: false
 
 runtime:
   control_host: "0.0.0.0"

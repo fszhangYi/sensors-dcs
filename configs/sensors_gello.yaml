@@ -1,7 +1,8 @@
 # Minimal hik-sensors bundle — gello only (for sensors-dcs MVP)
 version: 1
 site: dcs-gello-mvp
-dry_run: true
+# Windows 真机：改 false；Linux / 无硬件演示：true
+dry_run: false
 
 defaults:
   gello:
@@ -13,7 +14,10 @@ devices:
   - id: gello-leader
     kind: gello
     name: "Gello · Leader"
-    endpoint: "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTAA088F-if00-port0"
+    # Windows 示例：COM3
+    # Linux 示例：/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTAA088F-if00-port0
+    endpoint: "COM3"
     params:
-      port_substr: "FTAA088F"
+      # Windows 用 COM 口时可留空；Linux by-id 可填 FTDI 串号片段
+      port_substr: ""
       gripper_config: null

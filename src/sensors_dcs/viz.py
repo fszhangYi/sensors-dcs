@@ -48,6 +48,30 @@ PREVIEW_HTML = """<!DOCTYPE html>
       color: var(--muted); font-size: 0.85rem;
     }
     .meta strong { color: var(--accent); font-weight: 600; }
+    .actions {
+      display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center;
+    }
+    .actions button {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.9rem;
+      padding: 0.45rem 1.1rem;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .actions button:hover { border-color: var(--accent); }
+    .actions button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    .actions button.primary {
+      background: color-mix(in srgb, var(--accent) 28%, var(--panel));
+      border-color: var(--accent);
+    }
+    .actions .hint { color: var(--muted); font-size: 0.85rem; }
     .bars {
       background: color-mix(in srgb, var(--panel) 88%, transparent);
       border: 1px solid var(--line);
@@ -81,10 +105,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
     <p>低频整帧预览（关节角）。连接 <code>/ws</code>。</p>
   </header>
   <main>
+    <div class="actions">
+      <button type="button" class="primary" id="btnStart">开始</button>
+      <button type="button" id="btnStop" disabled>结束</button>
+      <span class="hint" id="runHint">预览已暂停 — 点「开始」刷新画面</span>
+    </div>
     <div class="meta">
       <div>状态：<strong id="status">connecting…</strong></div>
+      <div>预览：<strong id="preview">paused</strong></div>
       <div>seq：<strong id="seq">—</strong></div>
-      <div>hz≈：<strong id="hz">—</strong></div>
+      <div>后端 hz：<strong id="hzBack">—</strong></div>
+      <div>前端 hz：<strong id="hzFront">—</strong></div>
       <div>dry_run：<strong id="dry">—</strong></div>
     </div>
     <div class="bars" id="bars"></div>
@@ -93,11 +124,45 @@ PREVIEW_HTML = """<!DOCTYPE html>
   <script>
     const bars = document.getElementById('bars');
     const statusEl = document.getElementById('status');
+    const previewEl = document.getElementById('preview');
     const seqEl = document.getElementById('seq');
-    const hzEl = document.getElementById('hz');
+    const hzBackEl = document.getElementById('hzBack');
+    const hzFrontEl = document.getElementById('hzFront');
     const dryEl = document.getElementById('dry');
     const rawEl = document.getElementById('raw');
-    let lastT = null, emaHz = null;
+    const btnStart = document.getElementById('btnStart');
+    const btnStop = document.getElementById('btnStop');
+    const runHint = document.getElementById('runHint');
+    let updating = false;
+    let lastMsgT = null, emaFront = null;
+    let lastSeq = null, lastFrameT = null, emaBack = null;
+
+    function setUpdating(on) {
+      updating = !!on;
+      btnStart.disabled = updating;
+      btnStop.disabled = !updating;
+      previewEl.textContent = updating ? 'running' : 'paused';
+      runHint.textContent = updating
+        ? '预览刷新中 — 点「结束」冻结画面'
+        : '预览已暂停 — 点「开始」刷新画面';
+      if (updating) {
+        // 避免暂停间隔把 hz 估歪
+        lastMsgT = null;
+        lastSeq = null;
+        lastFrameT = null;
+        emaFront = null;
+        emaBack = null;
+      }
+    }
+
+    btnStart.addEventListener('click', () => setUpdating(true));
+    btnStop.addEventListener('click', () => setUpdating(false));
+
+    function fmtRate(meas, target) {
+      const m = meas == null ? '—' : meas.toFixed(1);
+      const t = target == null ? '—' : Number(target).toFixed(0);
+      return m + ' / 目标 ' + t;
+    }
 
     function ensureRows(n) {
       while (bars.children.length < n) {
@@ -110,8 +175,32 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
 
     function render(msg) {
+      if (!updating) return;
+
       const frame = msg.frames && msg.frames[0];
-      if (!frame) return;
+      const rates = msg.rates || {};
+      const vizTarget = rates.viz_hz_target;
+      let agentTarget = null;
+      if (rates.agents) {
+        const first = Object.values(rates.agents)[0];
+        if (first) agentTarget = first.hz_target;
+      }
+
+      if (lastMsgT != null) {
+        const dtMsg = msg.t_wall - lastMsgT;
+        if (dtMsg > 1e-4) {
+          const inst = 1 / dtMsg;
+          emaFront = emaFront == null ? inst : emaFront * 0.8 + inst * 0.2;
+        }
+      }
+      lastMsgT = msg.t_wall;
+      hzFrontEl.textContent = fmtRate(emaFront, vizTarget);
+
+      if (!frame) {
+        hzBackEl.textContent = fmtRate(null, agentTarget);
+        rawEl.textContent = JSON.stringify(msg, null, 2);
+        return;
+      }
       const joints = (frame.payload && frame.payload.joints_rad) || [];
       ensureRows(joints.length);
       joints.forEach((rad, i) => {
@@ -123,15 +212,19 @@ PREVIEW_HTML = """<!DOCTYPE html>
       });
       seqEl.textContent = String(frame.seq);
       dryEl.textContent = String(!!(frame.payload && frame.payload.dry_run));
-      if (lastT != null) {
-        const dt = frame.t_wall - lastT;
-        if (dt > 1e-4) {
-          const inst = 1 / dt;
-          emaHz = emaHz == null ? inst : emaHz * 0.8 + inst * 0.2;
-          hzEl.textContent = emaHz.toFixed(1);
+
+      if (lastSeq != null && lastFrameT != null) {
+        const dSeq = frame.seq - lastSeq;
+        const dT = frame.t_wall - lastFrameT;
+        if (dSeq > 0 && dT > 1e-4) {
+          const inst = dSeq / dT;
+          emaBack = emaBack == null ? inst : emaBack * 0.8 + inst * 0.2;
         }
       }
-      lastT = frame.t_wall;
+      lastSeq = frame.seq;
+      lastFrameT = frame.t_wall;
+      hzBackEl.textContent = fmtRate(emaBack, agentTarget);
+
       rawEl.textContent = JSON.stringify(msg, null, 2);
     }
 
@@ -148,6 +241,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         try { render(JSON.parse(ev.data)); } catch (e) {}
       };
     }
+    setUpdating(false);
     connect();
   </script>
 </body>
