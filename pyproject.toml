@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sensors-dcs"
+version = "0.1.0"
+description = "Data collection system on top of hik-sensors (agents, record, viz)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+  # hik-sensors comes from ./sensors symlink (sys.path), not PyPI
+  "numpy>=1.24",
+  "PyYAML>=6.0",
+  "pydantic>=2.0",
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+]
+
+[project.optional-dependencies]
+dynamixel = ["dynamixel-sdk>=3.7"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+sensors-dcs = "sensors_dcs.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

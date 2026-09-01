@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Editor / OS
+.idea/
+.vscode/
+.ipynb_checkpoints/
+*.swp
+.DS_Store
+
+# Linked hik-sensors checkout (sibling repo)
+sensors
+sensors/
+
+# Desktop packaging
+release/
+packaging/dist*/
+packaging/build*/
+.tools/
+.wine-sensors-dcs/
+*.spec.bak

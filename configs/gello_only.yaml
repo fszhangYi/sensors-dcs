@@ -1,0 +1,21 @@
+# sensors-dcs MVP — gello agent only
+version: 1
+site: dcs-gello-mvp
+
+sensors_config: ./sensors_gello.yaml
+dry_run: true
+
+runtime:
+  control_host: "0.0.0.0"
+  control_port: 7010
+  viz_host: "0.0.0.0"
+  viz_port: 7011
+  viz_hz: 15
+  console_hz: 5
+
+agents:
+  - id: gello
+    type: gello
+    sensor_id: gello-leader
+    hz: 50
+    buffer_frames: 64
