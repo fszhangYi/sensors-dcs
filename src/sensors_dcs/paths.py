@@ -89,15 +89,19 @@ def default_dcs_config() -> Path:
     env = (os.environ.get("SENSORS_DCS_CONFIG") or "").strip()
     if env:
         return Path(env).expanduser().resolve()
-    data = user_data_dir() / "configs" / "gello_only.yaml"
+    data = user_data_dir() / "configs" / "gello_gripper.yaml"
     if data.is_file():
         return data
-    bundled = project_root() / "configs" / "gello_only.yaml"
+    # fallback older single-agent config
+    legacy = user_data_dir() / "configs" / "gello_only.yaml"
+    if legacy.is_file():
+        return legacy
+    bundled = project_root() / "configs" / "gello_gripper.yaml"
     if bundled.is_file():
         return bundled
     # Dev layout: repo configs next to src/
     if not is_frozen():
-        repo = Path(__file__).resolve().parents[2] / "configs" / "gello_only.yaml"
+        repo = Path(__file__).resolve().parents[2] / "configs" / "gello_gripper.yaml"
         if repo.is_file():
             return repo
     return data
@@ -125,7 +129,12 @@ def ensure_runtime_env(*, desktop: bool = False) -> Path:
 
     root = project_root()
     # Seed DCS + sensors YAML into user data (editable after first run)
-    for name in ("gello_only.yaml", "sensors_gello.yaml"):
+    for name in (
+        "gello_only.yaml",
+        "sensors_gello.yaml",
+        "gello_gripper.yaml",
+        "sensors_gello_gripper.yaml",
+    ):
         _seed_file(root / "configs" / name, data / "configs" / name)
 
     bundled_sensors_cfg = root / "sensors" / "configs"
@@ -136,19 +145,23 @@ def ensure_runtime_env(*, desktop: bool = False) -> Path:
             bundled_sensors_cfg = alt
     _seed_tree(bundled_sensors_cfg, data / "sensors" / "configs")
 
-    # Rewrite seeded gello_only to point at user-local sensors_gello.yaml
-    seeded = data / "configs" / "gello_only.yaml"
-    sensors_gello = data / "configs" / "sensors_gello.yaml"
-    if seeded.is_file() and sensors_gello.is_file():
-        text = seeded.read_text(encoding="utf-8")
-        if "sensors_config:" in text:
-            lines = []
-            for line in text.splitlines():
-                if line.strip().startswith("sensors_config:"):
-                    lines.append("sensors_config: ./sensors_gello.yaml")
-                else:
-                    lines.append(line)
-            seeded.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # Rewrite seeded DCS YAMLs to point at sibling sensors_*.yaml in user data
+    for dcs_name, sensors_name in (
+        ("gello_only.yaml", "sensors_gello.yaml"),
+        ("gello_gripper.yaml", "sensors_gello_gripper.yaml"),
+    ):
+        seeded = data / "configs" / dcs_name
+        sensors_local = data / "configs" / sensors_name
+        if seeded.is_file() and sensors_local.is_file():
+            text = seeded.read_text(encoding="utf-8")
+            if "sensors_config:" in text:
+                lines = []
+                for line in text.splitlines():
+                    if line.strip().startswith("sensors_config:"):
+                        lines.append(f"sensors_config: ./{sensors_name}")
+                    else:
+                        lines.append(line)
+                seeded.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     frontend = resolve_frontend_dist()
     os.environ.setdefault("FRONTEND_DIST", str(frontend.resolve()))

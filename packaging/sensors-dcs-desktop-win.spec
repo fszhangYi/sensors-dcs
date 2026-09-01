@@ -61,6 +61,7 @@ hiddenimports = [
     "sensors_dcs.agents",
     "sensors_dcs.agents.base",
     "sensors_dcs.agents.gello_agent",
+    "sensors_dcs.agents.gripper_read_agent",
     "sensors",
     "sensors.core",
     "sensors.core.base",

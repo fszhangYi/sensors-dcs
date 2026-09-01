@@ -13,7 +13,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>sensors-dcs · Gello</title>
+  <title>sensors-dcs · Agents</title>
   <style>
     :root {
       --bg: #0f1419;
@@ -72,14 +72,26 @@ PREVIEW_HTML = """<!DOCTYPE html>
       border-color: var(--accent);
     }
     .actions .hint { color: var(--muted); font-size: 0.85rem; }
-    .bars {
+    .agent-card {
       background: color-mix(in srgb, var(--panel) 88%, transparent);
       border: 1px solid var(--line);
       border-radius: 10px;
       padding: 1rem;
       display: grid;
-      gap: 0.55rem;
+      gap: 0.65rem;
     }
+    .agent-card h2 {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+    .agent-meta {
+      display: flex; flex-wrap: wrap; gap: 0.6rem 1rem;
+      color: var(--muted); font-size: 0.8rem;
+    }
+    .agent-meta strong { color: var(--accent); font-weight: 600; }
+    .agent-bars { display: grid; gap: 0.55rem; }
+    #agents { display: grid; gap: 1rem; }
     .row { display: grid; grid-template-columns: 4.5rem 1fr 5rem; gap: 0.75rem; align-items: center; }
     .row span { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 0.85rem; }
     .track {
@@ -101,8 +113,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
 </head>
 <body>
   <header>
-    <h1>sensors-dcs · Gello Agent</h1>
-    <p>低频整帧预览（关节角）。连接 <code>/ws</code>。</p>
+    <h1>sensors-dcs · Agents</h1>
+    <p>低频整帧预览。连接 <code>/ws</code>。点「开始」刷新，「结束」冻结。</p>
   </header>
   <main>
     <div class="actions">
@@ -113,29 +125,23 @@ PREVIEW_HTML = """<!DOCTYPE html>
     <div class="meta">
       <div>状态：<strong id="status">connecting…</strong></div>
       <div>预览：<strong id="preview">paused</strong></div>
-      <div>seq：<strong id="seq">—</strong></div>
-      <div>后端 hz：<strong id="hzBack">—</strong></div>
       <div>前端 hz：<strong id="hzFront">—</strong></div>
-      <div>dry_run：<strong id="dry">—</strong></div>
     </div>
-    <div class="bars" id="bars"></div>
+    <div id="agents"></div>
     <pre id="raw">{}</pre>
   </main>
   <script>
-    const bars = document.getElementById('bars');
+    const agentsEl = document.getElementById('agents');
     const statusEl = document.getElementById('status');
     const previewEl = document.getElementById('preview');
-    const seqEl = document.getElementById('seq');
-    const hzBackEl = document.getElementById('hzBack');
     const hzFrontEl = document.getElementById('hzFront');
-    const dryEl = document.getElementById('dry');
     const rawEl = document.getElementById('raw');
     const btnStart = document.getElementById('btnStart');
     const btnStop = document.getElementById('btnStop');
     const runHint = document.getElementById('runHint');
     let updating = false;
     let lastMsgT = null, emaFront = null;
-    let lastSeq = null, lastFrameT = null, emaBack = null;
+    const backState = {}; // agent_id -> {lastSeq, lastT, ema}
 
     function setUpdating(on) {
       updating = !!on;
@@ -146,12 +152,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
         ? '预览刷新中 — 点「结束」冻结画面'
         : '预览已暂停 — 点「开始」刷新画面';
       if (updating) {
-        // 避免暂停间隔把 hz 估歪
         lastMsgT = null;
-        lastSeq = null;
-        lastFrameT = null;
         emaFront = null;
-        emaBack = null;
+        for (const k of Object.keys(backState)) delete backState[k];
       }
     }
 
@@ -164,27 +167,102 @@ PREVIEW_HTML = """<!DOCTYPE html>
       return m + ' / 目标 ' + t;
     }
 
-    function ensureRows(n) {
-      while (bars.children.length < n) {
-        const i = bars.children.length;
+    function ensureCard(agentId, kind) {
+      let card = document.getElementById('card-' + agentId);
+      if (card) return card;
+      card = document.createElement('section');
+      card.className = 'agent-card';
+      card.id = 'card-' + agentId;
+      card.innerHTML =
+        '<h2></h2>' +
+        '<div class="agent-meta">' +
+        '<div>kind：<strong class="k-kind"></strong></div>' +
+        '<div>seq：<strong class="k-seq">—</strong></div>' +
+        '<div>后端 hz：<strong class="k-hz">—</strong></div>' +
+        '<div>dry_run：<strong class="k-dry">—</strong></div>' +
+        '</div>' +
+        '<div class="agent-bars"></div>';
+      agentsEl.appendChild(card);
+      return card;
+    }
+
+    function ensureRows(barsRoot, n, labelFn) {
+      while (barsRoot.children.length < n) {
+        const i = barsRoot.children.length;
         const row = document.createElement('div');
         row.className = 'row';
-        row.innerHTML = `<span>j${i}</span><div class="track"><div class="fill" id="f${i}"></div></div><span id="v${i}">0.000</span>`;
-        bars.appendChild(row);
+        row.innerHTML =
+          '<span class="lab"></span><div class="track"><div class="fill"></div></div><span class="val">0.000</span>';
+        barsRoot.appendChild(row);
       }
+      for (let i = 0; i < barsRoot.children.length; i++) {
+        const lab = barsRoot.children[i].querySelector('.lab');
+        if (lab) lab.textContent = labelFn(i);
+      }
+    }
+
+    function setBar(row, widthPct, text) {
+      const fill = row.querySelector('.fill');
+      const val = row.querySelector('.val');
+      if (fill) fill.style.width = widthPct.toFixed(1) + '%';
+      if (val) val.textContent = text;
+    }
+
+    function renderGello(card, frame, hzText) {
+      card.querySelector('h2').textContent = frame.agent_id + ' · Gello';
+      card.querySelector('.k-kind').textContent = frame.kind;
+      card.querySelector('.k-seq').textContent = String(frame.seq);
+      card.querySelector('.k-hz').textContent = hzText;
+      card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
+      const joints = (frame.payload && frame.payload.joints_rad) || [];
+      const barsRoot = card.querySelector('.agent-bars');
+      ensureRows(barsRoot, joints.length, (i) => 'j' + i);
+      joints.forEach((rad, i) => {
+        const norm = Math.max(0, Math.min(1, (rad + 1.2) / 2.4));
+        setBar(barsRoot.children[i], norm * 100, Number(rad).toFixed(3));
+      });
+    }
+
+    function renderGripperRead(card, frame, hzText) {
+      card.querySelector('h2').textContent = frame.agent_id + ' · Gripper Read';
+      card.querySelector('.k-kind').textContent = frame.kind;
+      card.querySelector('.k-seq').textContent = String(frame.seq);
+      card.querySelector('.k-hz').textContent = hzText;
+      card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
+      const pos = frame.payload && frame.payload.position_norm;
+      const barsRoot = card.querySelector('.agent-bars');
+      ensureRows(barsRoot, 1, () => 'pos');
+      const p = pos == null ? 0 : Number(pos);
+      // DH AG95 norm ≈ 0..0.637
+      const width = Math.max(0, Math.min(1, p / 0.637)) * 100;
+      setBar(barsRoot.children[0], width, pos == null ? '—' : p.toFixed(3));
+    }
+
+    function updateBackHz(agentId, frame, target) {
+      let st = backState[agentId];
+      if (!st) {
+        st = { lastSeq: null, lastT: null, ema: null };
+        backState[agentId] = st;
+      }
+      if (st.lastSeq != null && st.lastT != null) {
+        const dSeq = frame.seq - st.lastSeq;
+        const dT = frame.t_wall - st.lastT;
+        if (dSeq > 0 && dT > 1e-4) {
+          const inst = dSeq / dT;
+          st.ema = st.ema == null ? inst : st.ema * 0.8 + inst * 0.2;
+        }
+      }
+      st.lastSeq = frame.seq;
+      st.lastT = frame.t_wall;
+      return fmtRate(st.ema, target);
     }
 
     function render(msg) {
       if (!updating) return;
 
-      const frame = msg.frames && msg.frames[0];
       const rates = msg.rates || {};
       const vizTarget = rates.viz_hz_target;
-      let agentTarget = null;
-      if (rates.agents) {
-        const first = Object.values(rates.agents)[0];
-        if (first) agentTarget = first.hz_target;
-      }
+      const agentRates = rates.agents || {};
 
       if (lastMsgT != null) {
         const dtMsg = msg.t_wall - lastMsgT;
@@ -196,34 +274,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
       lastMsgT = msg.t_wall;
       hzFrontEl.textContent = fmtRate(emaFront, vizTarget);
 
-      if (!frame) {
-        hzBackEl.textContent = fmtRate(null, agentTarget);
-        rawEl.textContent = JSON.stringify(msg, null, 2);
-        return;
-      }
-      const joints = (frame.payload && frame.payload.joints_rad) || [];
-      ensureRows(joints.length);
-      joints.forEach((rad, i) => {
-        const norm = Math.max(0, Math.min(1, (rad + 1.2) / 2.4));
-        const fill = document.getElementById('f' + i);
-        const val = document.getElementById('v' + i);
-        if (fill) fill.style.width = (norm * 100).toFixed(1) + '%';
-        if (val) val.textContent = Number(rad).toFixed(3);
-      });
-      seqEl.textContent = String(frame.seq);
-      dryEl.textContent = String(!!(frame.payload && frame.payload.dry_run));
-
-      if (lastSeq != null && lastFrameT != null) {
-        const dSeq = frame.seq - lastSeq;
-        const dT = frame.t_wall - lastFrameT;
-        if (dSeq > 0 && dT > 1e-4) {
-          const inst = dSeq / dT;
-          emaBack = emaBack == null ? inst : emaBack * 0.8 + inst * 0.2;
+      const frames = msg.frames || [];
+      frames.forEach((frame) => {
+        const ar = agentRates[frame.agent_id] || {};
+        const hzText = updateBackHz(frame.agent_id, frame, ar.hz_target);
+        const card = ensureCard(frame.agent_id, frame.kind);
+        if (frame.kind === 'gripper_read') {
+          renderGripperRead(card, frame, hzText);
+        } else {
+          renderGello(card, frame, hzText);
         }
-      }
-      lastSeq = frame.seq;
-      lastFrameT = frame.t_wall;
-      hzBackEl.textContent = fmtRate(emaBack, agentTarget);
+      });
 
       rawEl.textContent = JSON.stringify(msg, null, 2);
     }

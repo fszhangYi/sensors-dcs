@@ -103,13 +103,20 @@ class Orchestrator:
                 if fr is None:
                     parts.append(f"{aid}: (no frame)")
                     continue
-                joints = fr.payload.get("joints_rad")
-                if joints is None:
+                tag = "synth" if fr.payload.get("synth") else "live"
+                if fr.error:
                     parts.append(f"{aid}: seq={fr.seq} err={fr.error}")
+                elif fr.kind == "gripper_read":
+                    pos = fr.payload.get("position_norm")
+                    ptxt = "—" if pos is None else f"{float(pos):+.3f}"
+                    parts.append(f"{aid}[{tag}] seq={fr.seq} pos={ptxt}")
                 else:
-                    jtxt = ",".join(f"{x:+.3f}" for x in joints)
-                    tag = "synth" if fr.payload.get("synth") else "live"
-                    parts.append(f"{aid}[{tag}] seq={fr.seq} q=[{jtxt}]")
+                    joints = fr.payload.get("joints_rad")
+                    if joints is None:
+                        parts.append(f"{aid}[{tag}] seq={fr.seq}")
+                    else:
+                        jtxt = ",".join(f"{x:+.3f}" for x in joints)
+                        parts.append(f"{aid}[{tag}] seq={fr.seq} q=[{jtxt}]")
             print(" | ".join(parts), flush=True)
             self._stop.wait(period)
 

@@ -1,0 +1,27 @@
+# sensors-dcs — gello + gripper_read agents
+version: 1
+site: dcs-gello-gripper
+
+sensors_config: ./sensors_gello_gripper.yaml
+# true = 合成假数据；false = 真机（需串口）
+dry_run: true
+
+runtime:
+  control_host: "0.0.0.0"
+  control_port: 7010
+  viz_host: "0.0.0.0"
+  viz_port: 7011
+  viz_hz: 15
+  console_hz: 5
+
+agents:
+  - id: gello
+    type: gello
+    sensor_id: gello-leader
+    hz: 50
+    buffer_frames: 64
+  - id: gripper-read
+    type: gripper_read
+    sensor_id: gripper-dh
+    hz: 50
+    buffer_frames: 64

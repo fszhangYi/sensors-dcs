@@ -11,7 +11,7 @@ from sensors_dcs.paths import project_root
 
 class AgentConfig(BaseModel):
     id: str
-    type: Literal["gello"] = "gello"
+    type: Literal["gello", "gripper_read"] = "gello"
     sensor_id: str
     hz: float = 50.0
     buffer_frames: int = 64
@@ -76,10 +76,28 @@ def load_dcs_config(path: str | Path) -> DcsConfig:
     if not isinstance(data, dict):
         raise ValueError(f"Config root must be a mapping: {root}")
 
-    cfg = DcsConfig.model_validate(data)
+    # Common mix-up: pointing at hik-sensors device YAML (has devices, no sensors_config).
+    if "sensors_config" not in data and "devices" in data:
+        raise ValueError(
+            f"Not a DCS launch YAML (missing sensors_config): {root}\n"
+            "  This looks like a hik-sensors device list (sensors_*.yaml).\n"
+            "  Use a DCS file instead, e.g.:\n"
+            "    %APPDATA%\\sensors-dcs\\configs\\gello_only.yaml\n"
+            "    %APPDATA%\\sensors-dcs\\configs\\gello_gripper.yaml\n"
+            "  Or: sensors-dcs.exe -c <path-to-gello_only.yaml>"
+        )
+
+    try:
+        cfg = DcsConfig.model_validate(data)
+    except Exception as e:
+        raise ValueError(f"Invalid DCS config {root}: {e}") from e
+
     sensors_path = resolve_sensors_config(cfg.sensors_config, config_file=root)
     if not sensors_path.is_file():
-        raise FileNotFoundError(f"sensors_config not found: {sensors_path}")
+        raise FileNotFoundError(
+            f"sensors_config not found: {sensors_path}\n"
+            f"  (referenced from DCS config {root})"
+        )
     return cfg.model_copy(update={"sensors_config": str(sensors_path)})
 
 

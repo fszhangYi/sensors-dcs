@@ -21,6 +21,10 @@ cd /root/autodl-tmp/sensors-dcs
 # ln -sfn ~/autodl-tmp/sensors ./sensors
 pip install -e .
 
+# gello + gripper_read
+sensors-dcs run -c configs/gello_gripper.yaml
+
+# 仅 gello
 sensors-dcs run -c configs/gello_only.yaml
 ```
 
@@ -45,8 +49,10 @@ sensors_config: sensors/configs/default.yaml
 
 | 文件 | 作用 |
 |------|------|
-| `configs/gello_only.yaml` | DCS 入口：Agent 频率、viz 端口 |
-| `configs/sensors_gello.yaml` | 传给 `SensorManager` 的 gello-only 设备清单 |
+| `configs/gello_gripper.yaml` | DCS：gello + gripper_read |
+| `configs/sensors_gello_gripper.yaml` | 对应设备清单（gello + DH 夹爪） |
+| `configs/gello_only.yaml` | 仅 Gello Agent |
+| `configs/sensors_gello.yaml` | 仅 gello 设备清单 |
 | `sensors/configs/*.yaml` | 软链接指向的 hik-sensors 设备清单 |
 
 ## 桌面打包（Linux → Windows）

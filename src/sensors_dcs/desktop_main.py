@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import socket
 import sys
@@ -73,7 +74,21 @@ def _start_webview(url: str) -> bool:
         return False
 
 
-def main() -> None:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="sensors-dcs", description="sensors-dcs desktop")
+    parser.add_argument(
+        "-c",
+        "--config",
+        default=None,
+        help="DCS YAML path (must contain sensors_config + agents). "
+        "Overrides SENSORS_DCS_CONFIG / AppData default.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = _parse_args(argv)
+
     if getattr(sys, "frozen", False):
         try:
             import numpy as _np  # noqa: F401
@@ -88,6 +103,10 @@ def main() -> None:
             )
             raise SystemExit(2) from exc
 
+    # Apply -c before env seeding so default_dcs_config() sees it.
+    if args.config:
+        os.environ["SENSORS_DCS_CONFIG"] = str(args.config)
+
     from sensors_dcs.paths import default_dcs_config, ensure_runtime_env
 
     ensure_runtime_env(desktop=True)
@@ -99,11 +118,17 @@ def main() -> None:
     from sensors_dcs.viz import create_viz_app
 
     cfg_path = default_dcs_config()
+    print(f"[sensors-dcs] config={cfg_path}", flush=True)
     if not cfg_path.is_file():
         print(f"[sensors-dcs] config not found: {cfg_path}", file=sys.stderr)
         raise SystemExit(1)
 
-    cfg = load_dcs_config(cfg_path)
+    try:
+        cfg = load_dcs_config(cfg_path)
+    except Exception as e:
+        print(f"[sensors-dcs] {e}", file=sys.stderr)
+        raise SystemExit(1) from e
+
     # Desktop defaults to loopback; port may be remapped if busy.
     host = "127.0.0.1"
     port = _pick_port(int(cfg.runtime.viz_port or 7011))
