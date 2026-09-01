@@ -38,3 +38,11 @@ devices:
       role: middle
       # Hardcoded for this cell
       serial: "336222075436"
+
+  - id: rs-wrist
+    kind: realsense
+    name: "RealSense · Wrist"
+    params:
+      role: wrist
+      # Replace before --no-dry-run
+      serial: "TODO_WRIST_SERIAL"

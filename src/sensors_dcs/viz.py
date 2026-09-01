@@ -91,11 +91,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .agent-meta strong { color: var(--accent); font-weight: 600; }
     .agent-bars { display: grid; gap: 0.55rem; }
-    # agents grid: stack on narrow, 2–3 cols when wide (multi-camera)
     #agents {
       display: grid;
       gap: 1rem;
-      grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
       align-items: start;
     }
     .row { display: grid; grid-template-columns: 4.5rem 1fr 5rem; gap: 0.75rem; align-items: center; }
@@ -109,25 +108,57 @@ PREVIEW_HTML = """<!DOCTYPE html>
       background: linear-gradient(90deg, #2f6f66, var(--accent));
       transform-origin: left center;
     }
+    .cam-section h2 {
+      margin: 0 0 0.65rem;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+    #cam-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: auto auto;
+      gap: 0.65rem;
+    }
+    .cam-cell {
+      background: color-mix(in srgb, var(--panel) 88%, transparent);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0.55rem;
+      display: grid;
+      gap: 0.35rem;
+      min-width: 0;
+    }
+    .cam-cell .cam-title {
+      font-size: 0.82rem;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+    .cam-cell .cam-title strong { color: var(--accent); font-weight: 600; }
+    .cam-cell img {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      object-fit: contain;
+      background: #0b1017;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      display: block;
+    }
+    .cam-cell.empty img { opacity: 0.25; }
+    .cam-cell .cam-sub { font-size: 0.75rem; color: var(--muted); }
     pre {
       margin: 0; padding: 1rem; overflow: auto;
       background: #0b1017; border: 1px solid var(--line); border-radius: 10px;
       font-size: 0.78rem; line-height: 1.45; color: #c5d0e0;
       max-height: 280px;
     }
-    .cam-preview {
-      margin-top: 0.75rem; width: 100%; max-width: 640px;
-      aspect-ratio: 16 / 9; object-fit: contain;
-      background: #0b1017; border: 1px solid var(--line); border-radius: 10px;
-      display: block;
-    }
-    .cam-meta { margin-top: 0.4rem; color: var(--muted); font-size: 0.82rem; }
   </style>
 </head>
 <body>
   <header>
     <h1>sensors-dcs · Agents</h1>
-    <p>低频整帧预览。连接 <code>/ws</code>。点「开始」刷新，「结束」冻结。</p>
+    <p>低频整帧预览。连接 <code>/ws</code>。点「开始」刷新，「结束」冻结。相机固定四宫格；状态卡不含相机预览。</p>
   </header>
   <main>
     <div class="actions">
@@ -140,11 +171,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <div>预览：<strong id="preview">paused</strong></div>
       <div>前端 hz：<strong id="hzFront">—</strong></div>
     </div>
+    <section class="cam-section">
+      <h2>Camera preview · 2×2</h2>
+      <div id="cam-grid"></div>
+    </section>
     <div id="agents"></div>
     <pre id="raw">{}</pre>
   </main>
   <script>
     const agentsEl = document.getElementById('agents');
+    const camGridEl = document.getElementById('cam-grid');
     const statusEl = document.getElementById('status');
     const previewEl = document.getElementById('preview');
     const hzFrontEl = document.getElementById('hzFront');
@@ -154,7 +190,30 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const runHint = document.getElementById('runHint');
     let updating = false;
     let lastMsgT = null, emaFront = null;
-    const backState = {}; // agent_id -> {lastSeq, lastT, ema}
+    const backState = {};
+    const CAM_SLOTS = [
+      { key: 'left', label: 'Left' },
+      { key: 'right', label: 'Right' },
+      { key: 'middle', label: 'Middle' },
+      { key: 'wrist', label: 'Wrist' },
+    ];
+    const camCells = {};
+
+    function initCamGrid() {
+      camGridEl.innerHTML = '';
+      CAM_SLOTS.forEach((slot) => {
+        const cell = document.createElement('div');
+        cell.className = 'cam-cell empty';
+        cell.id = 'cam-slot-' + slot.key;
+        cell.innerHTML =
+          '<div class="cam-title"><span>' + slot.label + '</span><strong class="k-agent">—</strong></div>' +
+          '<img alt="' + slot.label + '" />' +
+          '<div class="cam-sub k-sub">empty</div>';
+        camGridEl.appendChild(cell);
+        camCells[slot.key] = cell;
+      });
+    }
+    initCamGrid();
 
     function setUpdating(on) {
       updating = !!on;
@@ -180,7 +239,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       return m + ' / 目标 ' + t;
     }
 
-    function ensureCard(agentId, kind) {
+    function ensureStateCard(agentId) {
       let card = document.getElementById('card-' + agentId);
       if (card) return card;
       card = document.createElement('section');
@@ -194,16 +253,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
         '<div>后端 hz：<strong class="k-hz">—</strong></div>' +
         '<div>dry_run：<strong class="k-dry">—</strong></div>' +
         '</div>' +
-        '<div class="agent-bars"></div>' +
-        '<img class="cam-preview" hidden alt="camera preview" />' +
-        '<div class="cam-meta" hidden></div>';
+        '<div class="agent-bars"></div>';
       agentsEl.appendChild(card);
       return card;
     }
 
     function ensureRows(barsRoot, n, labelFn) {
       while (barsRoot.children.length < n) {
-        const i = barsRoot.children.length;
         const row = document.createElement('div');
         row.className = 'row';
         row.innerHTML =
@@ -229,13 +285,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       card.querySelector('.k-seq').textContent = String(frame.seq);
       card.querySelector('.k-hz').textContent = hzText;
       card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
-      const img = card.querySelector('.cam-preview');
-      const camMeta = card.querySelector('.cam-meta');
-      if (img) img.hidden = true;
-      if (camMeta) camMeta.hidden = true;
       const joints = (frame.payload && frame.payload.joints_rad) || [];
       const barsRoot = card.querySelector('.agent-bars');
-      barsRoot.hidden = false;
       ensureRows(barsRoot, joints.length, (i) => 'j' + i);
       joints.forEach((rad, i) => {
         const norm = Math.max(0, Math.min(1, (rad + 1.2) / 2.4));
@@ -249,42 +300,40 @@ PREVIEW_HTML = """<!DOCTYPE html>
       card.querySelector('.k-seq').textContent = String(frame.seq);
       card.querySelector('.k-hz').textContent = hzText;
       card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
-      const img = card.querySelector('.cam-preview');
-      const camMeta = card.querySelector('.cam-meta');
-      if (img) img.hidden = true;
-      if (camMeta) camMeta.hidden = true;
       const pos = frame.payload && frame.payload.position_norm;
       const barsRoot = card.querySelector('.agent-bars');
-      barsRoot.hidden = false;
       ensureRows(barsRoot, 1, () => 'pos');
       const p = pos == null ? 0 : Number(pos);
-      // DH AG95 norm ≈ 0..0.637
       const width = Math.max(0, Math.min(1, p / 0.637)) * 100;
       setBar(barsRoot.children[0], width, pos == null ? '—' : p.toFixed(3));
     }
 
-    function renderRealsense(card, frame, hzText) {
-      card.querySelector('h2').textContent = frame.agent_id + ' · RealSense';
-      card.querySelector('.k-kind').textContent = frame.kind;
-      card.querySelector('.k-seq').textContent = String(frame.seq);
-      card.querySelector('.k-hz').textContent = hzText;
-      card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
-      const barsRoot = card.querySelector('.agent-bars');
-      barsRoot.hidden = true;
-      barsRoot.innerHTML = '';
+    function pickCamSlot(frame, used) {
+      const role = String((frame.payload && frame.payload.role) || '').toLowerCase();
+      const agentHint = String(frame.agent_id || '').toLowerCase();
+      const order = CAM_SLOTS.map((s) => s.key);
+      for (const key of order) {
+        if (used.has(key)) continue;
+        if (role === key || agentHint.includes(key)) return key;
+      }
+      for (const key of order) {
+        if (!used.has(key)) return key;
+      }
+      return null;
+    }
+
+    function renderCamSlot(slotKey, frame, hzText) {
+      const cell = camCells[slotKey];
+      if (!cell) return;
+      cell.classList.remove('empty');
       const p = frame.payload || {};
-      const img = card.querySelector('.cam-preview');
-      const camMeta = card.querySelector('.cam-meta');
-      if (img) {
-        img.hidden = false;
-        if (p.jpeg_b64) img.src = 'data:image/jpeg;base64,' + p.jpeg_b64;
-      }
-      if (camMeta) {
-        camMeta.hidden = false;
-        const sn = p.serial || '—';
-        const wh = (p.width && p.height) ? (p.width + '×' + p.height) : '—';
-        camMeta.textContent = 'serial ' + sn + ' · ' + wh + '@' + (p.fps != null ? p.fps : '—');
-      }
+      cell.querySelector('.k-agent').textContent = frame.agent_id;
+      const img = cell.querySelector('img');
+      if (p.jpeg_b64) img.src = 'data:image/jpeg;base64,' + p.jpeg_b64;
+      const sn = p.serial || '—';
+      const dry = p.dry_run ? ' dry' : '';
+      cell.querySelector('.k-sub').textContent =
+        'seq ' + frame.seq + ' · ' + hzText + ' · sn ' + sn + dry;
     }
 
     function updateBackHz(agentId, frame, target) {
@@ -324,14 +373,21 @@ PREVIEW_HTML = """<!DOCTYPE html>
       hzFrontEl.textContent = fmtRate(emaFront, vizTarget);
 
       const frames = msg.frames || [];
+      const usedSlots = new Set();
       frames.forEach((frame) => {
         const ar = agentRates[frame.agent_id] || {};
         const hzText = updateBackHz(frame.agent_id, frame, ar.hz_target);
-        const card = ensureCard(frame.agent_id, frame.kind);
+        if (frame.kind === 'realsense') {
+          const slot = pickCamSlot(frame, usedSlots);
+          if (slot) {
+            usedSlots.add(slot);
+            renderCamSlot(slot, frame, hzText);
+          }
+          return;
+        }
+        const card = ensureStateCard(frame.agent_id);
         if (frame.kind === 'gripper_read') {
           renderGripperRead(card, frame, hzText);
-        } else if (frame.kind === 'realsense') {
-          renderRealsense(card, frame, hzText);
         } else {
           renderGello(card, frame, hzText);
         }

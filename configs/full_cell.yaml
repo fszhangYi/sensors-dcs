@@ -41,3 +41,8 @@ agents:
     sensor_id: rs-middle
     hz: 15
     buffer_frames: 2
+  - id: cam-wrist
+    type: realsense
+    sensor_id: rs-wrist
+    hz: 15
+    buffer_frames: 2
