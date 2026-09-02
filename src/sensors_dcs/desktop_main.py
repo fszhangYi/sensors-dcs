@@ -82,7 +82,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     assert orch is not None
-    app = create_viz_app(orch.hub, orch.status)
+    app = create_viz_app(orch.hub, orch.status, recorder=orch.recorder)
     orch.cfg.runtime.viz_port = port
     orch.start()
     print(

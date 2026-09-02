@@ -69,6 +69,28 @@ class RecordController:
         self._last_error: str | None = None
         self._stop_event = threading.Event()
 
+    def set_save_dir(self, raw: str | None) -> dict[str, Any]:
+        """Change save root while idle. Empty/None keeps current path."""
+        with self._lock:
+            if self.state != "idle":
+                return {
+                    "ok": False,
+                    "error": f"cannot change save_dir while state={self.state}",
+                    **self.status(),
+                }
+            if raw is None or not str(raw).strip():
+                return {"ok": True, **self.status()}
+            path = Path(str(raw).strip()).expanduser().resolve()
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                return {"ok": False, "error": f"cannot create save_dir: {e}", **self.status()}
+            self.save_dir = path
+            self.cfg = self.cfg.model_copy(update={"save_dir": str(path)})
+            self.episode_index = discover_next_episode(self.save_dir, int(self.cfg.episode_index))
+        self._notify()
+        return {"ok": True, **self.status()}
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             return {

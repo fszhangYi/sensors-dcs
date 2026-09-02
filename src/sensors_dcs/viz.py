@@ -8,6 +8,13 @@ from typing import Any, Callable
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
+from pydantic import BaseModel
+
+
+class SaveDirBody(BaseModel):
+    save_dir: str | None = None
+
+
 PREVIEW_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -72,6 +79,24 @@ PREVIEW_HTML = """<!DOCTYPE html>
       border-color: var(--accent);
     }
     .actions .hint { color: var(--muted); font-size: 0.85rem; }
+    .save-path {
+      display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+      font-size: 0.85rem;
+    }
+    .save-path label { color: var(--muted); }
+    .save-path input {
+      flex: 1 1 12rem;
+      min-width: 8rem;
+      max-width: 28rem;
+      appearance: none;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      padding: 0.4rem 0.65rem;
+      border-radius: 8px;
+    }
+    .save-path input:disabled { opacity: 0.45; }
     .agent-card {
       background: color-mix(in srgb, var(--panel) 88%, transparent);
       border: 1px solid var(--line);
@@ -118,6 +143,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       grid-template-columns: 1fr 1fr;
       grid-template-rows: auto auto;
       gap: 0.65rem;
+      max-width: 66.67%;
     }
     .cam-cell {
       background: color-mix(in srgb, var(--panel) 88%, transparent);
@@ -166,6 +192,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <button type="button" id="btnStop" disabled>结束</button>
       <span class="hint" id="runHint">空闲 — 点「开始」录制当前 episode</span>
     </div>
+    <div class="save-path">
+      <label for="saveDirInput">保存路径</label>
+      <input type="text" id="saveDirInput" placeholder="留空则沿用当前路径" />
+      <button type="button" id="btnSaveDir">应用</button>
+    </div>
     <div class="meta">
       <div>连接：<strong id="status">connecting…</strong></div>
       <div>录制：<strong id="recState">idle</strong></div>
@@ -193,6 +224,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const rawEl = document.getElementById('raw');
     const btnStart = document.getElementById('btnStart');
     const btnStop = document.getElementById('btnStop');
+    const btnSaveDir = document.getElementById('btnSaveDir');
+    const saveDirInput = document.getElementById('saveDirInput');
     const runHint = document.getElementById('runHint');
     let lastMsgT = null, emaFront = null;
     let busy = false;
@@ -226,8 +259,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const st = rec.state || 'idle';
       recStateEl.textContent = st;
       saveDirEl.textContent = rec.save_dir || '—';
+      if (document.activeElement !== saveDirInput) {
+        saveDirInput.placeholder = rec.save_dir || '留空则沿用当前路径';
+      }
       episodeEl.textContent = (rec.episode_index == null) ? '—' : String(rec.episode_index);
       writtenEl.textContent = String(rec.written == null ? 0 : rec.written);
+      const recBusy = st === 'recording' || st === 'flushing';
+      saveDirInput.disabled = recBusy;
+      btnSaveDir.disabled = recBusy;
       if (busy) return;
       if (st === 'recording') {
         btnStart.disabled = true;
@@ -268,6 +307,35 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
     btnStart.addEventListener('click', () => postRecord('/api/record/start'));
     btnStop.addEventListener('click', () => postRecord('/api/record/stop'));
+
+    async function applySaveDir() {
+      const path = saveDirInput.value.trim();
+      btnSaveDir.disabled = true;
+      runHint.textContent = path ? '正在更新保存路径…' : '正在刷新保存路径…';
+      try {
+        const r = await fetch('/api/record/save_dir', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ save_dir: path || null }),
+        });
+        const j = await r.json();
+        applyRecordUi(j);
+        if (j.ok) {
+          saveDirInput.value = '';
+          runHint.textContent = '保存路径已更新 — 点「开始」录制 episode ' + episodeEl.textContent;
+        } else if (j.error) {
+          runHint.textContent = j.error;
+        }
+      } catch (e) {
+        runHint.textContent = String(e);
+      } finally {
+        btnSaveDir.disabled = false;
+      }
+    }
+    btnSaveDir.addEventListener('click', () => applySaveDir());
+    saveDirInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') applySaveDir();
+    });
 
     function fmtRate(meas, target) {
       const m = meas == null ? '—' : meas.toFixed(1);
@@ -536,6 +604,12 @@ def create_viz_app(
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
         # Block until disk flush completes so UI can keep Start disabled.
         return await asyncio.to_thread(recorder.stop)
+
+    @app.post("/api/record/save_dir")
+    async def record_save_dir(req: SaveDirBody) -> dict[str, Any]:
+        if recorder is None:
+            return {"ok": False, "error": "recorder unavailable", "state": "idle"}
+        return recorder.set_save_dir(req.save_dir)
 
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket) -> None:

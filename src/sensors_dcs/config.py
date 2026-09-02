@@ -34,7 +34,7 @@ class RuntimeConfig(BaseModel):
 
 
 class RecordConfig(BaseModel):
-    save_dir: str = "./data"
+    save_dir: str | None = "./data"
     episode_index: int = 0
     queue_maxsize: int = 512
 
@@ -116,7 +116,7 @@ def load_dcs_config(path: str | Path) -> DcsConfig:
             f"sensors_config not found: {sensors_path}\n"
             f"  (referenced from DCS config {root})"
         )
-    save_dir = resolve_save_dir(cfg.record.save_dir, config_file=root)
+    save_dir = resolve_save_dir(cfg.record.save_dir or "./data", config_file=root)
     record = cfg.record.model_copy(update={"save_dir": str(save_dir)})
     return cfg.model_copy(update={"sensors_config": str(sensors_path), "record": record})
 

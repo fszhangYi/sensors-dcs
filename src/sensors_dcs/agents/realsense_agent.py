@@ -44,7 +44,7 @@ class RealSenseAgent(BaseAgent):
         buffer_frames: int = 2,
         dry_run_synth: bool = True,
         jpeg_quality: int = 70,
-        viz_max_width: int = 640,
+        viz_max_width: int = 427,
     ) -> None:
         super().__init__(
             agent_id=agent_id,
@@ -110,8 +110,8 @@ class RealSenseAgent(BaseAgent):
         """Moving color bars so dry-run viz looks alive without a camera."""
         w = int(getattr(self.sensor, "width", 640) or 640)
         h = int(getattr(self.sensor, "height", 480) or 480)
-        w = min(w, 640)
-        h = min(h, 480)
+        w = min(w, 427)
+        h = min(h, 320)
         img = np.zeros((h, w, 3), dtype=np.uint8)
         sn = str(getattr(self.sensor, "serial", "") or "")
         # Offset phase by serial so multi-camera dry-run previews look distinct

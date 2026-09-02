@@ -56,8 +56,8 @@ def start_webview(url: str) -> bool:
     window_kwargs: dict[str, Any] = {
         "title": APP_TITLE,
         "url": url,
-        "width": 1100,
-        "height": 720,
+        "width": 734,
+        "height": 480,
         "background_color": "#0f1419",
         "text_select": True,
     }
