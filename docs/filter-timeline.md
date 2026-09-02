@@ -79,7 +79,8 @@
 - 每个 step 一行，各 agent 共用对齐后的 `t_wall`（master 时钟）
 - `seq` 等于 `step`（从 0 连续编号）
 - 相机图片按 `cameras/<agent>/<step:08d>.jpg` 落盘；`index.jsonl` 与生数据格式一致
-- state jsonl 从宽表还原 `joints_rad` / `position_norm` 等；`payload` 可含 `src_seq` / `src_t_wall` / `match_dt` 便于追溯
+- state jsonl 从宽表还原 `joints_rad` / `joints_rad_raw` / `position_norm` 等；gello 可带回 `joint_offsets`/`joint_signs`（来自 episode manifest / export_meta）；`payload` 可含 `src_seq` / `src_t_wall` / `match_dt` 便于追溯
+- `manifest.cameras`（录制 start 时写入的 RealSense 内参）会原样拷到 filtered `manifest.json`，供 `export-hik-dataset` 填 `metadata.intrinsic_matrix`
 - **不修改** 原始 `episode_*/cameras|states`
 
 宽表里额外写入 `{agent}.filtered_file`（相对 episode 的路径，如 `filtered/cameras/cam-left/00000000.jpg`）。
@@ -101,8 +102,9 @@
 - 输入须先 `--materialize`（或 `filter-timeline --hik-dataset` 自动 materialize）
 - 关节优先 `arm_read`，否则 `gello`；夹爪优先 `gripper_read`，否则 `gello` 第 7 轴
 - 相机名来自 **`--camera-map` YAML**（serial → hik 名，例见 `configs/hik_camera_map.yaml`）；filter 时指定后会写入 `export/filtered/camera_map.yaml`，后续 `export-hik-dataset` 可复用
-- DCS 录制通常无深度 / 无 RealSense 标定 / 无专有 FK：`cartesian_*` 填 0，`metadata.cartesian_source=zeros_no_fk`；`depth_camera_num=0`
-- `steps.json` 结构与 data_postprocess 相同：`observations`/`actions` 的 `joint_position`、`cartesian_position`、`gripper_position`
+- DCS 录制无深度 / 无专有 FK 时：`cartesian_*` 填 0，`metadata.cartesian_source=zeros_no_fk`；`depth_camera_num=0`
+- `metadata.intrinsic_matrix` 优先取自 episode/`filtered` `manifest.cameras.<agent>.intrinsic_matrix`（录制 start 时 RealSense `open()` 写入）；可用 `--calibration-json` 覆盖
+- `steps.json` 结构与 data_postprocess 相同：`observations`/`actions` 的 `joint_position`、`cartesian_position`、`gripper_position`（**字段含义见 [hik-dataset-steps.md](hik-dataset-steps.md)**）
 
 ---
 

@@ -47,7 +47,13 @@ def episode_dir(tmp_path: Path) -> Path:
             "seq": 10,
             "t_wall": 1000.00,
             "t_mono": 1.0,
-            "payload": {"joints_rad": [0.1, 0.2, 0.3], "dry_run": True},
+            "payload": {
+                "joints_rad": [0.1, 0.2, 0.3],
+                "joints_rad_raw": [1.67, 6.48, 6.58],
+                "joint_offsets": [1.57, 6.28, 6.28],
+                "joint_signs": [1, 1, -1],
+                "dry_run": True,
+            },
         },
         {
             "agent_id": "gello",
@@ -56,7 +62,13 @@ def episode_dir(tmp_path: Path) -> Path:
             "seq": 11,
             "t_wall": 1000.02,
             "t_mono": 1.02,
-            "payload": {"joints_rad": [0.2, 0.3, 0.4], "dry_run": True},
+            "payload": {
+                "joints_rad": [0.2, 0.3, 0.4],
+                "joints_rad_raw": [1.77, 6.58, 6.68],
+                "joint_offsets": [1.57, 6.28, 6.28],
+                "joint_signs": [1, 1, -1],
+                "dry_run": True,
+            },
         },
     ]
     with (ep / "states" / "gello.jsonl").open("w", encoding="utf-8") as f:
@@ -117,6 +129,10 @@ def test_aligned_asof_master_match_dt(episode_dir: Path) -> None:
     df = build_aligned_frame(manifest, samples, master="gello", mode="asof")
     assert len(df) == 2
     assert (df["gello.match_dt"] == 0.0).all()
+    assert "gello.j0" in df.columns
+    assert "gello.j_raw0" in df.columns
+    assert float(df.iloc[0]["gello.j0"]) == pytest.approx(0.1)
+    assert float(df.iloc[0]["gello.j_raw0"]) == pytest.approx(1.67)
     # as-of backward: at t=1000.00 no camera sample yet
     assert pd.isna(df.iloc[0]["camera.file"])
     second = df.iloc[1]
@@ -131,6 +147,8 @@ def test_export_episode_timeline_writes_files(episode_dir: Path) -> None:
     assert (out / "timeline_aligned.parquet").is_file()
     assert (out / "export_meta.json").is_file()
     assert meta["rows"]["events"] == 4
+    assert meta.get("gello_calib", {}).get("gello", {}).get("joint_offsets")
+    assert "calibrated" in (meta.get("joint_columns") or {})
     assert meta["rows"]["aligned"] == 2
 
 

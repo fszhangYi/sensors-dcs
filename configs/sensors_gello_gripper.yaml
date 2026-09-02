@@ -9,6 +9,16 @@ defaults:
     baudrate: 57600
     max_delta_rad: 0.8
     joint_ids: [1, 2, 3, 4, 5, 6, 7]
+    # Affine q=(q_raw-offsets)*signs — see docs/gello-joint-affine.md
+    joint_offsets:
+      - 1.5707963267948966
+      - 6.283185307179586
+      - 6.283185307179586
+      - 6.283185307179586
+      - 4.71238898038469
+      - 3.141592653589793
+      - 1.78
+    joint_signs: [1, 1, -1, 1, 1, 1, -1]
   gripper:
     baudrate: 115200
     slave_id: 1
@@ -25,6 +35,15 @@ devices:
     params:
       port_substr: ""
       gripper_config: null
+      joint_offsets:
+        - 1.5707963267948966
+        - 6.283185307179586
+        - 6.283185307179586
+        - 6.283185307179586
+        - 4.71238898038469
+        - 3.141592653589793
+        - 1.78
+      joint_signs: [1, 1, -1, 1, 1, 1, -1]
 
   - id: gripper-dh
     kind: gripper

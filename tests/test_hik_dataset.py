@@ -50,6 +50,18 @@ def _write_filtered(ep: Path, *, n: int = 3, with_serial: bool = True) -> Path:
             {"agent_id": "cam-left", "kind": "realsense", "hz_target": 15.0},
             {"agent_id": "cam-middle", "kind": "realsense", "hz_target": 15.0},
         ],
+        "cameras": {
+            "cam-left": {
+                "serial": "317222074437",
+                "role": "left",
+                "intrinsic_matrix": [[600.0, 0.0, 320.0], [0.0, 601.0, 240.0], [0.0, 0.0, 1.0]],
+            },
+            "cam-middle": {
+                "serial": "336222075436",
+                "role": "middle",
+                "intrinsic_matrix": [[610.0, 0.0, 321.0], [0.0, 611.0, 241.0], [0.0, 0.0, 1.0]],
+            },
+        },
         "format": "dcs_episode_v1",
         "rows": n,
     }
@@ -187,6 +199,28 @@ def test_export_hik_dataset_uses_yaml_map(tmp_path: Path) -> None:
 
     md = json.loads((out / "metadata.json").read_text(encoding="utf-8"))
     assert "rgb_top" in md["sensor_list"]
+    assert md["intrinsic_matrix"]["rgb_top"][0][0] == 610.0
+    assert md["intrinsic_matrix"]["rgb_rear_left_1"][0][0] == 600.0
+    assert md.get("intrinsics_source") == "episode_manifest"
+
+
+def test_export_intrinsics_from_source_manifest(tmp_path: Path) -> None:
+    """If filtered manifest lacks cameras, fall back to episode root manifest."""
+    ep = tmp_path / "episode_00000"
+    ep.mkdir()
+    filtered = _write_filtered(ep, n=2)
+    # strip cameras from filtered; put them only on source episode
+    fm = json.loads((filtered / "manifest.json").read_text(encoding="utf-8"))
+    cams = fm.pop("cameras")
+    (filtered / "manifest.json").write_text(json.dumps(fm), encoding="utf-8")
+    (ep / "manifest.json").write_text(
+        json.dumps({"episode_index": 0, "cameras": cams, "agents": fm["agents"]}),
+        encoding="utf-8",
+    )
+    cmap = _write_map(tmp_path / "hik_camera_map.yaml")
+    meta = export_hik_dataset(ep, camera_map_yaml=cmap)
+    md = json.loads(Path(meta["out_dir"], "metadata.json").read_text(encoding="utf-8"))
+    assert md["intrinsic_matrix"]["rgb_top"][0][0] == 610.0
 
 
 def test_export_reuses_bundled_map(tmp_path: Path) -> None:

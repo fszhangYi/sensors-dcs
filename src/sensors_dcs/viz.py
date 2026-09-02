@@ -153,10 +153,27 @@ PREVIEW_HTML = """<!DOCTYPE html>
       gap: 0.65rem;
       align-items: stretch;
     }
-    .row { display: grid; grid-template-columns: 4.5rem 1fr 5rem; gap: 0.75rem; align-items: center; }
+    .row { display: grid; grid-template-columns: 4.5rem 1fr 5.5rem; gap: 0.75rem; align-items: center; }
     .row span { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 0.85rem; }
     .track {
       height: 14px; background: #0b1017; border-radius: 999px; overflow: hidden;
+      border: 1px solid var(--line);
+    }
+    .track.track-dual {
+      height: auto;
+      display: grid;
+      gap: 3px;
+      padding: 2px 0;
+      background: transparent;
+      border: none;
+      overflow: visible;
+      border-radius: 0;
+    }
+    .track.track-dual .track-lane {
+      height: 7px;
+      background: #0b1017;
+      border-radius: 999px;
+      overflow: hidden;
       border: 1px solid var(--line);
     }
     .fill {
@@ -164,6 +181,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
       background: linear-gradient(90deg, #2f6f66, var(--accent));
       transform-origin: left center;
     }
+    .fill.fill-cal {
+      background: linear-gradient(90deg, #2f6f66, var(--accent));
+    }
+    .fill.fill-raw {
+      background: linear-gradient(90deg, #b8791f, #e8a838);
+    }
+    .row .val .v-cal { color: var(--accent); }
+    .row .val .v-raw { color: #e8a838; }
     .cam-section {
       min-width: 0;
       min-height: 0;
@@ -427,11 +452,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
 
     function ensureRows(barsRoot, n, labelFn) {
+      while (barsRoot.children.length > n) barsRoot.removeChild(barsRoot.lastChild);
       while (barsRoot.children.length < n) {
         const row = document.createElement('div');
         row.className = 'row';
         row.innerHTML =
-          '<span class="lab"></span><div class="track"><div class="fill"></div></div><span class="val">0.000</span>';
+          '<span class="lab"></span>' +
+          '<div class="track track-dual">' +
+            '<div class="track-lane"><div class="fill fill-cal"></div></div>' +
+            '<div class="track-lane"><div class="fill fill-raw"></div></div>' +
+          '</div>' +
+          '<span class="val"><span class="v-cal">—</span><br><span class="v-raw">—</span></span>';
         barsRoot.appendChild(row);
       }
       for (let i = 0; i < barsRoot.children.length; i++) {
@@ -440,30 +471,51 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
     }
 
-    function setBar(row, widthPct, text) {
-      const fill = row.querySelector('.fill');
-      const val = row.querySelector('.val');
-      if (fill) fill.style.width = widthPct.toFixed(1) + '%';
-      if (val) val.textContent = text;
+    function setDualBar(row, calPct, rawPct, calText, rawText) {
+      const calFill = row.querySelector('.fill-cal');
+      const rawFill = row.querySelector('.fill-raw');
+      const vCal = row.querySelector('.v-cal');
+      const vRaw = row.querySelector('.v-raw');
+      if (calFill) calFill.style.width = Math.max(0, Math.min(100, calPct)).toFixed(1) + '%';
+      if (rawFill) rawFill.style.width = Math.max(0, Math.min(100, rawPct)).toFixed(1) + '%';
+      if (vCal) vCal.textContent = calText;
+      if (vRaw) vRaw.textContent = rawText;
+    }
+
+    function jointBarPct(rad) {
+      const r = Number(rad);
+      if (!Number.isFinite(r)) return 0;
+      return Math.max(0, Math.min(1, (r + 1.2) / 2.4)) * 100;
     }
 
     function renderGello(card, frame, hzText) {
       const title =
         frame.kind === 'arm_read'
           ? 'robot · Read'
-          : frame.agent_id + ' · Gello';
+          : frame.agent_id + ' · Read';
       card.querySelector('h2').textContent = title;
       card.querySelector('.k-kind').textContent = frame.kind;
       card.querySelector('.k-seq').textContent = String(frame.seq);
       card.querySelector('.k-hz').textContent = hzText;
       card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
       const joints = (frame.payload && frame.payload.joints_rad) || [];
+      const jointsRaw = (frame.payload && frame.payload.joints_rad_raw) || [];
       const barsRoot = card.querySelector('.agent-bars');
-      ensureRows(barsRoot, joints.length, (i) => 'j' + i);
-      joints.forEach((rad, i) => {
-        const norm = Math.max(0, Math.min(1, (rad + 1.2) / 2.4));
-        setBar(barsRoot.children[i], norm * 100, Number(rad).toFixed(3));
-      });
+      const n = Math.max(joints.length, jointsRaw.length);
+      ensureRows(barsRoot, n, (i) => 'j' + i);
+      for (let i = 0; i < n; i++) {
+        const cal = joints[i];
+        const raw = jointsRaw[i];
+        const calTxt = cal == null || !Number.isFinite(Number(cal)) ? '—' : Number(cal).toFixed(3);
+        const rawTxt = raw == null || !Number.isFinite(Number(raw)) ? '—' : ('raw ' + Number(raw).toFixed(3));
+        setDualBar(
+          barsRoot.children[i],
+          cal == null ? 0 : jointBarPct(cal),
+          raw == null ? 0 : jointBarPct(raw),
+          calTxt,
+          rawTxt,
+        );
+      }
     }
 
     function renderGripperRead(card, frame, hzText) {
@@ -473,11 +525,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
       card.querySelector('.k-hz').textContent = hzText;
       card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
       const pos = frame.payload && frame.payload.position_norm;
+      const raw = (frame.payload && (frame.payload.raw_value ?? frame.payload.position_raw));
       const barsRoot = card.querySelector('.agent-bars');
       ensureRows(barsRoot, 1, () => 'pos');
-      const p = pos == null ? 0 : Number(pos);
-      const width = Math.max(0, Math.min(1, p / 0.637)) * 100;
-      setBar(barsRoot.children[0], width, pos == null ? '—' : p.toFixed(3));
+      const p = pos == null ? null : Number(pos);
+      const r = raw == null ? null : Number(raw);
+      const calPct = p == null || !Number.isFinite(p) ? 0 : Math.max(0, Math.min(1, p / 0.637)) * 100;
+      const rawPct = r == null || !Number.isFinite(r) ? 0 : Math.max(0, Math.min(1, r / 1000)) * 100;
+      setDualBar(
+        barsRoot.children[0],
+        calPct,
+        rawPct,
+        p == null || !Number.isFinite(p) ? '—' : p.toFixed(3),
+        r == null || !Number.isFinite(r) ? '—' : ('raw ' + String(Math.round(r))),
+      );
     }
 
     function pickCamSlot(frame, used) {

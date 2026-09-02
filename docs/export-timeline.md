@@ -68,7 +68,7 @@ class Sample:
 2. **`cameras/<agent_id>/index.jsonl`** — 每行一条 Sample：
    - `image_relpath = cameras/{agent_id}/{file}`
    - 不嵌入 JPEG 二进制
-3. **`manifest.json`** — 写入导出元数据（`t_start`, `t_end`, `agents`, `site` 等）
+3. **`manifest.json`** — 写入导出元数据（`t_start`, `t_end`, `agents`, `site` 等）；录制 start 时已写入的 `cameras.<agent_id>`（内参）一并保留
 
 ### 3.2 校验
 
@@ -133,7 +133,8 @@ episode_00000/
 | `kind` | string | gello / gripper_read / realsense |
 | `seq` | int64 | agent 内序号 |
 | `sensor_id` | string | |
-| `joints_rad` | list[float64] | gello（或拆列 `j0..jN`） |
+| `joints_rad` | list[float64] | gello 仿射后（拆列 `j0..jN`） |
+| `joints_rad_raw` | list[float64] | gello 仿射前（拆列 `j_raw0..`） |
 | `position_norm` | float64 | gripper |
 | `image_relpath` | string | 相机相对路径 |
 | `role`, `dry_run` | | 元数据 |
@@ -143,7 +144,8 @@ episode_00000/
 | 列 | 说明 |
 |----|------|
 | `t_wall`, `t_mono` | 主时钟 |
-| `gello.seq`, `gello.j0` … | gello 字段 + 匹配 seq |
+| `gello.seq`, `gello.j0` … | 仿射后关节 + 匹配 seq |
+| `gello.j_raw0` … | 仿射前关节（与 YAML offsets/signs 对应） |
 | `gello.match_dt` | 对齐误差（主时钟为 gello 时为 0） |
 | `gripper.*` | 同上 |
 | `cam_left.file`, `cam_left.seq`, `cam_left.match_dt` | 各相机 |

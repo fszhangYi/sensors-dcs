@@ -47,20 +47,27 @@ class GripperReadAgent(BaseAgent):
         self._seq += 1
 
         pos = sample.get("position_norm")
+        raw = sample.get("raw_value")
+        if raw is None:
+            raw = sample.get("position_raw")
         dry = bool(sample.get("dry_run")) or pos is None
         if dry and self.dry_run_synth:
             pos = self._synth_position(t_wall)
+            # Inverse of (1000 - raw) * 0.000637 for viz-only synth
+            raw = int(round(1000.0 - float(pos) / 0.000637))
             sample = {
                 **sample,
                 "position_norm": pos,
-                "position_raw": None,
+                "position_raw": raw,
+                "raw_value": raw,
                 "dry_run": True,
                 "synth": True,
             }
 
         payload: dict[str, Any] = {
             "position_norm": pos,
-            "position_raw": sample.get("position_raw"),
+            "raw_value": raw,
+            "position_raw": raw,  # alias of raw_value (Modbus ticks before norm)
             "init_state": sample.get("init_state"),
             "fault": sample.get("fault"),
             "read_ms": sample.get("read_ms"),

@@ -152,6 +152,19 @@ class RecordController:
             )
             self._writer.start()
             self._sampler.start()
+            # Write initial manifest ASAP (camera intrinsics from open-time capture).
+            try:
+                self._write_manifest(
+                    ep_dir,
+                    ep=ep,
+                    t_start=self._t_start,
+                    t_end=None,
+                    written=0,
+                    dropped=0,
+                    provisional=True,
+                )
+            except Exception as e:  # noqa: BLE001
+                self._last_error = f"initial manifest: {e}"
         self._notify()
         return {"ok": True, **self.status()}
 
@@ -194,31 +207,22 @@ class RecordController:
             writer.join(timeout=timeout)
 
         t1 = time.time()
-        manifest = {
-            "site": self.site,
-            "episode_index": ep,
-            "t_start": t0,
-            "t_end": t1,
-            "duration_s": (t1 - t0) if t0 else None,
-            "written": self._written,
-            "dropped": self._dropped,
-            "agents": [
-                {
-                    "agent_id": a.agent_id,
-                    "sensor_id": a.sensor_id,
-                    "kind": a.kind,
-                    "hz_target": a.hz,
-                }
-                for a in self.agents.values()
-            ],
-            "valid": True,
-            "format": "dcs_episode_v1",
-        }
         if ep_dir is not None:
-            (ep_dir / "manifest.json").write_text(
-                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
+            try:
+                manifest = self._write_manifest(
+                    ep_dir,
+                    ep=ep,
+                    t_start=t0,
+                    t_end=t1,
+                    written=self._written,
+                    dropped=self._dropped,
+                    provisional=False,
+                )
+            except Exception as e:  # noqa: BLE001
+                self._last_error = f"final manifest: {e}"
+                manifest = {"error": str(e)}
+        else:
+            manifest = {}
 
         with self._lock:
             self.state = "idle"
@@ -234,6 +238,83 @@ class RecordController:
             )
         self._notify()
         return {"ok": True, "manifest": manifest, **self.status()}
+
+    def _collect_cameras(self) -> dict[str, Any]:
+        """Per-agent RealSense intrinsics captured at sensor open()."""
+        cameras: dict[str, Any] = {}
+        for a in self.agents.values():
+            if a.kind != "realsense":
+                continue
+            info = None
+            if hasattr(a, "camera_infos_dict"):
+                info = a.camera_infos_dict()
+            if not info:
+                continue
+            cameras[a.agent_id] = info
+        return cameras
+
+    def _write_manifest(
+        self,
+        ep_dir: Path,
+        *,
+        ep: int,
+        t_start: float | None,
+        t_end: float | None,
+        written: int,
+        dropped: int,
+        provisional: bool,
+    ) -> dict[str, Any]:
+        cameras = self._collect_cameras()
+        # Preserve open-time intrinsics if agents already closed / infos cleared.
+        prev_path = ep_dir / "manifest.json"
+        if prev_path.is_file():
+            try:
+                prev = json.loads(prev_path.read_text(encoding="utf-8"))
+                for aid, info in (prev.get("cameras") or {}).items():
+                    cameras.setdefault(aid, info)
+            except (OSError, json.JSONDecodeError, TypeError):
+                pass
+
+        agents_meta: list[dict[str, Any]] = []
+        for a in self.agents.values():
+            item: dict[str, Any] = {
+                "agent_id": a.agent_id,
+                "sensor_id": a.sensor_id,
+                "kind": a.kind,
+                "hz_target": a.hz,
+            }
+            if a.kind == "gello" and hasattr(a, "calib_dict"):
+                item["gello_calib"] = a.calib_dict()
+            agents_meta.append(item)
+
+        duration = None
+        if t_start is not None and t_end is not None:
+            duration = float(t_end) - float(t_start)
+
+        manifest: dict[str, Any] = {
+            "site": self.site,
+            "episode_index": ep,
+            "t_start": t_start,
+            "t_end": t_end,
+            "duration_s": duration,
+            "written": written,
+            "dropped": dropped,
+            "agents": agents_meta,
+            "cameras": cameras,
+            "valid": not provisional,
+            "format": "dcs_episode_v1",
+        }
+        if provisional:
+            manifest["provisional"] = True
+            manifest["note"] = (
+                "Written at record start; cameras.* intrinsics from RealSense open()."
+            )
+
+        prev_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return manifest
 
     def _notify(self) -> None:
         if self._on_status:

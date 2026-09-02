@@ -67,6 +67,16 @@ class RealSenseAgent(BaseAgent):
         self.viz_jpeg_quality = viz_jpeg_quality
         self.viz_max_width = viz_max_width
 
+    def camera_infos_dict(self) -> dict[str, Any] | None:
+        """Color/depth intrinsics captured when the RealSense pipeline opened."""
+        sensor = self.sensor
+        if hasattr(sensor, "get_camera_infos"):
+            info = sensor.get_camera_infos()
+            if info:
+                return dict(info)
+        infos = getattr(sensor, "camera_infos", None)
+        return dict(infos) if isinstance(infos, dict) else None
+
     def read_frame(self) -> Frame:
         sample = dict(self.sensor.read())
         t_wall = float(sample.get("ts") or time.time())

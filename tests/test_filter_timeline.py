@@ -135,6 +135,13 @@ def test_materialize_writes_episode_tree(tmp_path: Path) -> None:
             {"agent_id": "gello", "kind": "gello", "hz_target": 50.0, "sensor_id": "g"},
             {"agent_id": "camera", "kind": "realsense", "hz_target": 15.0, "sensor_id": "rs"},
         ],
+        "cameras": {
+            "camera": {
+                "serial": "336222075436",
+                "role": "middle",
+                "intrinsic_matrix": [[500.0, 0.0, 320.0], [0.0, 500.0, 240.0], [0.0, 0.0, 1.0]],
+            }
+        },
         "format": "dcs_episode_v1",
     }
     (ep / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -197,6 +204,7 @@ def test_materialize_writes_episode_tree(tmp_path: Path) -> None:
     assert fm["format"] == "dcs_episode_v1"
     assert fm["derived_from"] == "episode_00000"
     assert fm["rows"] == meta["rows_out"]
+    assert fm.get("cameras", {}).get("camera", {}).get("intrinsic_matrix")[0][0] == 500.0
 
 
 def test_filter_meta_written(episode_with_aligned: Path) -> None:

@@ -56,9 +56,20 @@ def _flatten_state_row(row: dict[str, Any]) -> Sample:
         joints = payload.get("joints_rad")
         if joints is not None:
             fields["joints_rad"] = list(joints)
+        joints_raw = payload.get("joints_rad_raw")
+        if joints_raw is not None:
+            fields["joints_rad_raw"] = list(joints_raw)
+        if payload.get("joint_offsets") is not None:
+            fields["joint_offsets"] = list(payload["joint_offsets"])
+        if payload.get("joint_signs") is not None:
+            fields["joint_signs"] = list(payload["joint_signs"])
     elif kind == "gripper_read":
         fields["position_norm"] = payload.get("position_norm")
-        fields["position_raw"] = payload.get("position_raw")
+        raw = payload.get("raw_value")
+        if raw is None:
+            raw = payload.get("position_raw")
+        fields["position_raw"] = raw
+        fields["raw_value"] = raw
     else:
         fields.update(payload)
     return Sample(
@@ -160,6 +171,30 @@ def pick_default_master(manifest: dict[str, Any], samples: list[Sample]) -> str:
     raise ValueError("episode has no samples")
 
 
+def collect_gello_calib(
+    manifest: dict[str, Any], samples: list[Sample]
+) -> dict[str, dict[str, Any]]:
+    """Per-agent gello affine params from payload and/or episode manifest."""
+    out: dict[str, dict[str, Any]] = {}
+    for item in manifest.get("agents") or []:
+        if item.get("kind") != "gello":
+            continue
+        aid = str(item.get("agent_id") or "")
+        if aid and isinstance(item.get("gello_calib"), dict):
+            out[aid] = dict(item["gello_calib"])
+    for s in samples:
+        if s.kind != "gello" or s.agent_id in out:
+            continue
+        if s.fields.get("joint_offsets") is None and s.fields.get("joint_signs") is None:
+            continue
+        out[s.agent_id] = {
+            "joint_offsets": list(s.fields.get("joint_offsets") or []),
+            "joint_signs": list(s.fields.get("joint_signs") or []),
+            "affine": "q=(q_raw-offsets)*signs",
+        }
+    return out
+
+
 def _sample_event_row(sample: Sample, t_start: float) -> dict[str, Any]:
     row: dict[str, Any] = {
         "t_wall": sample.t_wall,
@@ -178,9 +213,13 @@ def _sample_event_row(sample: Sample, t_start: float) -> dict[str, Any]:
     if sample.kind in {"gello", "arm_read"}:
         for i, val in enumerate(sample.fields.get("joints_rad") or []):
             row[f"j{i}"] = float(val)
+        # Raw (pre-affine) joints — gello only; arm_read usually has no separate raw
+        for i, val in enumerate(sample.fields.get("joints_rad_raw") or []):
+            row[f"j_raw{i}"] = float(val)
     elif sample.kind == "gripper_read":
         row["position_norm"] = sample.fields.get("position_norm")
         row["position_raw"] = sample.fields.get("position_raw")
+        row["raw_value"] = sample.fields.get("raw_value")
     elif sample.image_relpath:
         row["file"] = sample.fields.get("file")
     return row
@@ -215,9 +254,12 @@ def _agent_value_columns(agent_id: str, sample: Sample) -> dict[str, Any]:
     if sample.kind in {"gello", "arm_read"}:
         for i, val in enumerate(sample.fields.get("joints_rad") or []):
             cols[f"{agent_id}.j{i}"] = float(val)
+        for i, val in enumerate(sample.fields.get("joints_rad_raw") or []):
+            cols[f"{agent_id}.j_raw{i}"] = float(val)
     elif sample.kind == "gripper_read":
         cols[f"{agent_id}.position_norm"] = sample.fields.get("position_norm")
         cols[f"{agent_id}.position_raw"] = sample.fields.get("position_raw")
+        cols[f"{agent_id}.raw_value"] = sample.fields.get("raw_value")
     else:
         cols[f"{agent_id}.file"] = sample.fields.get("file")
         cols[f"{agent_id}.image_relpath"] = sample.image_relpath
@@ -464,6 +506,11 @@ def export_episode_timeline(
         "manifest_written": manifest.get("written"),
         "manifest_dropped": manifest.get("dropped"),
         "match_dt_stats": match_stats or None,
+        "gello_calib": collect_gello_calib(manifest, samples) or None,
+        "joint_columns": {
+            "calibrated": "agent.j{i} / events j{i} = joints_rad after affine (follow/dataset)",
+            "raw": "agent.j_raw{i} / events j_raw{i} = joints_rad_raw before affine",
+        },
         "outputs": sorted(p.name for p in out_dir.iterdir() if p.is_file()),
     }
     meta_path = out_dir / "export_meta.json"

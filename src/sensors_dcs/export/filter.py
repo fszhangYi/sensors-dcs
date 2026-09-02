@@ -117,8 +117,29 @@ def _agents_in_frame(columns: list[str]) -> list[str]:
 
 
 def _joints_from_row(row: Any, agent_id: str, columns: list[str]) -> list[float] | None:
+    """Calibrated joints from ``{agent}.j0`` … (ignores ``j_raw*``)."""
     joints: list[tuple[int, float]] = []
     prefix = f"{agent_id}.j"
+    for col in columns:
+        if not col.startswith(prefix):
+            continue
+        suffix = col[len(prefix) :]
+        if not suffix.isdigit():
+            continue
+        val = row.get(col)
+        if not _value_present(val):
+            return None
+        joints.append((int(suffix), float(val)))
+    if not joints:
+        return None
+    joints.sort(key=lambda x: x[0])
+    return [v for _, v in joints]
+
+
+def _joints_raw_from_row(row: Any, agent_id: str, columns: list[str]) -> list[float] | None:
+    """Raw pre-affine joints from ``{agent}.j_raw0`` …"""
+    joints: list[tuple[int, float]] = []
+    prefix = f"{agent_id}.j_raw"
     for col in columns:
         if not col.startswith(prefix):
             continue
@@ -327,6 +348,7 @@ def materialize_filtered_episode(
     columns: list[str],
     master: str | None,
     source_manifest: dict[str, Any] | None = None,
+    gello_calib: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Write episode-shaped tree under ``filtered_root`` (states / cameras / manifest)."""
     if filtered_root.exists():
@@ -419,6 +441,24 @@ def materialize_filtered_episode(
                     if joints is None:
                         continue
                     payload: dict[str, Any] = {"joints_rad": joints, "dry_run": None}
+                    joints_raw = _joints_raw_from_row(row, aid, columns)
+                    if joints_raw is not None:
+                        payload["joints_rad_raw"] = joints_raw
+                    cal = None
+                    if gello_calib and aid in gello_calib:
+                        cal = gello_calib[aid]
+                    elif source_manifest and kind == "gello":
+                        for src in source_manifest.get("agents") or []:
+                            if src.get("agent_id") == aid and isinstance(
+                                src.get("gello_calib"), dict
+                            ):
+                                cal = src["gello_calib"]
+                                break
+                    if isinstance(cal, dict):
+                        if cal.get("joint_offsets") is not None:
+                            payload["joint_offsets"] = list(cal["joint_offsets"])
+                        if cal.get("joint_signs") is not None:
+                            payload["joint_signs"] = list(cal["joint_signs"])
                 elif kind == "gripper_read":
                     pos = (
                         row.get(f"{aid}.position_norm")
@@ -428,12 +468,15 @@ def materialize_filtered_episode(
                     if not _value_present(pos):
                         continue
                     raw = (
-                        row.get(f"{aid}.position_raw")
-                        if f"{aid}.position_raw" in columns
+                        row.get(f"{aid}.raw_value")
+                        if f"{aid}.raw_value" in columns
                         else None
                     )
+                    if not _value_present(raw) and f"{aid}.position_raw" in columns:
+                        raw = row.get(f"{aid}.position_raw")
                     payload = {
                         "position_norm": float(pos),
+                        "raw_value": int(raw) if _value_present(raw) else None,
                         "position_raw": float(raw) if _value_present(raw) else None,
                         "dry_run": None,
                     }
@@ -489,8 +532,19 @@ def materialize_filtered_episode(
                 if src.get("agent_id") == aid:
                     item["sensor_id"] = src.get("sensor_id")
                     item["hz_target"] = src.get("hz_target")
+                    if isinstance(src.get("gello_calib"), dict):
+                        item["gello_calib"] = dict(src["gello_calib"])
                     break
+        if gello_calib and aid in gello_calib:
+            item["gello_calib"] = dict(gello_calib[aid])
         agents_meta.append(item)
+
+    cameras: dict[str, Any] = {}
+    src_cams = (source_manifest or {}).get("cameras") or {}
+    if isinstance(src_cams, dict):
+        for aid in agents:
+            if aid in src_cams and isinstance(src_cams[aid], dict):
+                cameras[aid] = dict(src_cams[aid])
 
     manifest = {
         "site": (source_manifest or {}).get("site"),
@@ -501,6 +555,7 @@ def materialize_filtered_episode(
         "written": written,
         "dropped": 0,
         "agents": agents_meta,
+        "cameras": cameras,
         "valid": True,
         "format": "dcs_episode_v1",
         "derived_from": ep_dir.name,
@@ -619,6 +674,9 @@ def filter_episode_timeline(
     out_dir = out_path.parent
     materialize_info = None
     if materialize and len(filtered) > 0:
+        calib = export_meta.get("gello_calib") if isinstance(export_meta, dict) else None
+        if not isinstance(calib, dict):
+            calib = None
         materialize_info = materialize_filtered_episode(
             filtered,
             ep_dir=root,
@@ -626,6 +684,7 @@ def filter_episode_timeline(
             columns=list(filtered.columns),
             master=master_id,
             source_manifest=source_manifest,
+            gello_calib=calib,
         )
 
     _write_frame(filtered, out_path, fmt)
@@ -654,6 +713,7 @@ def filter_episode_timeline(
         "drop_reasons": drop_reasons,
         "materialize": materialize,
         "materialize_info": materialize_info,
+        "gello_calib": (export_meta.get("gello_calib") if isinstance(export_meta, dict) else None),
     }
     meta_path = out_dir / "filter_meta.json"
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

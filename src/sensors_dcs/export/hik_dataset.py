@@ -281,6 +281,30 @@ def build_steps(
     return steps
 
 
+def intrinsics_from_episode_cameras(
+    cameras: Mapping[str, Any] | None,
+    hik_to_agent: Mapping[str, str],
+) -> dict[str, list[list[float]]]:
+    """Map episode ``manifest.cameras[agent_id].intrinsic_matrix`` → hik rgb_/d_ keys."""
+    out: dict[str, list[list[float]]] = {}
+    if not cameras:
+        return out
+    for hik_name, agent_id in hik_to_agent.items():
+        info = cameras.get(agent_id)
+        if not isinstance(info, dict):
+            continue
+        k = info.get("intrinsic_matrix")
+        if isinstance(k, list) and k:
+            out[hik_name] = list(k)
+            out[f"rgb_{hik_name}"] = list(k)
+        dk = info.get("depth_intrinsic_matrix")
+        if isinstance(dk, list) and dk:
+            out[f"d_{hik_name}"] = list(dk)
+        elif isinstance(k, list) and k:
+            out[f"d_{hik_name}"] = list(k)
+    return out
+
+
 def create_metadata(
     *,
     robot_name: str,
@@ -481,6 +505,7 @@ def write_hik_dataset(
     fk: FkFn | None = None,
     clear_out: bool = True,
     calibration: Mapping[str, Any] | None = None,
+    episode_cameras: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write metadata.json, steps.json, and rgb (optional depth) images."""
     filtered_root = Path(filtered_root)
@@ -510,19 +535,32 @@ def write_hik_dataset(
                     shutil.copy2(dsrc, out_dir / f"d_{hik_name}_{i}.png")
                     has_depth = True
 
-    intrinsic = None
-    extrinsic = None
+    # Prefer episode manifest cameras (open-time RealSense K); --calibration-json overrides.
+    intrinsic: dict[str, list[list[float]]] = intrinsics_from_episode_cameras(
+        episode_cameras, hik_to_agent
+    )
+    extrinsic: dict[str, list[list[float]]] = {}
+    if episode_cameras:
+        for hik_name, agent_id in hik_to_agent.items():
+            info = episode_cameras.get(agent_id)
+            if not isinstance(info, dict):
+                continue
+            d2c = info.get("depth_to_color")
+            if isinstance(d2c, list) and d2c:
+                extrinsic[f"d_{hik_name}"] = list(d2c)
     if calibration:
-        intrinsic = calibration.get("intrinsic_matrix")
-        extrinsic = calibration.get("extrinsic_matrix")
+        for k, v in (calibration.get("intrinsic_matrix") or {}).items():
+            intrinsic[str(k)] = list(v)
+        for k, v in (calibration.get("extrinsic_matrix") or {}).items():
+            extrinsic[str(k)] = list(v)
 
     metadata = create_metadata(
         robot_name=robot_name,
         hik_camera_names=hik_names,
         natural_language=natural_language,
         include_depth=has_depth,
-        intrinsic=intrinsic,
-        extrinsic=extrinsic,
+        intrinsic=intrinsic or None,
+        extrinsic=extrinsic or None,
         extra={
             "source": "sensors-dcs",
             "source_format": "dcs_filtered_v1",
@@ -530,6 +568,11 @@ def write_hik_dataset(
             "tcp_xyz": list(tcp_xyz),
             "camera_agent_map": dict(hik_to_agent),
             "steps": len(aligned),
+            "intrinsics_source": (
+                "calibration_json"
+                if calibration and calibration.get("intrinsic_matrix")
+                else ("episode_manifest" if intrinsic else "identity")
+            ),
         },
     )
     steps = build_steps(aligned, fk=fk, tcp_xyz=tcp_xyz)
@@ -637,6 +680,17 @@ def export_hik_dataset(
     if not aligned:
         raise ValueError(f"no aligned steps under {filtered_root}")
 
+    episode_cameras = manifest.get("cameras") if isinstance(manifest.get("cameras"), dict) else {}
+    if not episode_cameras:
+        src_man = ep / "manifest.json"
+        if src_man.is_file():
+            try:
+                sm = json.loads(src_man.read_text(encoding="utf-8"))
+                if isinstance(sm.get("cameras"), dict):
+                    episode_cameras = sm["cameras"]
+            except (OSError, json.JSONDecodeError, TypeError):
+                pass
+
     info = write_hik_dataset(
         aligned,
         filtered_root=filtered_root,
@@ -648,6 +702,7 @@ def export_hik_dataset(
         fk=fk,
         clear_out=clear_out,
         calibration=calibration,
+        episode_cameras=episode_cameras or None,
     )
     # also keep a copy beside hik output
     if bundle_map:

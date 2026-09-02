@@ -11,6 +11,8 @@ sensors-dcs/
   src/sensors_dcs/
   docs/export-timeline.md           # 统一时间轴导出设计
   docs/filter-timeline.md           # 宽表过滤 + hik 训练集导出
+  docs/hik-dataset-steps.md         # hik steps.json / cartesian 字段含义
+  docs/gello-joint-affine.md        # Gello 关节仿射标定（offsets/signs）
   configs/hik_camera_map.yaml       # serial→hik 相机名（export-hik-dataset）
 ```
 
@@ -121,6 +123,7 @@ python -m sensors_dcs.desktop_main -c configs/camera-only.yaml --ui     # 有 UI
 ```bash
 pip install -e ".[dynamixel]"
 # 编辑 configs/sensors_gello.yaml：dry_run: false，并确认 endpoint / port_substr
+# 同时配置 joint_offsets / joint_signs（见 docs/gello-joint-affine.md），否则 joints_rad ≈ 原始舵机角
 sensors-dcs run -c configs/gello_only.yaml --no-dry-run
 ```
 
@@ -153,6 +156,7 @@ configs/data/episode_00000/
 
 - 状态（gello / gripper）每行含 `t_wall`、`seq`、`payload`
 - 图片文件名是 **agent 内 seq**；**`t_wall` 在 `index.jsonl`**
+- **`manifest.json`**：录制 **start** 时即写入（含 `cameras.<agent_id>` 内参，来自 RealSense `open()`）；stop 时补全 `t_end` / `written` 等，保留内参
 
 ## 统一时间轴导出（后处理）
 
@@ -353,8 +357,8 @@ episode_00000/export/
   export_meta.json             # 参数、行数、match_dt 统计
 ```
 
-宽表列名形如 `gello.j0`、`cam-left.image_relpath`、`cam-left.match_dt`。  
-下游用 `t_wall` + `match_dt` 对齐，**不要**用跨 agent 的 `seq`。
+宽表列名形如 `gello.j0`（仿射后）、`gello.j_raw0`（仿射前）、`cam-left.image_relpath`、`cam-left.match_dt`。  
+下游跟随 / 训练用 **`gello.j*`**；查舵机零位用 **`gello.j_raw*`**。对齐仍靠 `t_wall` + `match_dt`，**不要**用跨 agent 的 `seq`。详见 [docs/gello-joint-affine.md](docs/gello-joint-affine.md)。
 
 Python 读取示例：
 
@@ -455,7 +459,8 @@ episode → export-timeline --align asof --master …
 
 ### 转成 hik 训练集（export-hik-dataset）
 
-将 `export/filtered/` 转成与 `hik_gello/data_postprocess.py` 相同结构：`metadata.json`、`steps.json`、`rgb_<name>_<i>.jpg`。
+将 `export/filtered/` 转成与 `hik_gello/data_postprocess.py` 相同结构：`metadata.json`、`steps.json`、`rgb_<name>_<i>.jpg`。  
+**`steps.json` 各字段含义**（含 `observations.cartesian_position`）见 [docs/hik-dataset-steps.md](docs/hik-dataset-steps.md)。
 
 **相机命名不写死在代码里**，由 YAML 配置（serial → hik 名），filter / 导出时指定：
 
