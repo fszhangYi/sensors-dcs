@@ -1,6 +1,6 @@
 # sensors-dcs
 
-在 **hik-sensors**（本地 `./sensors` 软链接）之上的数据采集运行时（Agent / 缓冲 / 可视化）。当前 Agent：`gello` / `arm`（Elite 只读） / `gripper_read` / `realsense`。
+在 **hik-sensors**（本地 `./sensors` 软链接）之上的数据采集运行时（Agent / 缓冲 / 可视化）。当前 Agent：`gello` / `arm`（Elite 只读） / `arm_write`（Elite 点动） / `gripper_read` / `gripper_write` / `realsense`。
 
 ## 依赖布局
 
@@ -14,6 +14,7 @@ sensors-dcs/
   docs/hik-dataset.md               # hik_dataset 产物全解（详细）
   docs/hik-dataset-steps.md         # hik steps.json / cartesian 字段含义
   docs/gello-joint-affine.md        # Gello 关节仿射标定（offsets/signs）
+  docs/arm-write.md                 # Elite arm_write 安全计划与点动 UI
   configs/hik_camera_map.yaml       # serial→hik 相机名（export-hik-dataset）
 ```
 
@@ -51,6 +52,9 @@ sensors-dcs run -c configs/full_cell.yaml
 
 # 仅 Elite 机械臂（网络只读，不下发）
 sensors-dcs run -c configs/robot_only.yaml
+
+# Elite 机械臂写（Arm + ±点动；默认 dry_run，见 docs/arm-write.md）
+sensors-dcs run -c configs/robot_write.yaml
 ```
 
 ### Elite 机械臂只读（`robot_only`）
@@ -69,6 +73,18 @@ sensors-dcs run -c configs/robot_only.yaml --no-dry-run
 ```
 
 配套文件：`configs/robot_only.yaml`（DCS）+ `configs/sensors_robot.yaml`（设备清单）。
+
+### Elite 机械臂写（`robot_write`）
+
+独立于只读采集。`kind=arm_write`：`open` 仅监视；UI **Arm** 后才 `servo_on`+`TT_init`；用 **delta 滑条 + 每轴 ±** 点动（单次受 `max_delta_deg` 限制）。详见 [docs/arm-write.md](docs/arm-write.md)。
+
+```bash
+sensors-dcs run -c configs/robot_write.yaml
+# 真机前务必清空空间、急停在手，并确认 docs/arm-write.md 清单
+sensors-dcs run -c configs/robot_write.yaml --no-dry-run
+```
+
+配套：`configs/robot_write.yaml` + `configs/sensors_robot_write.yaml`。
 
 浏览器打开：`http://127.0.0.1:7011/`（CLI `run` 会尝试打开浏览器）  
 页面显示保存路径与 episode；「开始/结束」控制流水线写盘（传感器常开）。  
@@ -510,6 +526,8 @@ sensors-dcs filter-timeline -e episode_00000 \
 | `configs/sensors_full_cell.yaml` | 对应全量设备清单 |
 | `configs/robot_only.yaml` | 仅 Elite 机械臂 **只读** Agent |
 | `configs/sensors_robot.yaml` | `kind: arm_read` 设备清单（填 `robot_ip`） |
+| `configs/robot_write.yaml` | Elite 机械臂 **写/点动** Agent（默认 dry_run） |
+| `configs/sensors_robot_write.yaml` | `kind: arm_write`（`max_delta_deg` 等） |
 | `configs/hik_camera_map.yaml` | filter/`export-hik-dataset`：序列号→hik 相机名（按工位改） |
 | `sensors/configs/*.yaml` | 软链接指向的 hik-sensors 设备清单 |
 

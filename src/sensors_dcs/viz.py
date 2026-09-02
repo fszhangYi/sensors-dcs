@@ -22,6 +22,25 @@ class GripperCommandBody(BaseModel):
     initialize: bool = False
 
 
+class GripperGelloSyncBody(BaseModel):
+    enabled: bool
+    gello_agent_id: str | None = None
+    gripper_agent_id: str | None = None
+    joint_index: int = 6
+    hz: float | None = None
+
+
+class ArmCommandBody(BaseModel):
+    agent_id: str | None = None
+    arm: bool = False
+    disarm: bool = False
+    stop: bool = False
+    joints_rad: list[float] | None = None
+    jog_joint: int | None = None
+    delta_rad: float | None = None
+    delta_deg: float | None = None
+
+
 PREVIEW_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -210,6 +229,27 @@ PREVIEW_HTML = """<!DOCTYPE html>
       cursor: pointer;
     }
     .grip-cmd .cmd-hint { color: var(--muted); font-size: 0.75rem; }
+    .arm-cmd {
+      display: grid; gap: 0.45rem; margin-top: 0.55rem; font-size: 0.82rem;
+    }
+    .arm-cmd .arm-tools {
+      display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center;
+    }
+    .arm-cmd input[type="range"] { width: 10rem; accent-color: var(--accent); }
+    .arm-cmd button {
+      padding: 0.3rem 0.65rem; border-radius: 8px; border: 1px solid var(--line);
+      background: color-mix(in srgb, var(--accent) 28%, #0b1017); color: var(--text);
+      cursor: pointer;
+    }
+    .arm-cmd button.arm-estop {
+      background: color-mix(in srgb, #c44 35%, #0b1017); border-color: #a33;
+    }
+    .arm-cmd button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .arm-cmd .arm-jog-row {
+      display: grid; grid-template-columns: 2.8rem auto auto 1fr; gap: 0.4rem; align-items: center;
+    }
+    .arm-cmd .arm-jog-row button { min-width: 2.2rem; }
+    .arm-cmd .cmd-hint { color: var(--muted); font-size: 0.75rem; }
     .cam-section {
       min-width: 0;
       min-height: 0;
@@ -630,18 +670,35 @@ PREVIEW_HTML = """<!DOCTYPE html>
         box.className = 'grip-cmd';
         box.innerHTML =
           '<button type="button" class="grip-init">初始化</button>' +
+          '<button type="button" class="grip-sync">同步</button>' +
           '<label>position_norm</label>' +
           '<input type="number" step="0.01" min="0" max="0.637" value="0.32" class="grip-norm" />' +
           '<button type="button" class="grip-send">下发</button>' +
-          '<span class="cmd-hint">先初始化（AG95 自检），再下发；0≈开 … 0.637≈合</span>';
+          '<span class="cmd-hint">同步=服务端 gello j6(cal)→夹爪；前端只开关</span>';
         card.appendChild(box);
         const btn = box.querySelector('.grip-send');
         const initBtn = box.querySelector('.grip-init');
+        const syncBtn = box.querySelector('.grip-sync');
         const inp = box.querySelector('.grip-norm');
+        const setManualEnabled = (on) => {
+          btn.disabled = !on;
+          inp.disabled = !on;
+        };
+        const applySyncUi = (sync) => {
+          const on = !!(sync && sync.enabled);
+          syncBtn.textContent = on ? '取消同步' : '同步';
+          syncBtn.dataset.enabled = on ? '1' : '0';
+          setManualEnabled(!on);
+          if (on && sync.last_norm != null && Number.isFinite(Number(sync.last_norm))) {
+            inp.value = String(Number(sync.last_norm).toFixed(3));
+          }
+        };
+        box._applySyncUi = applySyncUi;
         const postGrip = async (body, busyEl) => {
           busyEl.disabled = true;
           btn.disabled = true;
           initBtn.disabled = true;
+          syncBtn.disabled = true;
           try {
             const r = await fetch('/api/gripper/command', {
               method: 'POST',
@@ -651,8 +708,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
             return r;
           } finally {
             busyEl.disabled = false;
-            btn.disabled = false;
             initBtn.disabled = false;
+            syncBtn.disabled = false;
+            applySyncUi(window.__gripGelloSync || { enabled: syncBtn.dataset.enabled === '1' });
           }
         };
         initBtn.addEventListener('click', async () => {
@@ -660,10 +718,38 @@ PREVIEW_HTML = """<!DOCTYPE html>
           try {
             const r = await postGrip({ agent_id: frame.agent_id, initialize: true }, initBtn);
             runHint.textContent = r.ok
-              ? '夹爪初始化成功，可下发 position_norm'
+              ? '夹爪初始化成功，可下发 / 同步'
               : ('夹爪初始化失败：' + (r.error || JSON.stringify(r)));
           } catch (e) {
             runHint.textContent = '夹爪初始化异常：' + e;
+          }
+        });
+        syncBtn.addEventListener('click', async () => {
+          const want = syncBtn.dataset.enabled !== '1';
+          syncBtn.disabled = true;
+          try {
+            const r = await fetch('/api/gripper/gello-sync', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                enabled: want,
+                gripper_agent_id: frame.agent_id,
+                joint_index: 6,
+              }),
+            }).then((x) => x.json());
+            if (!r.ok) {
+              runHint.textContent = '同步失败：' + (r.error || JSON.stringify(r));
+              return;
+            }
+            window.__gripGelloSync = r;
+            applySyncUi(r);
+            runHint.textContent = r.enabled
+              ? '已同步：服务端 gello j6(cal) → gripper（数据不经前端）'
+              : '已取消同步';
+          } catch (e) {
+            runHint.textContent = '同步异常：' + e;
+          } finally {
+            syncBtn.disabled = false;
           }
         });
         btn.addEventListener('click', async () => {
@@ -682,6 +768,153 @@ PREVIEW_HTML = """<!DOCTYPE html>
               : ('夹爪下发失败：' + (r.error || JSON.stringify(r)));
           } catch (e) {
             runHint.textContent = '夹爪下发异常：' + e;
+          }
+        });
+      }
+      if (box && box._applySyncUi) {
+        box._applySyncUi(window.__gripGelloSync || { enabled: false });
+      }
+    }
+
+    function renderArmWrite(card, frame, hzText) {
+      card.querySelector('h2').textContent = 'robot · Write';
+      card.querySelector('.k-kind').textContent = frame.kind;
+      card.querySelector('.k-seq').textContent = String(frame.seq);
+      card.querySelector('.k-hz').textContent = hzText;
+      card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
+      const barsRoot = card.querySelector('.agent-bars');
+      const p = frame.payload || {};
+      const n = Math.max(1, Number(p.num_joints) || 6);
+      const fb = p.feedback_joints_rad || p.command_joints_rad || [];
+      ensureRows(barsRoot, n, (i) => 'j' + i, 'single');
+      for (let i = 0; i < n; i++) {
+        const v = fb[i];
+        const pct = v == null || !Number.isFinite(Number(v))
+          ? 0
+          : ((Number(v) + Math.PI) / (2 * Math.PI)) * 100;
+        const txt = v == null || !Number.isFinite(Number(v))
+          ? '—'
+          : (Number(v).toFixed(3) + ' rad');
+        setSingleBar(barsRoot.children[i], pct, txt);
+      }
+      let box = card.querySelector('.arm-cmd');
+      if (!box) {
+        box = document.createElement('div');
+        box.className = 'arm-cmd';
+        let jogHtml = '';
+        for (let i = 0; i < n; i++) {
+          jogHtml +=
+            '<div class="arm-jog-row" data-j="' + i + '">' +
+              '<span>j' + i + '</span>' +
+              '<button type="button" class="arm-minus" data-j="' + i + '">−</button>' +
+              '<button type="button" class="arm-plus" data-j="' + i + '">+</button>' +
+              '<span class="arm-jval">—</span>' +
+            '</div>';
+        }
+        box.innerHTML =
+          '<div class="arm-tools">' +
+            '<button type="button" class="arm-arm">Arm</button>' +
+            '<button type="button" class="arm-disarm">Disarm</button>' +
+            '<button type="button" class="arm-estop">Estop</button>' +
+            '<label>delta°</label>' +
+            '<input type="range" class="arm-delta" min="0.1" max="5" step="0.1" value="1.0" />' +
+            '<span class="arm-delta-val">1.0°</span>' +
+            '<span class="arm-armed-tag">idle</span>' +
+          '</div>' +
+          jogHtml +
+          '<span class="cmd-hint">先 Arm，再用 ± 按 delta 点动（单次 |Δq|≤驱动 max_delta，默认 2°）</span>';
+        card.appendChild(box);
+        const delta = box.querySelector('.arm-delta');
+        const deltaVal = box.querySelector('.arm-delta-val');
+        const armedTag = box.querySelector('.arm-armed-tag');
+        const armBtn = box.querySelector('.arm-arm');
+        const disarmBtn = box.querySelector('.arm-disarm');
+        const estopBtn = box.querySelector('.arm-estop');
+        const updateDeltaLabel = () => {
+          deltaVal.textContent = Number(delta.value).toFixed(1) + '°';
+        };
+        delta.addEventListener('input', updateDeltaLabel);
+        const postArm = async (body) => {
+          const r = await fetch('/api/arm/command', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agent_id: frame.agent_id, ...body }),
+          }).then((x) => x.json());
+          return r;
+        };
+        const setJogEnabled = (on) => {
+          box.querySelectorAll('.arm-minus, .arm-plus').forEach((b) => { b.disabled = !on; });
+        };
+        box._applyArmUi = (armed) => {
+          armedTag.textContent = armed ? 'armed' : 'idle';
+          setJogEnabled(!!armed);
+        };
+        armBtn.addEventListener('click', async () => {
+          runHint.textContent = '机械臂 Arm / TT_init…';
+          try {
+            const r = await postArm({ arm: true });
+            runHint.textContent = r.ok ? 'Arm 成功，可用 ± 点动' : ('Arm 失败：' + (r.error || JSON.stringify(r)));
+            box._applyArmUi(!!(r.ok && r.armed));
+          } catch (e) {
+            runHint.textContent = 'Arm 异常：' + e;
+          }
+        });
+        disarmBtn.addEventListener('click', async () => {
+          try {
+            const r = await postArm({ disarm: true });
+            runHint.textContent = r.ok ? '已 Disarm' : ('Disarm 失败：' + (r.error || JSON.stringify(r)));
+            box._applyArmUi(false);
+          } catch (e) {
+            runHint.textContent = 'Disarm 异常：' + e;
+          }
+        });
+        estopBtn.addEventListener('click', async () => {
+          try {
+            const r = await postArm({ stop: true });
+            runHint.textContent = r.ok ? 'Estop/停写已发送' : ('Estop 失败：' + (r.error || JSON.stringify(r)));
+            box._applyArmUi(false);
+          } catch (e) {
+            runHint.textContent = 'Estop 异常：' + e;
+          }
+        });
+        const jog = async (jointIndex, sign) => {
+          const dDeg = Number(delta.value);
+          if (!Number.isFinite(dDeg) || dDeg <= 0) {
+            runHint.textContent = 'delta 无效';
+            return;
+          }
+          try {
+            const r = await postArm({
+              jog_joint: jointIndex,
+              delta_deg: sign * dDeg,
+            });
+            runHint.textContent = r.ok
+              ? ('点动 j' + jointIndex + ' ' + (sign > 0 ? '+' : '−') + dDeg.toFixed(1) + '°')
+              : ('点动失败：' + (r.error || JSON.stringify(r)));
+            if (r.armed === false) box._applyArmUi(false);
+          } catch (e) {
+            runHint.textContent = '点动异常：' + e;
+          }
+        };
+        box.querySelectorAll('.arm-minus').forEach((b) => {
+          b.addEventListener('click', () => jog(Number(b.dataset.j), -1));
+        });
+        box.querySelectorAll('.arm-plus').forEach((b) => {
+          b.addEventListener('click', () => jog(Number(b.dataset.j), +1));
+        });
+        box._applyArmUi(false);
+      }
+      if (box && box._applyArmUi) {
+        box._applyArmUi(!!p.armed);
+        const rows = box.querySelectorAll('.arm-jog-row');
+        rows.forEach((row) => {
+          const i = Number(row.dataset.j);
+          const span = row.querySelector('.arm-jval');
+          const v = fb[i];
+          if (span) {
+            span.textContent = v == null || !Number.isFinite(Number(v))
+              ? '—'
+              : (Number(v).toFixed(3) + ' rad / ' + (Number(v) * 180 / Math.PI).toFixed(1) + '°');
           }
         });
       }
@@ -761,6 +994,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
       const frames = msg.frames || [];
       const usedSlots = new Set();
+      if (msg.gripper_gello_sync) {
+        window.__gripGelloSync = msg.gripper_gello_sync;
+      }
       frames.forEach((frame) => {
         const ar = agentRates[frame.agent_id] || {};
         const hzText = updateBackHz(
@@ -783,6 +1019,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
           renderGripperRead(card, frame, hzText);
         } else if (frame.kind === 'gripper_write') {
           renderGripperWrite(card, frame, hzText);
+        } else if (frame.kind === 'arm_write') {
+          renderArmWrite(card, frame, hzText);
         } else if (frame.kind === 'arm_read') {
           renderArmRead(card, frame, hzText);
         } else {
@@ -865,6 +1103,9 @@ def create_viz_app(
     *,
     recorder: Any | None = None,
     gripper_command: Callable[..., dict[str, Any]] | None = None,
+    gripper_gello_sync: Callable[..., dict[str, Any]] | None = None,
+    gripper_gello_sync_status: Callable[[], dict[str, Any]] | None = None,
+    arm_command: Callable[..., dict[str, Any]] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="sensors-dcs viz", version="0.1.0")
 
@@ -915,6 +1156,41 @@ def create_viz_app(
             position_norm=req.position_norm,
             position_raw=req.position_raw,
             initialize=bool(req.initialize),
+        )
+
+    @app.get("/api/gripper/gello-sync")
+    async def gripper_gello_sync_get() -> dict[str, Any]:
+        if gripper_gello_sync_status is None:
+            return {"ok": False, "error": "gripper gello sync unavailable", "enabled": False}
+        return {"ok": True, **gripper_gello_sync_status()}
+
+    @app.post("/api/gripper/gello-sync")
+    async def gripper_gello_sync_set(req: GripperGelloSyncBody) -> dict[str, Any]:
+        if gripper_gello_sync is None:
+            return {"ok": False, "error": "gripper gello sync unavailable", "enabled": False}
+        return await asyncio.to_thread(
+            gripper_gello_sync,
+            enabled=bool(req.enabled),
+            gello_agent_id=req.gello_agent_id,
+            gripper_agent_id=req.gripper_agent_id,
+            joint_index=int(req.joint_index),
+            hz=req.hz,
+        )
+
+    @app.post("/api/arm/command")
+    async def arm_cmd(req: ArmCommandBody) -> dict[str, Any]:
+        if arm_command is None:
+            return {"ok": False, "error": "arm write unavailable"}
+        return await asyncio.to_thread(
+            arm_command,
+            agent_id=req.agent_id,
+            arm=bool(req.arm),
+            disarm=bool(req.disarm),
+            stop=bool(req.stop),
+            joints_rad=req.joints_rad,
+            jog_joint=req.jog_joint,
+            delta_rad=req.delta_rad,
+            delta_deg=req.delta_deg,
         )
 
     @app.websocket("/ws")

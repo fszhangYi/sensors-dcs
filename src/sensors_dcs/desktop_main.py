@@ -143,6 +143,9 @@ def main(argv: list[str] | None = None) -> None:
         orch.status,
         recorder=orch.recorder,
         gripper_command=orch.gripper_command,
+        gripper_gello_sync=orch.set_gripper_gello_sync,
+        gripper_gello_sync_status=orch.gripper_gello_sync_status,
+        arm_command=orch.arm_command,
     )
     orch.cfg.runtime.viz_port = port
     try:

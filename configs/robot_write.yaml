@@ -1,0 +1,32 @@
+# sensors-dcs — Elite arm WRITE (gated Arm / ± jog). See docs/arm-write.md
+#
+# Usage:
+#   sensors-dcs run -c configs/robot_write.yaml
+#   sensors-dcs run -c configs/robot_write.yaml --no-dry-run   # real robot
+#
+# Safety: dry_run default true; motion requires UI "Arm" then ± with delta.
+version: 1
+site: dcs-robot-write
+
+sensors_config: ./sensors_robot_write.yaml
+dry_run: true
+
+runtime:
+  control_host: "0.0.0.0"
+  control_port: 7010
+  viz_host: "0.0.0.0"
+  viz_port: 7011
+  viz_hz: 15
+  console_hz: 5
+
+record:
+  save_dir: ./data
+  episode_index: 0
+  queue_maxsize: 512
+
+agents:
+  - id: arm-write
+    type: arm_write
+    sensor_id: arm-elite-write
+    hz: 5
+    buffer_frames: 8

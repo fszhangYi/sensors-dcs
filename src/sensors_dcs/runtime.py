@@ -41,6 +41,20 @@ class Orchestrator:
         self._viz_thread: threading.Thread | None = None
         self._console_thread: threading.Thread | None = None
         self._server: uvicorn.Server | None = None
+        # Server-side gello j6 (cal) → gripper write; UI only toggles on/off.
+        self._sync_lock = threading.Lock()
+        self._sync_stop = threading.Event()
+        self._sync_thread: threading.Thread | None = None
+        self._sync_enabled = False
+        self._sync_gello_id: str | None = None
+        self._sync_gripper_id: str | None = None
+        self._sync_joint_index = 6
+        self._sync_hz = 15.0
+        self._sync_last_norm: float | None = None
+        self._sync_last_ok: bool | None = None
+        self._sync_last_error: str | None = None
+        self._sync_last_t_wall: float | None = None
+        self._sync_write_count = 0
 
     def status(self) -> dict[str, Any]:
         return {
@@ -49,6 +63,7 @@ class Orchestrator:
             "sensors_site": self.manager.bundle.site,
             "sensors_dry_run": self.manager.ctx.dry_run,
             "record": self.recorder.status(),
+            "gripper_gello_sync": self.gripper_gello_sync_status(),
         }
 
     def start(self) -> None:
@@ -63,6 +78,7 @@ class Orchestrator:
         self._console_thread.start()
 
     def stop(self) -> None:
+        self.set_gripper_gello_sync(enabled=False)
         self._stop.set()
         # Finish any open episode before tearing down agents
         if self.recorder.status().get("state") == "recording":
@@ -102,6 +118,7 @@ class Orchestrator:
             },
             "frames": frames,
             "record": self.recorder.status(),
+            "gripper_gello_sync": self.gripper_gello_sync_status(),
         }
 
     @staticmethod
@@ -141,6 +158,14 @@ class Orchestrator:
                     pos = fr.payload.get("position_norm")
                     ptxt = "—" if pos is None else f"{float(pos):+.3f}"
                     parts.append(f"{aid}[{tag}] seq={fr.seq} pos={ptxt}")
+                elif fr.kind == "arm_write":
+                    armed = "armed" if fr.payload.get("armed") else "idle"
+                    q = fr.payload.get("command_joints_rad") or fr.payload.get("feedback_joints_rad")
+                    if q is None:
+                        parts.append(f"{aid}[{tag}/{armed}] seq={fr.seq}")
+                    else:
+                        jtxt = ",".join(f"{x:+.3f}" for x in q[:6])
+                        parts.append(f"{aid}[{tag}/{armed}] seq={fr.seq} q=[{jtxt}]")
                 elif fr.kind == "realsense":
                     sn = fr.payload.get("serial") or "—"
                     shape = fr.payload.get("color_shape")
@@ -156,6 +181,154 @@ class Orchestrator:
             print(" | ".join(parts), flush=True)
             self._stop.wait(period)
 
+    def gripper_gello_sync_status(self) -> dict[str, Any]:
+        with self._sync_lock:
+            return {
+                "enabled": self._sync_enabled,
+                "gello_agent_id": self._sync_gello_id,
+                "gripper_agent_id": self._sync_gripper_id,
+                "joint_index": self._sync_joint_index,
+                "hz": self._sync_hz,
+                "last_norm": self._sync_last_norm,
+                "last_ok": self._sync_last_ok,
+                "last_error": self._sync_last_error,
+                "last_t_wall": self._sync_last_t_wall,
+                "write_count": self._sync_write_count,
+            }
+
+    def set_gripper_gello_sync(
+        self,
+        *,
+        enabled: bool,
+        gello_agent_id: str | None = None,
+        gripper_agent_id: str | None = None,
+        joint_index: int = 6,
+        hz: float | None = None,
+    ) -> dict[str, Any]:
+        """Start/stop server-side gello cal[j] → gripper write loop (UI toggle only)."""
+        from sensors_dcs.agents.gello_agent import GelloAgent
+        from sensors_dcs.agents.gripper_write_agent import GripperWriteAgent
+
+        if not enabled:
+            self._sync_stop.set()
+            th = self._sync_thread
+            if th is not None and th.is_alive():
+                th.join(timeout=2.0)
+            with self._sync_lock:
+                self._sync_enabled = False
+                self._sync_thread = None
+            return {"ok": True, **self.gripper_gello_sync_status()}
+
+        gellos = [a for a in self.agents.values() if isinstance(a, GelloAgent)]
+        writers = [a for a in self.agents.values() if isinstance(a, GripperWriteAgent)]
+        if not gellos:
+            return {"ok": False, "error": "no gello agent in config"}
+        if not writers:
+            return {"ok": False, "error": "no gripper_write agent in config"}
+
+        if gello_agent_id:
+            gello = self.agents.get(gello_agent_id)
+            if not isinstance(gello, GelloAgent):
+                return {"ok": False, "error": f"agent {gello_agent_id!r} is not gello"}
+        else:
+            gello = gellos[0]
+
+        if gripper_agent_id:
+            writer = self.agents.get(gripper_agent_id)
+            if not isinstance(writer, GripperWriteAgent):
+                return {"ok": False, "error": f"agent {gripper_agent_id!r} is not gripper_write"}
+        else:
+            writer = writers[0]
+
+        idx = int(joint_index)
+        if idx < 0:
+            return {"ok": False, "error": "joint_index must be >= 0"}
+        rate = float(hz) if hz is not None else float(getattr(writer, "hz", 5.0) or 5.0)
+        rate = max(1.0, min(rate, 50.0))
+
+        # Restart cleanly if already running.
+        self._sync_stop.set()
+        th_old = self._sync_thread
+        if th_old is not None and th_old.is_alive():
+            th_old.join(timeout=2.0)
+
+        with self._sync_lock:
+            self._sync_enabled = True
+            self._sync_gello_id = gello.agent_id
+            self._sync_gripper_id = writer.agent_id
+            self._sync_joint_index = idx
+            self._sync_hz = rate
+            self._sync_last_error = None
+
+        self._sync_stop.clear()
+        self._sync_thread = threading.Thread(
+            target=self._gello_gripper_sync_loop,
+            name="gello-gripper-sync",
+            daemon=True,
+        )
+        self._sync_thread.start()
+        return {"ok": True, **self.gripper_gello_sync_status()}
+
+    def _gello_gripper_sync_loop(self) -> None:
+        """Pull latest gello joints_rad[j] and write gripper — never via the browser.
+
+        Always command at ``_sync_hz`` (no change-gate): AG95 needs repeated
+        position writes while tracking; skipping on tiny Δ leaves the gripper
+        stuck after a fast gello move until the leader moves again.
+        """
+        from sensors_dcs.agents.gello_agent import GelloAgent
+        from sensors_dcs.agents.gripper_write_agent import GripperWriteAgent
+
+        period = 1.0 / max(1.0, self._sync_hz)
+        while not self._sync_stop.is_set() and not self._stop.is_set():
+            with self._sync_lock:
+                gello_id = self._sync_gello_id
+                grip_id = self._sync_gripper_id
+                idx = self._sync_joint_index
+            gello = self.agents.get(gello_id or "")
+            writer = self.agents.get(grip_id or "")
+            if not isinstance(gello, GelloAgent) or not isinstance(writer, GripperWriteAgent):
+                with self._sync_lock:
+                    self._sync_last_ok = False
+                    self._sync_last_error = "sync agents missing"
+                    self._sync_last_t_wall = time.time()
+                self._sync_stop.wait(period)
+                continue
+
+            fr = gello.ring.latest.get()
+            joints = (fr.payload.get("joints_rad") if fr is not None else None) or []
+            if not isinstance(joints, list) or len(joints) <= idx:
+                with self._sync_lock:
+                    self._sync_last_ok = False
+                    self._sync_last_error = f"gello joints_rad missing index {idx}"
+                    self._sync_last_t_wall = time.time()
+                self._sync_stop.wait(period)
+                continue
+
+            try:
+                norm = float(joints[idx])
+            except (TypeError, ValueError):
+                with self._sync_lock:
+                    self._sync_last_ok = False
+                    self._sync_last_error = f"invalid joints_rad[{idx}]"
+                    self._sync_last_t_wall = time.time()
+                self._sync_stop.wait(period)
+                continue
+
+            # Clamp to AG95 position_norm range used elsewhere in UI.
+            norm = max(0.0, min(0.637, norm))
+            result = writer.command(position_norm=norm)
+            with self._sync_lock:
+                self._sync_last_norm = norm
+                self._sync_last_ok = bool(result.get("ok"))
+                self._sync_last_error = result.get("error")
+                self._sync_last_t_wall = time.time()
+                self._sync_write_count += 1
+            self._sync_stop.wait(period)
+
+        with self._sync_lock:
+            self._sync_enabled = False
+
     def gripper_command(
         self,
         *,
@@ -166,6 +339,13 @@ class Orchestrator:
     ) -> dict[str, Any]:
         """Dispatch init / absolute gripper target to a ``gripper_write`` agent."""
         from sensors_dcs.agents.gripper_write_agent import GripperWriteAgent
+
+        if self._sync_enabled and not initialize:
+            return {
+                "ok": False,
+                "error": "gello sync active; cancel sync before manual command",
+                **self.gripper_gello_sync_status(),
+            }
 
         writers = [a for a in self.agents.values() if isinstance(a, GripperWriteAgent)]
         if not writers:
@@ -184,6 +364,42 @@ class Orchestrator:
             initialize=initialize,
         )
 
+    def arm_command(
+        self,
+        *,
+        agent_id: str | None = None,
+        arm: bool = False,
+        disarm: bool = False,
+        stop: bool = False,
+        joints_rad: list[float] | None = None,
+        jog_joint: int | None = None,
+        delta_rad: float | None = None,
+        delta_deg: float | None = None,
+    ) -> dict[str, Any]:
+        """Dispatch arm/disarm/jog to an ``arm_write`` agent."""
+        from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
+
+        writers = [a for a in self.agents.values() if isinstance(a, ArmWriteAgent)]
+        if not writers:
+            return {"ok": False, "error": "no arm_write agent in config"}
+        agent: ArmWriteAgent
+        if agent_id:
+            found = self.agents.get(agent_id)
+            if not isinstance(found, ArmWriteAgent):
+                return {"ok": False, "error": f"agent {agent_id!r} is not arm_write"}
+            agent = found
+        else:
+            agent = writers[0]
+        return agent.command(
+            arm=arm,
+            disarm=disarm,
+            stop=stop,
+            joints_rad=joints_rad,
+            jog_joint=jog_joint,
+            delta_rad=delta_rad,
+            delta_deg=delta_deg,
+        )
+
     def serve(self) -> None:
         """Blocking: start agents + uvicorn viz server until SIGINT."""
         rt = self.cfg.runtime
@@ -192,6 +408,9 @@ class Orchestrator:
             self.status,
             recorder=self.recorder,
             gripper_command=self.gripper_command,
+            gripper_gello_sync=self.set_gripper_gello_sync,
+            gripper_gello_sync_status=self.gripper_gello_sync_status,
+            arm_command=self.arm_command,
         )
         config = uvicorn.Config(
             app,

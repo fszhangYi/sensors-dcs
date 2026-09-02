@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sensors_dcs.agents.arm_agent import ArmAgent
+from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
 from sensors_dcs.agents.base import BaseAgent
 from sensors_dcs.agents.gello_agent import GelloAgent
 from sensors_dcs.agents.gripper_read_agent import GripperReadAgent
@@ -24,6 +25,13 @@ def build_agent(cfg: AgentConfig, sensor: Sensor) -> BaseAgent:
         )
     if cfg.type == "arm":
         return ArmAgent(
+            agent_id=cfg.id,
+            sensor=sensor,
+            hz=cfg.hz,
+            buffer_frames=cfg.buffer_frames,
+        )
+    if cfg.type == "arm_write":
+        return ArmWriteAgent(
             agent_id=cfg.id,
             sensor=sensor,
             hz=cfg.hz,

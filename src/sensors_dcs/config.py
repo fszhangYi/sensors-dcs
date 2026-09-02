@@ -11,7 +11,7 @@ from sensors_dcs.paths import project_root
 
 class AgentConfig(BaseModel):
     id: str
-    type: Literal["gello", "arm", "gripper_read", "gripper_write", "realsense"] = "gello"
+    type: Literal["gello", "arm", "arm_write", "gripper_read", "gripper_write", "realsense"] = "gello"
     sensor_id: str
     hz: float = 50.0
     buffer_frames: int = 64

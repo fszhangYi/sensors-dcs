@@ -1,0 +1,26 @@
+# hik-sensors — Elite arm WRITE (TT stream, arm/disarm gated)
+# Do NOT use for collection-only machines without reviewing docs/arm-write.md
+version: 1
+site: dcs-robot-write
+dry_run: true
+
+defaults:
+  arm_write:
+    num_joints: 6
+    robot_tcp_port: 54321
+    monitor_wait_s: 10
+    max_delta_deg: 2.0
+    enforce_soft_limits: true
+    tt_t: 2
+    tt_response_enable: 0
+
+devices:
+  - id: arm-elite-write
+    kind: arm_write
+    name: "Elite · Arm (write gated)"
+    endpoint: "10.111.34.200"
+    params:
+      robot_ip: "10.111.34.200"
+      num_joints: 6
+      max_delta_deg: 2.0
+      enforce_soft_limits: true
