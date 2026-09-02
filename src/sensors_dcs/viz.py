@@ -19,6 +19,7 @@ class GripperCommandBody(BaseModel):
     agent_id: str | None = None
     position_norm: float | None = None
     position_raw: int | None = None
+    initialize: bool = False
 
 
 PREVIEW_HTML = """<!DOCTYPE html>
@@ -620,7 +621,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         : Math.max(0, Math.min(1, Number(norm) / 0.637)) * 100;
       const ok = p.last_ok;
       const txt = norm == null
-        ? '未下发'
+        ? (p.initialized ? '已初始化' : '未下发')
         : ('norm ' + Number(norm).toFixed(3) + (ok === false ? ' ✗' : ok ? ' ✓' : ''));
       setSingleBar(barsRoot.children[0], pct, txt);
       let box = card.querySelector('.grip-cmd');
@@ -628,33 +629,59 @@ PREVIEW_HTML = """<!DOCTYPE html>
         box = document.createElement('div');
         box.className = 'grip-cmd';
         box.innerHTML =
+          '<button type="button" class="grip-init">初始化</button>' +
           '<label>position_norm</label>' +
           '<input type="number" step="0.01" min="0" max="0.637" value="0.32" class="grip-norm" />' +
           '<button type="button" class="grip-send">下发</button>' +
-          '<span class="cmd-hint">0≈开 … 0.637≈合（与读侧 norm 同尺度）</span>';
+          '<span class="cmd-hint">先初始化（AG95 自检），再下发；0≈开 … 0.637≈合</span>';
         card.appendChild(box);
         const btn = box.querySelector('.grip-send');
+        const initBtn = box.querySelector('.grip-init');
         const inp = box.querySelector('.grip-norm');
+        const postGrip = async (body, busyEl) => {
+          busyEl.disabled = true;
+          btn.disabled = true;
+          initBtn.disabled = true;
+          try {
+            const r = await fetch('/api/gripper/command', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            }).then((x) => x.json());
+            return r;
+          } finally {
+            busyEl.disabled = false;
+            btn.disabled = false;
+            initBtn.disabled = false;
+          }
+        };
+        initBtn.addEventListener('click', async () => {
+          runHint.textContent = '夹爪初始化中（约数秒，夹爪会动作）…';
+          try {
+            const r = await postGrip({ agent_id: frame.agent_id, initialize: true }, initBtn);
+            runHint.textContent = r.ok
+              ? '夹爪初始化成功，可下发 position_norm'
+              : ('夹爪初始化失败：' + (r.error || JSON.stringify(r)));
+          } catch (e) {
+            runHint.textContent = '夹爪初始化异常：' + e;
+          }
+        });
         btn.addEventListener('click', async () => {
           const v = Number(inp.value);
           if (!Number.isFinite(v)) {
             runHint.textContent = '夹爪：请输入有效数字';
             return;
           }
-          btn.disabled = true;
           try {
-            const r = await fetch('/api/gripper/command', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ agent_id: frame.agent_id, position_norm: v }),
-            }).then((x) => x.json());
+            const r = await postGrip(
+              { agent_id: frame.agent_id, position_norm: v },
+              btn,
+            );
             runHint.textContent = r.ok
               ? ('夹爪已下发 norm=' + v)
               : ('夹爪下发失败：' + (r.error || JSON.stringify(r)));
           } catch (e) {
             runHint.textContent = '夹爪下发异常：' + e;
-          } finally {
-            btn.disabled = false;
           }
         });
       }
@@ -887,6 +914,7 @@ def create_viz_app(
             agent_id=req.agent_id,
             position_norm=req.position_norm,
             position_raw=req.position_raw,
+            initialize=bool(req.initialize),
         )
 
     @app.websocket("/ws")

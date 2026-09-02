@@ -79,6 +79,14 @@ def start_webview(url: str) -> bool:
         return False
 
 
+def _local_url(host: str, port: int, path: str = "/") -> str:
+    """URL for local open/health checks. ``0.0.0.0`` is not a valid browser target."""
+    browse = "127.0.0.1" if host in {"0.0.0.0", "::", "[::]"} else host
+    if not path.startswith("/"):
+        path = "/" + path
+    return f"http://{browse}:{port}{path}"
+
+
 def serve_app_blocking(
     app: FastAPI,
     *,
@@ -96,8 +104,9 @@ def serve_app_blocking(
     signal.signal(signal.SIGINT, _handle_sig)
     signal.signal(signal.SIGTERM, _handle_sig)
 
-    url = f"http://{host}:{port}/"
-    ready = f"http://{host}:{port}/api/status"
+    url = _local_url(host, port, "/")
+    ready = _local_url(host, port, "/api/status")
+    bind_note = f" (bound {host}:{port})" if host not in {"127.0.0.1", "localhost"} else ""
 
     thread = threading.Thread(target=server.run, name="sensors-dcs-uvicorn", daemon=True)
     thread.start()
@@ -108,7 +117,13 @@ def serve_app_blocking(
         thread.join(timeout=2.0)
         return
 
-    print(f"[sensors-dcs] open {url}", flush=True)
+    print(f"[sensors-dcs] open {url}{bind_note}", flush=True)
+    if host in {"0.0.0.0", "::", "[::]"}:
+        print(
+            f"[sensors-dcs] LAN: http://<this-host-ip>:{port}/ "
+            "(firewall must allow inbound TCP)",
+            flush=True,
+        )
     if not open_ui:
         print("[sensors-dcs] headless — UI not opened (use --ui or SENSORS_DCS_UI=1)", flush=True)
     if open_ui:

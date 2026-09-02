@@ -202,6 +202,10 @@ def test_export_hik_dataset_uses_yaml_map(tmp_path: Path) -> None:
     assert md["intrinsic_matrix"]["rgb_top"][0][0] == 610.0
     assert md["intrinsic_matrix"]["rgb_rear_left_1"][0][0] == 600.0
     assert md.get("intrinsics_source") == "episode_manifest"
+    assert md.get("cartesian_source") == "fk"
+    steps = json.loads((out / "steps.json").read_text(encoding="utf-8"))
+    cart0 = steps["observations"]["cartesian_position"][0]
+    assert any(abs(float(x)) > 1e-6 for x in cart0)
 
 
 def test_export_intrinsics_from_source_manifest(tmp_path: Path) -> None:

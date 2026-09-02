@@ -506,6 +506,7 @@ def write_hik_dataset(
     clear_out: bool = True,
     calibration: Mapping[str, Any] | None = None,
     episode_cameras: Mapping[str, Any] | None = None,
+    cartesian_fk_error: str | None = None,
 ) -> dict[str, Any]:
     """Write metadata.json, steps.json, and rgb (optional depth) images."""
     filtered_root = Path(filtered_root)
@@ -565,6 +566,11 @@ def write_hik_dataset(
             "source": "sensors-dcs",
             "source_format": "dcs_filtered_v1",
             "cartesian_source": "fk" if fk is not None else "zeros_no_fk",
+            **(
+                {"cartesian_fk_error": cartesian_fk_error}
+                if fk is None and cartesian_fk_error
+                else {}
+            ),
             "tcp_xyz": list(tcp_xyz),
             "camera_agent_map": dict(hik_to_agent),
             "steps": len(aligned),
@@ -672,6 +678,7 @@ def export_hik_dataset(
         calibration = json.loads(Path(calibration_json).read_text(encoding="utf-8"))
 
     tcp = tcp_xyz if tcp_xyz is not None else (0.0, 0.0, float(tcp_z))
+    cartesian_fk_error: str | None = None
     if fk is None:
         try:
             from sensors_dcs.paths import ensure_sensors_import
@@ -680,8 +687,9 @@ def export_hik_dataset(
             from sensors.kinematics import make_hik_fk_fn
 
             fk = make_hik_fk_fn()
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             fk = None
+            cartesian_fk_error = f"{type(e).__name__}: {e}"
 
     manifest, aligned, hik_to_agent = load_aligned_from_filtered(
         filtered_root,
@@ -714,6 +722,7 @@ def export_hik_dataset(
         clear_out=clear_out,
         calibration=calibration,
         episode_cameras=episode_cameras or None,
+        cartesian_fk_error=cartesian_fk_error,
     )
     # also keep a copy beside hik output
     if bundle_map:

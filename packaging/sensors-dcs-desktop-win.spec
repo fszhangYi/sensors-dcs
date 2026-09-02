@@ -95,6 +95,7 @@ hiddenimports = [
     "sensors.drivers",
 ]
 hiddenimports += collect_submodules("sensors.drivers")
+hiddenimports += collect_submodules("sensors.kinematics")
 hiddenimports += collect_submodules("sensors_dcs")
 hiddenimports += collect_submodules("pyarrow")
 hiddenimports += collect_submodules("pandas")

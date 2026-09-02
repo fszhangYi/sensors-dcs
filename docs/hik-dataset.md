@@ -191,8 +191,8 @@ T_tcp    = T_flange @ T_tcp_offset        # 默认 tcp ≈ (0,0,0.18)
 obs_cart[i] = [T_tcp.x,y,z] + euler_xyz(T_tcp.R)
 ```
 
-**无 FK 时（kinematics 导入失败）**：`obs_cart[i] = [0]*6`，`metadata.cartesian_source = "zeros_no_fk"`。  
-默认已接入 `sensors.kinematics`（自 demo_test），`cartesian_source` 一般为 `"fk"`。
+**无 FK 时（kinematics 导入失败）**：`obs_cart[i] = [0]*6`，`metadata.cartesian_source = "zeros_no_fk"`，并写入 `cartesian_fk_error`。  
+默认已接入 `sensors.kinematics`（自 demo_test），`cartesian_source` 一般为 `"fk"`。FK 本身只需 NumPy；旧的 `steps.json` 需重新 `export-hik-dataset` 才会更新。
 
 ### 6.3 `actions`（从状态轨迹推出，不是指令缓存）
 

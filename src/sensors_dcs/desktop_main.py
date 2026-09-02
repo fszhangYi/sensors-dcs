@@ -85,7 +85,7 @@ def main(argv: list[str] | None = None) -> None:
         os.environ["SENSORS_DCS_CONFIG"] = str(args.config)
 
     from sensors_dcs.paths import default_dcs_config, ensure_runtime_env
-    from sensors_dcs.ui_serve import pick_port, serve_app_blocking
+    from sensors_dcs.ui_serve import _local_url, pick_port, serve_app_blocking
     from sensors_dcs.viz import create_error_app, create_viz_app
 
     ensure_runtime_env(desktop=True)
@@ -93,7 +93,9 @@ def main(argv: list[str] | None = None) -> None:
     cfg_path = default_dcs_config()
     print(f"[sensors-dcs] config={cfg_path}", flush=True)
 
-    host = "127.0.0.1"
+    # Default local-only; YAML ``runtime.viz_host`` (often 0.0.0.0) wins when present.
+    # Override: SENSORS_DCS_VIZ_HOST=0.0.0.0 for LAN without editing seeded YAML.
+    host = (os.environ.get("SENSORS_DCS_VIZ_HOST") or "").strip() or "127.0.0.1"
     preferred_port = 7011
     boot_error: str | None = None
     orch = None
@@ -107,6 +109,11 @@ def main(argv: list[str] | None = None) -> None:
 
             cfg = load_dcs_config(cfg_path)
             preferred_port = int(cfg.runtime.viz_port or 7011)
+            env_host = (os.environ.get("SENSORS_DCS_VIZ_HOST") or "").strip()
+            if env_host:
+                host = env_host
+            else:
+                host = str(cfg.runtime.viz_host or "127.0.0.1").strip() or "127.0.0.1"
             force_dry = (os.environ.get("SENSORS_DCS_DRY_RUN") or "").strip().lower()
             if force_dry in {"1", "true", "yes"}:
                 cfg.dry_run = True
@@ -120,7 +127,7 @@ def main(argv: list[str] | None = None) -> None:
 
     port = pick_port(preferred_port)
     open_ui = _resolve_open_ui(args)
-    url = f"http://{host}:{port}/"
+    url = _local_url(host, port, "/")
 
     if boot_error is not None:
         app = create_error_app(error=boot_error, config_path=str(cfg_path))

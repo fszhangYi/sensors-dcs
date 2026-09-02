@@ -59,15 +59,23 @@ class GripperWriteAgent(BaseAgent):
         *,
         position_norm: float | None = None,
         position_raw: int | None = None,
+        initialize: bool = False,
     ) -> dict[str, Any]:
-        """Send one absolute gripper target. Prefer ``position_norm`` (0..~0.637)."""
-        if position_norm is None and position_raw is None:
-            return {"ok": False, "error": "position_norm or position_raw required"}
-        body: dict[str, Any] = {}
-        if position_norm is not None:
-            body["position_norm"] = float(position_norm)
-        if position_raw is not None:
-            body["position_raw"] = int(position_raw)
+        """Initialize and/or send one absolute gripper target.
+
+        AG95 must be initialized (Modbus init / ``init_state==1``) before
+        position writes. Prefer ``position_norm`` (0..~0.637) for motion.
+        """
+        if initialize:
+            body: dict[str, Any] = {"initialize": True}
+        elif position_norm is None and position_raw is None:
+            return {"ok": False, "error": "position_norm, position_raw, or initialize required"}
+        else:
+            body = {}
+            if position_norm is not None:
+                body["position_norm"] = float(position_norm)
+            if position_raw is not None:
+                body["position_raw"] = int(position_raw)
         try:
             result = dict(self.sensor.write(body))
         except Exception as e:  # noqa: BLE001
@@ -76,6 +84,7 @@ class GripperWriteAgent(BaseAgent):
             self._last_cmd = {
                 "position_norm": body.get("position_norm"),
                 "position_raw": body.get("position_raw", result.get("position_raw")),
+                "initialized": result.get("initialized"),
                 "ok": bool(result.get("ok")),
                 "error": result.get("error"),
                 "t_wall": time.time(),
@@ -101,6 +110,7 @@ class GripperWriteAgent(BaseAgent):
         payload: dict[str, Any] = {
             "command_position_norm": snap.get("position_norm"),
             "command_position_raw": snap.get("position_raw"),
+            "initialized": snap.get("initialized"),
             "last_ok": snap.get("ok"),
             "last_error": snap.get("error"),
             "last_result": snap.get("result"),

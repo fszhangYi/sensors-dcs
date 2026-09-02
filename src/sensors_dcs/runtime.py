@@ -162,8 +162,9 @@ class Orchestrator:
         agent_id: str | None = None,
         position_norm: float | None = None,
         position_raw: int | None = None,
+        initialize: bool = False,
     ) -> dict[str, Any]:
-        """Dispatch absolute gripper target to a ``gripper_write`` agent."""
+        """Dispatch init / absolute gripper target to a ``gripper_write`` agent."""
         from sensors_dcs.agents.gripper_write_agent import GripperWriteAgent
 
         writers = [a for a in self.agents.values() if isinstance(a, GripperWriteAgent)]
@@ -177,7 +178,11 @@ class Orchestrator:
             agent = found
         else:
             agent = writers[0]
-        return agent.command(position_norm=position_norm, position_raw=position_raw)
+        return agent.command(
+            position_norm=position_norm,
+            position_raw=position_raw,
+            initialize=initialize,
+        )
 
     def serve(self) -> None:
         """Blocking: start agents + uvicorn viz server until SIGINT."""
