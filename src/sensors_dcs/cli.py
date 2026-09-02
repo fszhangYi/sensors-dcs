@@ -131,6 +131,59 @@ def main(argv: list[str] | None = None) -> int:
         default="parquet",
         dest="filter_format",
     )
+    p_filter.add_argument(
+        "--hik-dataset",
+        nargs="?",
+        const="export/hik_dataset",
+        default=None,
+        help="after filter, convert materialize tree to hik_gello postprocess layout "
+        "(implies --materialize; optional path, default: export/hik_dataset; "
+        "requires --camera-map)",
+    )
+    p_filter.add_argument(
+        "--camera-map",
+        default=None,
+        help="YAML serial→hik camera name map (required with --hik-dataset; "
+        "copied to export/filtered/camera_map.yaml)",
+    )
+
+    p_hik = sub.add_parser(
+        "export-hik-dataset",
+        help="convert export/filtered into hik_gello data_postprocess layout "
+        "(metadata.json, steps.json, rgb_*); requires --camera-map unless "
+        "export/filtered/camera_map.yaml already exists",
+    )
+    p_hik.add_argument("-e", "--episode", required=True, help="episode directory")
+    p_hik.add_argument(
+        "--filtered",
+        default=None,
+        help="filtered episode root (default: <episode>/export/filtered)",
+    )
+    p_hik.add_argument(
+        "-o",
+        "--output-dir",
+        default=None,
+        help="output directory (default: <episode>/export/hik_dataset)",
+    )
+    p_hik.add_argument(
+        "--camera-map",
+        default=None,
+        help="YAML serial→hik camera name (e.g. configs/hik_camera_map.yaml). "
+        "Optional if export/filtered/camera_map.yaml was written by a prior filter",
+    )
+    p_hik.add_argument("--robot-name", default="elite", help="metadata.robot")
+    p_hik.add_argument("--natural-language", default="", help="metadata.natural_language")
+    p_hik.add_argument(
+        "--tcp-z",
+        type=float,
+        default=0.18,
+        help="TCP Z offset in meters for FK (default 0.18; unused when FK absent)",
+    )
+    p_hik.add_argument(
+        "--calibration-json",
+        default=None,
+        help="optional JSON with intrinsic_matrix / extrinsic_matrix for metadata",
+    )
 
     args = parser.parse_args(argv)
 
@@ -194,7 +247,13 @@ def main(argv: list[str] | None = None) -> int:
         except ImportError as e:
             print(f"[sensors-dcs] {e}", flush=True)
             return 1
+        do_hik = getattr(args, "hik_dataset", None) is not None
         try:
+            if do_hik and not args.camera_map:
+                raise ValueError(
+                    "--hik-dataset requires --camera-map <serial→name.yaml> "
+                    "(see configs/hik_camera_map.yaml)"
+                )
             meta = filter_episode_timeline(
                 args.episode,
                 input_path=args.input,
@@ -203,9 +262,43 @@ def main(argv: list[str] | None = None) -> int:
                 master=args.master,
                 max_match_dt=args.max_match_dt,
                 trim=args.trim,
-                materialize=args.materialize,
+                materialize=args.materialize or do_hik,
                 dedupe=args.dedupe,
                 fmt=args.filter_format,
+            )
+            if do_hik:
+                from sensors_dcs.export.hik_dataset import export_hik_dataset
+
+                hik_meta = export_hik_dataset(
+                    args.episode,
+                    output_dir=args.hik_dataset,
+                    camera_map_yaml=args.camera_map,
+                    robot_name="elite",
+                    tcp_z=0.18,
+                )
+                meta["hik_dataset"] = hik_meta
+        except Exception as e:  # noqa: BLE001
+            print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False, indent=2))
+            return 1
+        print(json.dumps({"ok": True, **meta}, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.cmd == "export-hik-dataset":
+        try:
+            from sensors_dcs.export.hik_dataset import export_hik_dataset
+        except ImportError as e:
+            print(f"[sensors-dcs] {e}", flush=True)
+            return 1
+        try:
+            meta = export_hik_dataset(
+                args.episode,
+                filtered_dir=args.filtered,
+                output_dir=args.output_dir,
+                camera_map_yaml=args.camera_map,
+                robot_name=args.robot_name,
+                natural_language=args.natural_language,
+                tcp_z=args.tcp_z,
+                calibration_json=args.calibration_json,
             )
         except Exception as e:  # noqa: BLE001
             print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False, indent=2))

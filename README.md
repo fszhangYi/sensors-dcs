@@ -10,7 +10,8 @@ sensors-dcs/
   configs/
   src/sensors_dcs/
   docs/export-timeline.md           # 统一时间轴导出设计
-  docs/filter-timeline.md           # 宽表过滤设计
+  docs/filter-timeline.md           # 宽表过滤 + hik 训练集导出
+  configs/hik_camera_map.yaml       # serial→hik 相机名（export-hik-dataset）
 ```
 
 运行时会把 `./sensors/src` 插到 `sys.path` 最前，不依赖 site-packages 里的 `hik-sensors` 安装路径。
@@ -405,6 +406,8 @@ sensors-dcs filter-timeline -e episode_00000 \
 | `--dedupe` | 按列去重**连续重复行**（如 `cam-left.image_relpath` 或 `cam-left.*`） |
 | `--master` | 覆盖 master（默认读 `export_meta.json`） |
 | `--materialize` | 写出 `export/filtered/{manifest.json,states/,cameras/}`（与生数据同构） |
+| `--hik-dataset` | filter 后转成 hik_gello `data_postprocess` 布局（隐含 `--materialize`；**必须**同时给 `--camera-map`） |
+| `--camera-map` | 序列号→hik 相机名 YAML（`--hik-dataset` 必填；例：`configs/hik_camera_map.yaml`） |
 
 输出：
 
@@ -412,11 +415,19 @@ sensors-dcs filter-timeline -e episode_00000 \
 episode_00000/export/
   timeline_filtered.parquet
   filter_meta.json              # rows_in/out, tail_after_master, drop_reasons
-  filtered/                     # --materialize
+  filtered/                     # --materialize / --hik-dataset
     manifest.json
+    camera_map.yaml             # --camera-map 拷贝（供后续 export-hik-dataset 复用）
     states/gello.jsonl
     cameras/cam-left/00000000.jpg
     cameras/cam-left/index.jsonl
+  hik_dataset/                  # export-hik-dataset / --hik-dataset
+    metadata.json
+    steps.json
+    camera_map.yaml
+    rgb_rear_left_1_0.jpg
+    …
+  hik_dataset_meta.json
 ```
 
 Python 读取过滤结果：
@@ -437,8 +448,45 @@ step = int(row["step"])  # 从 0 连续
 ```text
 episode → export-timeline --align asof --master …
         → filter-timeline --require … --trim both [--materialize]
-        → timeline_filtered.parquet +（可选）export/filtered/{manifest,states,cameras}
+        → export-hik-dataset --camera-map configs/hik_camera_map.yaml
+          # 或一步：filter-timeline --hik-dataset --camera-map …
+        → export/hik_dataset/{metadata.json,steps.json,rgb_*}
 ```
+
+### 转成 hik 训练集（export-hik-dataset）
+
+将 `export/filtered/` 转成与 `hik_gello/data_postprocess.py` 相同结构：`metadata.json`、`steps.json`、`rgb_<name>_<i>.jpg`。
+
+**相机命名不写死在代码里**，由 YAML 配置（serial → hik 名），filter / 导出时指定：
+
+```yaml
+# configs/hik_camera_map.yaml（按工位改 serial）
+cameras:
+  "317222074437": rear_left_1
+  "317222073322": rear_right_1
+  "336222075436": top
+```
+
+```bash
+# 先 materialize，再导出（--camera-map 必填，除非 filtered/ 里已有 camera_map.yaml）
+sensors-dcs filter-timeline -e episode_00000 \
+  --require arm,cam-left,cam-middle --trim both --materialize
+
+sensors-dcs export-hik-dataset -e episode_00000 \
+  --camera-map configs/hik_camera_map.yaml
+
+# 等价一步（隐含 --materialize；--camera-map 必填）
+sensors-dcs filter-timeline -e episode_00000 \
+  --require arm,cam-left --trim both \
+  --hik-dataset --camera-map configs/hik_camera_map.yaml
+```
+
+| 约定 | 说明 |
+|------|------|
+| 命名依据 | RealSense **序列号** → hik 名（与 `camera_name_refator` 同思路） |
+| 配置文件 | `configs/hik_camera_map.yaml`；也可自建 YAML |
+| 落盘 | 指定后会拷到 `export/filtered/camera_map.yaml` 与 `hik_dataset/camera_map.yaml` |
+| 缺省 | 无 map / serial 不在 map → 报错；无 FK 时 `cartesian_*` 为 0（`metadata.cartesian_source=zeros_no_fk`） |
 
 ## 配置
 
@@ -456,6 +504,7 @@ episode → export-timeline --align asof --master …
 | `configs/sensors_full_cell.yaml` | 对应全量设备清单 |
 | `configs/robot_only.yaml` | 仅 Elite 机械臂 **只读** Agent |
 | `configs/sensors_robot.yaml` | `kind: arm_read` 设备清单（填 `robot_ip`） |
+| `configs/hik_camera_map.yaml` | filter/`export-hik-dataset`：序列号→hik 相机名（按工位改） |
 | `sensors/configs/*.yaml` | 软链接指向的 hik-sensors 设备清单 |
 
 ## 桌面打包（Linux → Windows）
@@ -496,11 +545,12 @@ sensors-dcs.exe --ui                               REM 弹窗
 sensors-dcs.exe -c "%APPDATA%\sensors-dcs\configs\camera-multi.yaml" --ui
 ```
 
-`export-timeline` / `filter-timeline`：开发机用 `pip install -e ".[export]"` 后运行；打包桌面端也可用同一子命令，例如：
+`export-timeline` / `filter-timeline` / `export-hik-dataset`：开发机用 `pip install -e ".[export]"` 后运行；打包桌面端也可用同一子命令，例如：
 
 ```bat
 sensors-dcs.exe export-timeline -e episode_00000 --align asof --master gello --master-hz 15
 sensors-dcs.exe filter-timeline -e episode_00000 --require gello,cam-left --trim both
+sensors-dcs.exe export-hik-dataset -e episode_00000 --camera-map configs\hik_camera_map.yaml
 ```
 
 重新打包后的桌面包已内置 pandas/pyarrow；**当前旧 exe 需重新 `build-desktop` 才生效**。

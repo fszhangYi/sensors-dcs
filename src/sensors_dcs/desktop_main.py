@@ -12,7 +12,9 @@ import sys
 import traceback
 
 # Subcommands owned by sensors_dcs.cli — not desktop collect/viz flags.
-_CLI_COMMANDS = frozenset({"run", "show-config", "export-timeline", "filter-timeline"})
+_CLI_COMMANDS = frozenset(
+    {"run", "show-config", "export-timeline", "filter-timeline", "export-hik-dataset"}
+)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

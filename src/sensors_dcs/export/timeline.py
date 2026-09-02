@@ -23,6 +23,7 @@ class Sample:
     fields: dict[str, Any] = field(default_factory=dict)
     image_relpath: str | None = None
     role: str | None = None
+    serial: str | None = None
     dry_run: bool | None = None
     file_missing: bool = False
 
@@ -108,6 +109,7 @@ def _load_cameras(ep_dir: Path) -> list[Sample]:
                     fields={"file": file_name},
                     image_relpath=rel,
                     role=row.get("role"),
+                    serial=str(row["serial"]) if row.get("serial") else None,
                     dry_run=row.get("dry_run"),
                     file_missing=missing,
                 )
@@ -169,6 +171,7 @@ def _sample_event_row(sample: Sample, t_start: float) -> dict[str, Any]:
         "sensor_id": sample.sensor_id,
         "image_relpath": sample.image_relpath,
         "role": sample.role,
+        "serial": sample.serial,
         "dry_run": sample.dry_run,
         "file_missing": sample.file_missing,
     }
@@ -219,6 +222,7 @@ def _agent_value_columns(agent_id: str, sample: Sample) -> dict[str, Any]:
         cols[f"{agent_id}.file"] = sample.fields.get("file")
         cols[f"{agent_id}.image_relpath"] = sample.image_relpath
         cols[f"{agent_id}.role"] = sample.role
+        cols[f"{agent_id}.serial"] = sample.serial
         cols[f"{agent_id}.file_missing"] = sample.file_missing
     return cols
 

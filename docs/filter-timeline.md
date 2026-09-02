@@ -84,6 +84,26 @@
 
 宽表里额外写入 `{agent}.filtered_file`（相对 episode 的路径，如 `filtered/cameras/cam-left/00000000.jpg`）。
 
+### 2.6 `export-hik-dataset`（filter 之后）
+
+将 `export/filtered/` 转成与 `hik_gello/data_postprocess.py` 一致的训练集目录：
+
+```text
+<episode>/export/hik_dataset/
+  metadata.json
+  steps.json
+  rgb_<hik_cam>_<i>.jpg
+  # 若 filtered 含深度帧，另有 d_<hik_cam>_<i>.png
+```
+
+约定：
+
+- 输入须先 `--materialize`（或 `filter-timeline --hik-dataset` 自动 materialize）
+- 关节优先 `arm_read`，否则 `gello`；夹爪优先 `gripper_read`，否则 `gello` 第 7 轴
+- 相机名来自 **`--camera-map` YAML**（serial → hik 名，例见 `configs/hik_camera_map.yaml`）；filter 时指定后会写入 `export/filtered/camera_map.yaml`，后续 `export-hik-dataset` 可复用
+- DCS 录制通常无深度 / 无 RealSense 标定 / 无专有 FK：`cartesian_*` 填 0，`metadata.cartesian_source=zeros_no_fk`；`depth_camera_num=0`
+- `steps.json` 结构与 data_postprocess 相同：`observations`/`actions` 的 `joint_position`、`cartesian_position`、`gripper_position`
+
 ---
 
 ## 3. CLI
@@ -100,11 +120,23 @@ sensors-dcs filter-timeline -e episode_00000 \
   --require cam-left \
   --max-match-dt cam-left:0.05,cam-right:0.05 \
   --materialize
+
+# filter 产物 → hik 训练集（必须带 camera-map）
+sensors-dcs export-hik-dataset -e episode_00000 \
+  --camera-map configs/hik_camera_map.yaml
+
+# 一步：filter + materialize + hik 导出
+sensors-dcs filter-timeline -e episode_00000 \
+  --require arm,cam-left,cam-middle \
+  --trim both \
+  --hik-dataset \
+  --camera-map configs/hik_camera_map.yaml
 ```
 
 默认输入：`<episode>/export/timeline_aligned.parquet`（或 `.csv`）  
 默认输出：`<episode>/export/timeline_filtered.parquet`  
-元数据：`<episode>/export/filter_meta.json`
+元数据：`<episode>/export/filter_meta.json`  
+hik 导出默认：`<episode>/export/hik_dataset/`，旁路元数据 `export/hik_dataset_meta.json`
 
 ---
 
@@ -141,6 +173,7 @@ episode_*  →  export-timeline --align asof --master …
            →  filter-timeline --require … --trim both
            →  timeline_filtered.parquet（step 从 0）
            →  （可选 --materialize）export/filtered/{manifest,states,cameras}
+           →  export-hik-dataset → export/hik_dataset/{metadata,steps,rgb_*}
 ```
 
 ---
@@ -150,5 +183,6 @@ episode_*  →  export-timeline --align asof --master …
 - [x] 本文档
 - [x] `src/sensors_dcs/export/filter.py`
 - [x] CLI `filter-timeline`
+- [x] `src/sensors_dcs/export/hik_dataset.py` + CLI `export-hik-dataset`
 - [x] 单元测试
 - [x] README 用法

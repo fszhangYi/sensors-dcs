@@ -404,6 +404,7 @@ def materialize_filtered_episode(
                         "t_mono": 0.0,
                         "file": name,
                         "role": row.get(f"{aid}.role") if f"{aid}.role" in columns else None,
+                        "serial": row.get(f"{aid}.serial") if f"{aid}.serial" in columns else None,
                         "dry_run": None,
                         "src_seq": int(src_seq) if _value_present(src_seq) else None,
                         "src_t_wall": float(src_t) if _value_present(src_t) else None,

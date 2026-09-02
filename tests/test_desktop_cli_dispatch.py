@@ -8,6 +8,7 @@ from sensors_dcs.desktop_main import _CLI_COMMANDS, _dispatch_cli_if_needed
 def test_cli_commands_include_export() -> None:
     assert "export-timeline" in _CLI_COMMANDS
     assert "filter-timeline" in _CLI_COMMANDS
+    assert "export-hik-dataset" in _CLI_COMMANDS
 
 
 def test_dispatch_skips_desktop_flags() -> None:

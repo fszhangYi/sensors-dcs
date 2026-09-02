@@ -1,0 +1,25 @@
+# RealSense serial → hik_gello dataset camera name
+# (same idea as hik_gello/data_postprocess.py camera_name_refator).
+#
+# Pass to filter / export:
+#   sensors-dcs filter-timeline -e episode_00000 ... --hik-dataset \
+#     --camera-map configs/hik_camera_map.yaml
+#   sensors-dcs export-hik-dataset -e episode_00000 \
+#     --camera-map configs/hik_camera_map.yaml
+#
+# Keys must be camera serial numbers (quoted). Edit per cell / station.
+
+cameras:
+  "317222074437": rear_left_1
+  "317222073322": rear_right_1
+  "419122270655": wrist_1
+  "130322270318": wrist_1
+  "233622072962": rear_left_1
+  "233622076758": rear_right_1
+  "317222072871": top
+  "334622072861": rear_left_1
+  "337122074288": rear_right_1
+  "218622279681": wrist_1
+  "218722271098": wrist_2
+  "327122077544": chest
+  "336222075436": top
