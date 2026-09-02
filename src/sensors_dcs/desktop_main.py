@@ -1,4 +1,8 @@
-"""Desktop entry: local uvicorn viz + system browser / pywebview."""
+"""Desktop entry: local uvicorn viz + system browser / pywebview.
+
+Also dispatches CLI subcommands (export-timeline, filter-timeline, …) so the
+frozen ``sensors-dcs.exe`` can run the same offline tools as ``sensors-dcs``.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +10,9 @@ import argparse
 import os
 import sys
 import traceback
+
+# Subcommands owned by sensors_dcs.cli — not desktop collect/viz flags.
+_CLI_COMMANDS = frozenset({"run", "show-config", "export-timeline", "filter-timeline"})
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -34,7 +41,28 @@ def _resolve_open_ui(args: argparse.Namespace) -> bool:
     return env in {"1", "true", "yes", "ui", "open"}
 
 
+def _dispatch_cli_if_needed(argv: list[str] | None) -> int | None:
+    """If argv starts with a CLI subcommand, run cli.main and return its exit code."""
+    args = list(sys.argv[1:] if argv is None else argv)
+    if not args:
+        return None
+    # Only the first positional token is treated as a subcommand
+    # (leading flags like --help stay on the desktop parser).
+    for token in args:
+        if token.startswith("-"):
+            continue
+        if token in _CLI_COMMANDS:
+            from sensors_dcs.cli import main as cli_main
+
+            return int(cli_main(args))
+        break
+    return None
+
+
 def main(argv: list[str] | None = None) -> None:
+    cli_code = _dispatch_cli_if_needed(argv)
+    if cli_code is not None:
+        raise SystemExit(cli_code)
     args = _parse_args(argv)
 
     if getattr(sys, "frozen", False):

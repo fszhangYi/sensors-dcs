@@ -135,7 +135,8 @@ configs/data/episode_00000/
 
 ## 统一时间轴导出（后处理）
 
-对**某一集已录完的 episode** 做离线导出，详见 [docs/export-timeline.md](docs/export-timeline.md)。
+对**某一集已录完的 episode** 做离线导出，详见 [docs/export-timeline.md](docs/export-timeline.md)。  
+开发机：`sensors-dcs export-timeline …`；打包桌面端：`sensors-dcs.exe export-timeline …`（同一套子命令）。
 
 ### 长表、宽表、网格：差异与作用
 
@@ -457,4 +458,11 @@ sensors-dcs.exe --ui                               REM 弹窗
 sensors-dcs.exe -c "%APPDATA%\sensors-dcs\configs\camera-multi.yaml" --ui
 ```
 
-`export-timeline` 需在开发机 `pip install -e ".[export]"` 后对 episode 目录运行（见上文）。
+`export-timeline` / `filter-timeline`：开发机用 `pip install -e ".[export]"` 后运行；打包桌面端也可用同一子命令，例如：
+
+```bat
+sensors-dcs.exe export-timeline -e episode_00000 --align asof --master gello --master-hz 15
+sensors-dcs.exe filter-timeline -e episode_00000 --require gello,cam-left --trim both
+```
+
+（桌面包若未打入 pandas/pyarrow，导出子命令会提示安装 `[export]` 依赖。）
