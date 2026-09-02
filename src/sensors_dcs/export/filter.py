@@ -196,6 +196,38 @@ def apply_trim_indices(mask: list[bool], trim: TrimMode) -> tuple[int, int, int,
     return start, end, trimmed_start, trimmed_end
 
 
+def dedupe_consecutive_rows(df, columns: list[str]):
+    """Drop consecutive rows where all listed columns are identical (e.g. repeated camera frame)."""
+    if df.empty or not columns:
+        return df
+    cols = [c for c in columns if c in df.columns]
+    if not cols:
+        return df
+    keep = [True]
+    for i in range(1, len(df)):
+        prev = df.iloc[i - 1]
+        row = df.iloc[i]
+        same = all(prev[c] == row[c] for c in cols)
+        keep.append(not same)
+    return df.iloc[[i for i, k in enumerate(keep) if k]].reset_index(drop=True)
+
+
+def expand_dedupe_columns(spec: str | None, require: list[str], columns: list[str]) -> list[str]:
+    if not spec or not str(spec).strip():
+        return []
+    out: list[str] = []
+    for part in str(spec).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if part.endswith(".*"):
+            prefix = part[:-1]
+            out.extend(c for c in columns if c.startswith(prefix))
+        else:
+            out.append(part)
+    return out
+
+
 def tail_after_master(ep_dir: Path, last_t_wall: float) -> dict[str, int]:
     try:
         _, samples = load_episode(ep_dir)
@@ -294,6 +326,7 @@ def filter_episode_timeline(
     max_match_dt: str | None = None,
     trim: TrimMode = "both",
     materialize: bool = False,
+    dedupe: str | None = None,
     fmt: FilterFormat = "parquet",
 ) -> dict[str, Any]:
     """Filter aligned wide table; assign step 0..N-1."""
@@ -325,6 +358,13 @@ def filter_episode_timeline(
         sub = df.iloc[start : end + 1].reset_index(drop=True)
         sub_mask = mask[start : end + 1]
         filtered = sub.iloc[[i for i, m in enumerate(sub_mask) if m]].reset_index(drop=True)
+
+    dedupe_cols = expand_dedupe_columns(dedupe, require_agents, list(filtered.columns))
+    deduped_rows = 0
+    if dedupe_cols and len(filtered) > 1:
+        before = len(filtered)
+        filtered = dedupe_consecutive_rows(filtered, dedupe_cols)
+        deduped_rows = before - len(filtered)
 
     filtered = filtered.copy()
     filtered.insert(0, "step", range(len(filtered)))
@@ -361,6 +401,8 @@ def filter_episode_timeline(
         "require": require_agents,
         "max_match_dt": {"default": default_dt, **per_agent_dt},
         "trim": trim,
+        "dedupe": dedupe_cols or None,
+        "deduped_rows": deduped_rows,
         "rows_in": rows_in,
         "rows_out": len(filtered),
         "step_range": [0, len(filtered) - 1] if len(filtered) else None,

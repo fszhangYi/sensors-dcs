@@ -166,6 +166,35 @@ episode（states/*.jsonl + cameras/*/index.jsonl）
 
 **网格** — 不是第三种文件，而是 `--align grid --hz 50`：在 `[t_start, t_end]` 上每 20ms 一行，各 agent 都 as-of 匹配到格点；适合固定帧率训练。
 
+### 主时间轴比其它 sensor 快怎么办？
+
+宽表 `asof` / `nearest` 的行数 = **master 的原始采样数**。若 master（如 gello 50Hz）快于相机（15Hz），会出现：
+
+- 多行共用**同一张图**（`cam-left.image_relpath` 重复）
+- 非 master 列的 `match_dt` 逐行增大，直到下一帧相机到来
+
+可选对策（可组合）：
+
+| 目标 | 做法 |
+|------|------|
+| 行数跟相机一致 | 换 **`--master cam-left`**（以慢 sensor 为主轴） |
+| 仍用 gello 为主，但降到 15Hz | **`--master-hz 15`**（对 master 时间戳下采样后再对齐） |
+| 固定训练帧率、不绑某 agent | **`--align grid --hz 15`** |
+| 去掉重复图行 | 导出后 **`filter-timeline --dedupe cam-left.image_relpath`** |
+| 去掉对齐过差行 | **`filter-timeline --max-match-dt 0.033 --trim both`** |
+
+`--master-hz` 仅作用于 `asof` / `nearest`（在 master 原始时刻上按目标频率取子序列）；与 `--align grid --hz` 互斥（grid 本身已指定格点频率）。
+
+```bash
+# gello 50Hz 为主，但宽表只保留约 15Hz 的 master 行
+sensors-dcs export-timeline -e episode_00000 \
+  --align asof --master gello --master-hz 15
+
+# 或：已导出且多行重复同一相机帧时
+sensors-dcs filter-timeline -e episode_00000 \
+  --require gello,cam-left --dedupe cam-left.image_relpath --trim both
+```
+
 **怎么选**
 
 - 完整保留、自己写 join → **长表**
@@ -235,6 +264,10 @@ sensors-dcs export-timeline -e episode_00000 --align grid --hz 50 --format csv
 
 # 指定输出目录、同时写 Parquet 与 CSV
 sensors-dcs export-timeline -e episode_00000 --align asof -o /tmp/export --format both
+
+# master 下采样（gello 50Hz → 宽表约 15Hz）
+sensors-dcs export-timeline -e episode_00000 \
+  --align asof --master gello --master-hz 15
 ```
 
 ### 多相机时指定主时间轴
@@ -348,6 +381,7 @@ sensors-dcs filter-timeline -e episode_00000 \
 | `--require` | 每行必须有效的 agent（逗号分隔）；默认宽表中所有带 `match_dt` 的 agent |
 | `--max-match-dt` | 非 master 允许的最大 `match_dt`（秒）；默认 `0.033` |
 | `--trim` | `none` / `start` / `end` / `both`（默认 `both`） |
+| `--dedupe` | 按列去重**连续重复行**（如 `cam-left.image_relpath` 或 `cam-left.*`） |
 | `--master` | 覆盖 master（默认读 `export_meta.json`） |
 | `--materialize` | 按 `step` 复制相机图到 `export/filtered/images/` |
 

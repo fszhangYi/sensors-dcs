@@ -70,6 +70,12 @@ def main(argv: list[str] | None = None) -> int:
         help="grid frequency for --align grid",
     )
     p_export.add_argument(
+        "--master-hz",
+        type=float,
+        default=None,
+        help="downsample master timeline to this hz (asof/nearest only; e.g. gello 50Hz -> 15Hz)",
+    )
+    p_export.add_argument(
         "--format",
         choices=["parquet", "csv", "both"],
         default="parquet",
@@ -113,6 +119,11 @@ def main(argv: list[str] | None = None) -> int:
         "--materialize",
         action="store_true",
         help="copy images to export/filtered/images/<agent>/<step>.jpg",
+    )
+    p_filter.add_argument(
+        "--dedupe",
+        default=None,
+        help="drop consecutive duplicate rows by column(s), e.g. cam-left.image_relpath or cam-left.*",
     )
     p_filter.add_argument(
         "--format",
@@ -168,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
                 align=args.align,
                 master=args.master,
                 hz=args.hz,
+                master_hz=args.master_hz,
                 fmt=args.export_format,
             )
         except Exception as e:  # noqa: BLE001
@@ -192,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_match_dt=args.max_match_dt,
                 trim=args.trim,
                 materialize=args.materialize,
+                dedupe=args.dedupe,
                 fmt=args.filter_format,
             )
         except Exception as e:  # noqa: BLE001

@@ -295,6 +295,7 @@ def _build_base_times(
     by_agent: dict[str, list[Sample]],
     t_start: float,
     hz: float | None,
+    master_hz: float | None = None,
 ) -> list[float]:
     if mode == "grid":
         t_end = float(manifest.get("t_end") or max(s.t_wall for s in samples))
@@ -306,7 +307,27 @@ def _build_base_times(
     if mode == "union":
         return sorted({s.t_wall for s in samples})
     master_samples = by_agent[master_id]
-    return [s.t_wall for s in master_samples]
+    times = [s.t_wall for s in master_samples]
+    if master_hz is not None and master_hz > 0:
+        return subsample_times(times, master_hz)
+    return times
+
+
+def subsample_times(times: list[float], hz: float) -> list[float]:
+    """Pick master timestamps at most `hz`, keeping first sample at/after each grid point."""
+    if not times or hz <= 0:
+        return times
+    dt = 1.0 / hz
+    out: list[float] = []
+    target = times[0]
+    idx = 0
+    end = times[-1]
+    while target <= end + 1e-9:
+        while idx + 1 < len(times) and times[idx + 1] < target + 1e-9:
+            idx += 1
+        out.append(times[idx])
+        target += dt
+    return out
 
 
 def build_aligned_frame(
@@ -316,6 +337,7 @@ def build_aligned_frame(
     master: str | None = None,
     mode: AlignMode = "asof",
     hz: float | None = None,
+    master_hz: float | None = None,
 ):
     pd = _require_pandas()
     if not samples:
@@ -338,6 +360,7 @@ def build_aligned_frame(
         by_agent=by_agent,
         t_start=t_start,
         hz=hz,
+        master_hz=master_hz,
     )
     base = pd.DataFrame({"t_wall": base_times, "t_rel": [t - t_start for t in base_times]})
 
@@ -378,6 +401,7 @@ def export_episode_timeline(
     align: AlignMode | None = None,
     master: str | None = None,
     hz: float | None = None,
+    master_hz: float | None = None,
     fmt: ExportFormat = "parquet",
 ) -> dict[str, Any]:
     """Export long and optional aligned timeline tables for one episode."""
@@ -389,7 +413,9 @@ def export_episode_timeline(
     events = build_events_frame(manifest, samples)
     aligned = None
     if align is not None:
-        aligned = build_aligned_frame(manifest, samples, master=master, mode=align, hz=hz)
+        aligned = build_aligned_frame(
+            manifest, samples, master=master, mode=align, hz=hz, master_hz=master_hz
+        )
 
     if fmt == "both":
         _write_frame(events, out_dir / "timeline_events.parquet", "parquet")
@@ -431,6 +457,7 @@ def export_episode_timeline(
             "mode": "asof_backward" if align == "asof" else align,
             "master": master_id,
             "hz": hz,
+            "master_hz": master_hz,
         },
         "time_range": {"t_start": t_start, "t_end": t_end},
         "rows": {"events": len(events), "aligned": aligned_rows},

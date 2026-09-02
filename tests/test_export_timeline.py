@@ -12,6 +12,7 @@ from sensors_dcs.export.timeline import (
     export_episode_timeline,
     load_episode,
     pick_default_master,
+    subsample_times,
 )
 
 
@@ -130,6 +131,31 @@ def test_export_episode_timeline_writes_files(episode_dir: Path) -> None:
     assert (out / "export_meta.json").is_file()
     assert meta["rows"]["events"] == 4
     assert meta["rows"]["aligned"] == 2
+
+
+def test_subsample_times_reduces_count() -> None:
+    times = [1000.0 + i * 0.02 for i in range(10)]  # 50Hz over 0.18s
+    out = subsample_times(times, 15.0)
+    assert len(out) < len(times)
+    assert out[0] == pytest.approx(1000.0)
+    assert all(out[i] <= out[i + 1] for i in range(len(out) - 1))
+
+
+def test_aligned_master_hz_downsamples(episode_dir: Path) -> None:
+    manifest, samples = load_episode(episode_dir)
+    full = build_aligned_frame(manifest, samples, master="gello", mode="asof")
+    down = build_aligned_frame(
+        manifest, samples, master="gello", mode="asof", master_hz=15.0
+    )
+    assert len(down) <= len(full)
+    assert len(down) >= 1
+
+
+def test_export_master_hz_in_meta(episode_dir: Path) -> None:
+    meta = export_episode_timeline(
+        episode_dir, align="asof", master="gello", master_hz=15.0
+    )
+    assert meta["align"]["master_hz"] == 15.0
 
 
 def test_real_episode_if_present() -> None:

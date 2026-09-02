@@ -9,6 +9,8 @@ import pytest
 from sensors_dcs.export.filter import (
     apply_trim_indices,
     compute_row_mask,
+    dedupe_consecutive_rows,
+    expand_dedupe_columns,
     filter_episode_timeline,
     parse_max_match_dt,
 )
@@ -79,6 +81,45 @@ def test_filter_drops_warmup_and_reindexes(episode_with_aligned: Path) -> None:
     assert meta["rows_out"] == len(out)
     if len(out):
         assert list(out["step"]) == list(range(len(out)))
+
+
+def test_dedupe_consecutive_rows() -> None:
+    df = pd.DataFrame(
+        {
+            "t_wall": [1.0, 1.02, 1.04],
+            "cam-left.image_relpath": ["a.jpg", "a.jpg", "b.jpg"],
+            "gello.j0": [0.1, 0.2, 0.3],
+        }
+    )
+    out = dedupe_consecutive_rows(df, ["cam-left.image_relpath"])
+    assert len(out) == 2
+    assert list(out["cam-left.image_relpath"]) == ["a.jpg", "b.jpg"]
+
+
+def test_expand_dedupe_wildcard() -> None:
+    cols = ["cam-left.image_relpath", "cam-left.file", "gello.j0"]
+    assert expand_dedupe_columns("cam-left.*", [], cols) == [
+        "cam-left.image_relpath",
+        "cam-left.file",
+    ]
+
+
+def test_filter_dedupe_option(episode_with_aligned: Path) -> None:
+    aligned_path = episode_with_aligned / "export" / "timeline_aligned.parquet"
+    df = pd.read_parquet(aligned_path)
+    df = pd.concat([df, df.iloc[[0]]], ignore_index=True)
+    df.loc[1, "t_wall"] = df.loc[0, "t_wall"] + 0.01
+    df.to_parquet(aligned_path, index=False)
+
+    meta = filter_episode_timeline(
+        episode_with_aligned,
+        require="gello",
+        trim="none",
+        dedupe="gello.j0",
+    )
+    assert meta["deduped_rows"] >= 1
+    out = pd.read_parquet(episode_with_aligned / "export" / "timeline_filtered.parquet")
+    assert len(out) < len(df)
 
 
 def test_filter_meta_written(episode_with_aligned: Path) -> None:
