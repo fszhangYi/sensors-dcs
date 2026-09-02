@@ -129,7 +129,7 @@ episode_*  →  export-timeline --align asof --master …
 ## 6. 实施清单
 
 - [x] 本文档
-- [ ] `src/sensors_dcs/export/filter.py`
-- [ ] CLI `filter-timeline`
-- [ ] 单元测试
-- [ ] README 用法
+- [x] `src/sensors_dcs/export/filter.py`
+- [x] CLI `filter-timeline`
+- [x] 单元测试
+- [x] README 用法

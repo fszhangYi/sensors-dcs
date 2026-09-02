@@ -36,6 +36,91 @@ def main(argv: list[str] | None = None) -> int:
     p_show = sub.add_parser("show-config", help="print resolved config JSON")
     p_show.add_argument("-c", "--config", required=True)
 
+    p_export = sub.add_parser(
+        "export-timeline",
+        help="offline export: merge one episode into unified timeline (CSV/Parquet)",
+    )
+    p_export.add_argument(
+        "-e",
+        "--episode",
+        required=True,
+        help="path to episode directory (episode_XXXXX)",
+    )
+    p_export.add_argument(
+        "-o",
+        "--output-dir",
+        default=None,
+        help="output directory (default: <episode>/export)",
+    )
+    p_export.add_argument(
+        "--align",
+        choices=["asof", "nearest", "grid", "union"],
+        default=None,
+        help="also build aligned wide table (default: events only)",
+    )
+    p_export.add_argument(
+        "--master",
+        default=None,
+        help="master agent_id for asof/nearest (default: first gello, else top state hz)",
+    )
+    p_export.add_argument(
+        "--hz",
+        type=float,
+        default=None,
+        help="grid frequency for --align grid",
+    )
+    p_export.add_argument(
+        "--format",
+        choices=["parquet", "csv", "both"],
+        default="parquet",
+        dest="export_format",
+    )
+
+    p_filter = sub.add_parser(
+        "filter-timeline",
+        help="filter aligned wide table by match_dt; re-index step from 0",
+    )
+    p_filter.add_argument("-e", "--episode", required=True, help="episode directory")
+    p_filter.add_argument(
+        "-i",
+        "--input",
+        default=None,
+        help="aligned table (default: <episode>/export/timeline_aligned.parquet)",
+    )
+    p_filter.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="output path (default: <episode>/export/timeline_filtered.parquet)",
+    )
+    p_filter.add_argument(
+        "--require",
+        default=None,
+        help="required agent ids per row, comma-separated",
+    )
+    p_filter.add_argument("--master", default=None, help="master agent_id override")
+    p_filter.add_argument(
+        "--max-match-dt",
+        default=None,
+        help="max |match_dt| seconds; or cam-left:0.033,gello:0.02",
+    )
+    p_filter.add_argument(
+        "--trim",
+        choices=["none", "start", "end", "both"],
+        default="both",
+    )
+    p_filter.add_argument(
+        "--materialize",
+        action="store_true",
+        help="copy images to export/filtered/images/<agent>/<step>.jpg",
+    )
+    p_filter.add_argument(
+        "--format",
+        choices=["parquet", "csv"],
+        default="parquet",
+        dest="filter_format",
+    )
+
     args = parser.parse_args(argv)
 
     if args.cmd == "show-config":
@@ -68,6 +153,51 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         orch.serve()
+        return 0
+
+    if args.cmd == "export-timeline":
+        try:
+            from sensors_dcs.export.timeline import export_episode_timeline
+        except ImportError as e:
+            print(f"[sensors-dcs] {e}", flush=True)
+            return 1
+        try:
+            meta = export_episode_timeline(
+                args.episode,
+                output_dir=args.output_dir,
+                align=args.align,
+                master=args.master,
+                hz=args.hz,
+                fmt=args.export_format,
+            )
+        except Exception as e:  # noqa: BLE001
+            print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False, indent=2))
+            return 1
+        print(json.dumps({"ok": True, **meta}, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.cmd == "filter-timeline":
+        try:
+            from sensors_dcs.export.filter import filter_episode_timeline
+        except ImportError as e:
+            print(f"[sensors-dcs] {e}", flush=True)
+            return 1
+        try:
+            meta = filter_episode_timeline(
+                args.episode,
+                input_path=args.input,
+                output_path=args.output,
+                require=args.require,
+                master=args.master,
+                max_match_dt=args.max_match_dt,
+                trim=args.trim,
+                materialize=args.materialize,
+                fmt=args.filter_format,
+            )
+        except Exception as e:  # noqa: BLE001
+            print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False, indent=2))
+            return 1
+        print(json.dumps({"ok": True, **meta}, ensure_ascii=False, indent=2))
         return 0
 
     return 1

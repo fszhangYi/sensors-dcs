@@ -22,7 +22,8 @@ dependencies = [
 [project.optional-dependencies]
 dynamixel = ["dynamixel-sdk>=3.7", "pyserial>=3.5"]
 realsense = ["pyrealsense2"]
-dev = ["pytest>=7.0"]
+export = ["pandas>=2.0", "pyarrow>=14.0"]
+dev = ["pytest>=7.0", "pandas>=2.0", "pyarrow>=14.0"]
 
 [project.scripts]
 sensors-dcs = "sensors_dcs.cli:main"

@@ -168,7 +168,7 @@ episode_00000/
 
 ---
 
-## 6. CLI（计划）
+## 6. CLI
 
 ```bash
 # 长表，默认 Parquet
@@ -193,26 +193,26 @@ sensors-dcs export-timeline -e episode_00000 \
 
 ### Phase 1 — 长表导出（约 1 天）
 
-- [ ] `load_episode(ep_dir) -> list[Sample]`
-- [ ] 合并、`t_wall` 排序 → DataFrame → Parquet
-- [ ] CLI `export-timeline`（仅 events）
-- [ ] 单元测试：fixture `episode_00000`
+- [x] `load_episode(ep_dir) -> list[Sample]`
+- [x] 合并、`t_wall` 排序 → DataFrame → Parquet
+- [x] CLI `export-timeline`（仅 events）
+- [x] 单元测试：fixture `episode_00000`
 
 **验收**：长表行数 = 各 jsonl 行数之和；相机行含正确 `image_relpath` 与 `t_wall`。
 
 ### Phase 2 — 宽表 as-of 对齐（约 1–2 天）
 
-- [ ] `--align asof|nearest`，`--master <agent_id>`
-- [ ] 二分 / `pandas.merge_asof` 实现 as-of join
-- [ ] 输出 `*.match_dt` 列
-- [ ] 无 gello 时 fallback 到最高 hz 的 state agent
+- [x] `--align asof|nearest`，`--master <agent_id>`
+- [x] 二分 / `pandas.merge_asof` 实现 as-of join
+- [x] 输出 `*.match_dt` 列
+- [x] 无 gello 时 fallback 到最高 hz 的 state agent
 
 **验收**：以 gello 为主时钟时，`gello.match_dt == 0`；相机 `match_dt` 在合理范围（如 < 1/hz_cam）。
 
 ### Phase 3 — 网格重采样与质量报告（按需）
 
-- [ ] `--align grid --hz N`
-- [ ] `export_meta.json`：各 camera 平均/最大 `match_dt`、缺失率、`manifest.dropped`
+- [x] `--align grid --hz N`
+- [x] `export_meta.json`：各 camera 平均/最大 `match_dt`、缺失率、`manifest.dropped`
 - [ ] 可选：`stop()` 后自动 export
 
 ---
