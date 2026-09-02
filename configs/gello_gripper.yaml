@@ -31,3 +31,8 @@ agents:
     sensor_id: gripper-dh
     hz: 50
     buffer_frames: 64
+  - id: gripper-write
+    type: gripper_write
+    sensor_id: gripper-dh
+    hz: 5
+    buffer_frames: 8

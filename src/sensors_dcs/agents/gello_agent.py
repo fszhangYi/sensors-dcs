@@ -103,8 +103,9 @@ class GelloAgent(BaseAgent):
 
         joints = sample.get("joints_rad")
         joints_raw = sample.get("joints_rad_raw")
-        dry = bool(sample.get("dry_run")) or joints is None
-        if dry and self.dry_run_synth:
+        dry = bool(sample.get("dry_run")) or (joints is None and joints_raw is None)
+        if dry and self.dry_run_synth and joints is None and joints_raw is None:
+            # Synth in calibrated space, then invert so UI raw ≠ cal when affine ≠ I.
             joints = self._synth_joints(t_wall)
             joints_raw = invert_gello_affine(joints, offsets=offsets, signs=signs)
             sample = {
@@ -115,19 +116,14 @@ class GelloAgent(BaseAgent):
                 "dry_run": True,
                 "synth": True,
             }
-        elif joints is not None and joints_raw is None:
-            # Older driver / missing raw: reconstruct from inverse affine
-            joints_raw = invert_gello_affine(
-                [float(x) for x in joints],
-                offsets=offsets,
-                signs=signs,
-            )
-        elif joints is None and joints_raw is not None:
-            joints = apply_gello_affine(
-                [float(x) for x in joints_raw],
-                offsets=offsets,
-                signs=signs,
-            )
+        else:
+            if joints_raw is not None:
+                joints_raw = [float(x) for x in joints_raw]
+                # Always derive calibrated from raw so UI / export show affine, not a copy.
+                joints = apply_gello_affine(joints_raw, offsets=offsets, signs=signs)
+            elif joints is not None:
+                joints = [float(x) for x in joints]
+                joints_raw = invert_gello_affine(joints, offsets=offsets, signs=signs)
 
         payload: dict[str, Any] = {
             # Primary: affine-calibrated joints (use for follow / dataset / FK)

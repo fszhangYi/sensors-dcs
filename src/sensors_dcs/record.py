@@ -335,6 +335,8 @@ class RecordController:
                 fr = agent.ring.latest.get()
                 if fr is None or fr.error:
                     continue
+                if fr.kind == "gripper_write":
+                    continue
                 prev = last_seq.get(aid)
                 if prev is not None and fr.seq <= prev:
                     continue

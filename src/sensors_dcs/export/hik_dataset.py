@@ -672,6 +672,17 @@ def export_hik_dataset(
         calibration = json.loads(Path(calibration_json).read_text(encoding="utf-8"))
 
     tcp = tcp_xyz if tcp_xyz is not None else (0.0, 0.0, float(tcp_z))
+    if fk is None:
+        try:
+            from sensors_dcs.paths import ensure_sensors_import
+
+            ensure_sensors_import()
+            from sensors.kinematics import make_hik_fk_fn
+
+            fk = make_hik_fk_fn()
+        except Exception:  # noqa: BLE001
+            fk = None
+
     manifest, aligned, hik_to_agent = load_aligned_from_filtered(
         filtered_root,
         name_map=nmap,

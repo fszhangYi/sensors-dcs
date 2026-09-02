@@ -15,6 +15,12 @@ class SaveDirBody(BaseModel):
     save_dir: str | None = None
 
 
+class GripperCommandBody(BaseModel):
+    agent_id: str | None = None
+    position_norm: float | None = None
+    position_raw: int | None = None
+
+
 PREVIEW_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -189,6 +195,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .row .val .v-cal { color: var(--accent); }
     .row .val .v-raw { color: #e8a838; }
+    .grip-cmd {
+      display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center;
+      margin-top: 0.55rem; font-size: 0.82rem;
+    }
+    .grip-cmd input {
+      width: 7rem; padding: 0.35rem 0.5rem; border-radius: 8px;
+      border: 1px solid var(--line); background: #0b1017; color: var(--text);
+    }
+    .grip-cmd button {
+      padding: 0.35rem 0.7rem; border-radius: 8px; border: 1px solid var(--line);
+      background: color-mix(in srgb, var(--accent) 28%, #0b1017); color: var(--text);
+      cursor: pointer;
+    }
+    .grip-cmd .cmd-hint { color: var(--muted); font-size: 0.75rem; }
     .cam-section {
       min-width: 0;
       min-height: 0;
@@ -451,18 +471,31 @@ PREVIEW_HTML = """<!DOCTYPE html>
       return card;
     }
 
-    function ensureRows(barsRoot, n, labelFn) {
+    function ensureRows(barsRoot, n, labelFn, mode) {
+      // mode: 'dual' (gello/gripper read) | 'single' (arm / write status)
+      const want = mode || 'dual';
+      if (barsRoot.dataset.barMode !== want) {
+        barsRoot.innerHTML = '';
+        barsRoot.dataset.barMode = want;
+      }
       while (barsRoot.children.length > n) barsRoot.removeChild(barsRoot.lastChild);
       while (barsRoot.children.length < n) {
         const row = document.createElement('div');
         row.className = 'row';
-        row.innerHTML =
-          '<span class="lab"></span>' +
-          '<div class="track track-dual">' +
-            '<div class="track-lane"><div class="fill fill-cal"></div></div>' +
-            '<div class="track-lane"><div class="fill fill-raw"></div></div>' +
-          '</div>' +
-          '<span class="val"><span class="v-cal">—</span><br><span class="v-raw">—</span></span>';
+        if (want === 'dual') {
+          row.innerHTML =
+            '<span class="lab"></span>' +
+            '<div class="track track-dual">' +
+              '<div class="track-lane"><div class="fill fill-cal"></div></div>' +
+              '<div class="track-lane"><div class="fill fill-raw"></div></div>' +
+            '</div>' +
+            '<span class="val"><span class="v-cal">—</span><br><span class="v-raw">—</span></span>';
+        } else {
+          row.innerHTML =
+            '<span class="lab"></span>' +
+            '<div class="track"><div class="fill fill-cal"></div></div>' +
+            '<span class="val"><span class="v-cal">—</span></span>';
+        }
         barsRoot.appendChild(row);
       }
       for (let i = 0; i < barsRoot.children.length; i++) {
@@ -482,32 +515,61 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (vRaw) vRaw.textContent = rawText;
     }
 
+    function setSingleBar(row, pct, text) {
+      const fill = row.querySelector('.fill-cal') || row.querySelector('.fill');
+      const vCal = row.querySelector('.v-cal') || row.querySelector('.val');
+      if (fill) fill.style.width = Math.max(0, Math.min(100, pct)).toFixed(1) + '%';
+      if (vCal) vCal.textContent = text;
+    }
+
     function jointBarPct(rad) {
       const r = Number(rad);
       if (!Number.isFinite(r)) return 0;
-      return Math.max(0, Math.min(1, (r + 1.2) / 2.4)) * 100;
+      // Wider range so raw (often ±π offsets) and calibrated (±1) both readable.
+      return Math.max(0, Math.min(1, (r + Math.PI) / (2 * Math.PI))) * 100;
     }
 
-    function renderGello(card, frame, hzText) {
-      const title =
-        frame.kind === 'arm_read'
-          ? 'robot · Read'
-          : frame.agent_id + ' · Read';
-      card.querySelector('h2').textContent = title;
+    function renderArmRead(card, frame, hzText) {
+      card.querySelector('h2').textContent = 'robot · Read';
       card.querySelector('.k-kind').textContent = frame.kind;
       card.querySelector('.k-seq').textContent = String(frame.seq);
       card.querySelector('.k-hz').textContent = hzText;
       card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
       const joints = (frame.payload && frame.payload.joints_rad) || [];
-      const jointsRaw = (frame.payload && frame.payload.joints_rad_raw) || [];
+      const barsRoot = card.querySelector('.agent-bars');
+      ensureRows(barsRoot, joints.length, (i) => 'j' + i, 'single');
+      const cmd = card.querySelector('.grip-cmd');
+      if (cmd) cmd.remove();
+      for (let i = 0; i < joints.length; i++) {
+        const cal = joints[i];
+        const txt = cal == null || !Number.isFinite(Number(cal)) ? '—' : Number(cal).toFixed(3);
+        setSingleBar(barsRoot.children[i], cal == null ? 0 : jointBarPct(cal), txt);
+      }
+    }
+
+    function renderGello(card, frame, hzText) {
+      card.querySelector('h2').textContent = frame.agent_id + ' · Read';
+      card.querySelector('.k-kind').textContent = frame.kind;
+      card.querySelector('.k-seq').textContent = String(frame.seq);
+      card.querySelector('.k-hz').textContent = hzText;
+      card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
+      const p = frame.payload || {};
+      const joints = p.joints_rad || [];
+      const jointsRaw = p.joints_rad_raw || [];
       const barsRoot = card.querySelector('.agent-bars');
       const n = Math.max(joints.length, jointsRaw.length);
-      ensureRows(barsRoot, n, (i) => 'j' + i);
+      ensureRows(barsRoot, n, (i) => 'j' + i, 'dual');
+      const cmd = card.querySelector('.grip-cmd');
+      if (cmd) cmd.remove();
       for (let i = 0; i < n; i++) {
         const cal = joints[i];
         const raw = jointsRaw[i];
-        const calTxt = cal == null || !Number.isFinite(Number(cal)) ? '—' : Number(cal).toFixed(3);
-        const rawTxt = raw == null || !Number.isFinite(Number(raw)) ? '—' : ('raw ' + Number(raw).toFixed(3));
+        const calTxt = cal == null || !Number.isFinite(Number(cal))
+          ? '—'
+          : ('cal ' + Number(cal).toFixed(3));
+        const rawTxt = raw == null || !Number.isFinite(Number(raw))
+          ? '—'
+          : ('raw ' + Number(raw).toFixed(3));
         setDualBar(
           barsRoot.children[i],
           cal == null ? 0 : jointBarPct(cal),
@@ -527,7 +589,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const pos = frame.payload && frame.payload.position_norm;
       const raw = (frame.payload && (frame.payload.raw_value ?? frame.payload.position_raw));
       const barsRoot = card.querySelector('.agent-bars');
-      ensureRows(barsRoot, 1, () => 'pos');
+      ensureRows(barsRoot, 1, () => 'pos', 'dual');
+      const cmd = card.querySelector('.grip-cmd');
+      if (cmd) cmd.remove();
       const p = pos == null ? null : Number(pos);
       const r = raw == null ? null : Number(raw);
       const calPct = p == null || !Number.isFinite(p) ? 0 : Math.max(0, Math.min(1, p / 0.637)) * 100;
@@ -536,9 +600,64 @@ PREVIEW_HTML = """<!DOCTYPE html>
         barsRoot.children[0],
         calPct,
         rawPct,
-        p == null || !Number.isFinite(p) ? '—' : p.toFixed(3),
+        p == null || !Number.isFinite(p) ? '—' : ('norm ' + p.toFixed(3)),
         r == null || !Number.isFinite(r) ? '—' : ('raw ' + String(Math.round(r))),
       );
+    }
+
+    function renderGripperWrite(card, frame, hzText) {
+      card.querySelector('h2').textContent = 'gripper · Write';
+      card.querySelector('.k-kind').textContent = frame.kind;
+      card.querySelector('.k-seq').textContent = String(frame.seq);
+      card.querySelector('.k-hz').textContent = hzText;
+      card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
+      const barsRoot = card.querySelector('.agent-bars');
+      ensureRows(barsRoot, 1, () => 'cmd', 'single');
+      const p = frame.payload || {};
+      const norm = p.command_position_norm;
+      const pct = norm == null || !Number.isFinite(Number(norm))
+        ? 0
+        : Math.max(0, Math.min(1, Number(norm) / 0.637)) * 100;
+      const ok = p.last_ok;
+      const txt = norm == null
+        ? '未下发'
+        : ('norm ' + Number(norm).toFixed(3) + (ok === false ? ' ✗' : ok ? ' ✓' : ''));
+      setSingleBar(barsRoot.children[0], pct, txt);
+      let box = card.querySelector('.grip-cmd');
+      if (!box) {
+        box = document.createElement('div');
+        box.className = 'grip-cmd';
+        box.innerHTML =
+          '<label>position_norm</label>' +
+          '<input type="number" step="0.01" min="0" max="0.637" value="0.32" class="grip-norm" />' +
+          '<button type="button" class="grip-send">下发</button>' +
+          '<span class="cmd-hint">0≈开 … 0.637≈合（与读侧 norm 同尺度）</span>';
+        card.appendChild(box);
+        const btn = box.querySelector('.grip-send');
+        const inp = box.querySelector('.grip-norm');
+        btn.addEventListener('click', async () => {
+          const v = Number(inp.value);
+          if (!Number.isFinite(v)) {
+            runHint.textContent = '夹爪：请输入有效数字';
+            return;
+          }
+          btn.disabled = true;
+          try {
+            const r = await fetch('/api/gripper/command', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ agent_id: frame.agent_id, position_norm: v }),
+            }).then((x) => x.json());
+            runHint.textContent = r.ok
+              ? ('夹爪已下发 norm=' + v)
+              : ('夹爪下发失败：' + (r.error || JSON.stringify(r)));
+          } catch (e) {
+            runHint.textContent = '夹爪下发异常：' + e;
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      }
     }
 
     function pickCamSlot(frame, used) {
@@ -635,6 +754,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const card = ensureStateCard(frame.agent_id);
         if (frame.kind === 'gripper_read') {
           renderGripperRead(card, frame, hzText);
+        } else if (frame.kind === 'gripper_write') {
+          renderGripperWrite(card, frame, hzText);
+        } else if (frame.kind === 'arm_read') {
+          renderArmRead(card, frame, hzText);
         } else {
           renderGello(card, frame, hzText);
         }
@@ -714,6 +837,7 @@ def create_viz_app(
     status_fn: Callable[[], dict[str, Any]],
     *,
     recorder: Any | None = None,
+    gripper_command: Callable[..., dict[str, Any]] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="sensors-dcs viz", version="0.1.0")
 
@@ -753,6 +877,17 @@ def create_viz_app(
         if recorder is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
         return recorder.set_save_dir(req.save_dir)
+
+    @app.post("/api/gripper/command")
+    async def gripper_cmd(req: GripperCommandBody) -> dict[str, Any]:
+        if gripper_command is None:
+            return {"ok": False, "error": "gripper write unavailable"}
+        return await asyncio.to_thread(
+            gripper_command,
+            agent_id=req.agent_id,
+            position_norm=req.position_norm,
+            position_raw=req.position_raw,
+        )
 
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket) -> None:

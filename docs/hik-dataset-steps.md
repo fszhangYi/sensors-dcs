@@ -1,5 +1,8 @@
 # hik 训练集 `steps.json` 字段说明
 
+> **全链路详细版**（目录、metadata、图像、与 hik_gello / action_state 对照）：见 [hik-dataset.md](hik-dataset.md)。  
+> 本文仅展开 **`steps.json` 各字段含义**。
+
 `export-hik-dataset`（或 `filter-timeline --hik-dataset`）写出的目录与 `hik_gello/data_postprocess.py` 对齐：
 
 ```text
@@ -87,12 +90,11 @@ export/hik_dataset/
   ```
 
 - **在当前 sensors-dcs 默认行为**：
-  - **未注入机械臂 FK** 时：整表填 **`[0,0,0,0,0,0]`**
+  - 默认注入 `sensors.kinematics.make_hik_fk_fn()`（Elite machine 关节语义，来自 demo_test）
+  - 仅当 kinematics 不可用时：整表填 **`[0,0,0,0,0,0]`**
   - `metadata.json` 中会带 `cartesian_source`：
-    - `"zeros_no_fk"` — 无 FK，笛卡尔全零（常见于仅 Gello 遥操录制）
     - `"fk"` — 已用 FK+TCP 算出真实位姿
-
-因此：**看到全零并不表示机器人停在原点**，而是「本包未做正运动学」；训练若依赖笛卡尔观测，需后续接 FK 或改导出管线再生成。
+    - `"zeros_no_fk"` — 无 FK，笛卡尔全零
 
 ---
 
@@ -153,6 +155,7 @@ export/hik_dataset/
 
 ## 6. 相关文档
 
+- **hik_dataset 全解（推荐）**：[hik-dataset.md](hik-dataset.md)
 - 过滤与导出入口：[filter-timeline.md](filter-timeline.md)
 - Gello 关节标定（进入 `joint_position` 的值）：[gello-joint-affine.md](gello-joint-affine.md)
 - 上游参考：`hww/hik_gello/data_postprocess.py` → `parse_pickle_data` 中构造 `steps` 的段落

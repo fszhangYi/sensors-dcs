@@ -156,10 +156,38 @@ class Orchestrator:
             print(" | ".join(parts), flush=True)
             self._stop.wait(period)
 
+    def gripper_command(
+        self,
+        *,
+        agent_id: str | None = None,
+        position_norm: float | None = None,
+        position_raw: int | None = None,
+    ) -> dict[str, Any]:
+        """Dispatch absolute gripper target to a ``gripper_write`` agent."""
+        from sensors_dcs.agents.gripper_write_agent import GripperWriteAgent
+
+        writers = [a for a in self.agents.values() if isinstance(a, GripperWriteAgent)]
+        if not writers:
+            return {"ok": False, "error": "no gripper_write agent in config"}
+        agent: GripperWriteAgent
+        if agent_id:
+            found = self.agents.get(agent_id)
+            if not isinstance(found, GripperWriteAgent):
+                return {"ok": False, "error": f"agent {agent_id!r} is not gripper_write"}
+            agent = found
+        else:
+            agent = writers[0]
+        return agent.command(position_norm=position_norm, position_raw=position_raw)
+
     def serve(self) -> None:
         """Blocking: start agents + uvicorn viz server until SIGINT."""
         rt = self.cfg.runtime
-        app = create_viz_app(self.hub, self.status, recorder=self.recorder)
+        app = create_viz_app(
+            self.hub,
+            self.status,
+            recorder=self.recorder,
+            gripper_command=self.gripper_command,
+        )
         config = uvicorn.Config(
             app,
             host=rt.viz_host,

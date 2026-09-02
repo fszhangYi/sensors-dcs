@@ -11,6 +11,7 @@ sensors-dcs/
   src/sensors_dcs/
   docs/export-timeline.md           # 统一时间轴导出设计
   docs/filter-timeline.md           # 宽表过滤 + hik 训练集导出
+  docs/hik-dataset.md               # hik_dataset 产物全解（详细）
   docs/hik-dataset-steps.md         # hik steps.json / cartesian 字段含义
   docs/gello-joint-affine.md        # Gello 关节仿射标定（offsets/signs）
   configs/hik_camera_map.yaml       # serial→hik 相机名（export-hik-dataset）
@@ -460,7 +461,7 @@ episode → export-timeline --align asof --master …
 ### 转成 hik 训练集（export-hik-dataset）
 
 将 `export/filtered/` 转成与 `hik_gello/data_postprocess.py` 相同结构：`metadata.json`、`steps.json`、`rgb_<name>_<i>.jpg`。  
-**`steps.json` 各字段含义**（含 `observations.cartesian_position`）见 [docs/hik-dataset-steps.md](docs/hik-dataset-steps.md)。
+**完整来源说明**见 [docs/hik-dataset.md](docs/hik-dataset.md)；仅 steps 字段见 [docs/hik-dataset-steps.md](docs/hik-dataset-steps.md)。
 
 **相机命名不写死在代码里**，由 YAML 配置（serial → hik 名），filter / 导出时指定：
 
@@ -491,7 +492,7 @@ sensors-dcs filter-timeline -e episode_00000 \
 | 命名依据 | RealSense **序列号** → hik 名（与 `camera_name_refator` 同思路） |
 | 配置文件 | `configs/hik_camera_map.yaml`；也可自建 YAML |
 | 落盘 | 指定后会拷到 `export/filtered/camera_map.yaml` 与 `hik_dataset/camera_map.yaml` |
-| 缺省 | 无 map / serial 不在 map → 报错；无 FK 时 `cartesian_*` 为 0（`metadata.cartesian_source=zeros_no_fk`） |
+| 缺省 | 无 map / serial 不在 map → 报错；笛卡尔默认用 `sensors.kinematics` FK（失败时 `zeros_no_fk`） |
 
 ## 配置
 

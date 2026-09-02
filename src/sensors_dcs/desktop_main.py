@@ -131,7 +131,12 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     assert orch is not None
-    app = create_viz_app(orch.hub, orch.status, recorder=orch.recorder)
+    app = create_viz_app(
+        orch.hub,
+        orch.status,
+        recorder=orch.recorder,
+        gripper_command=orch.gripper_command,
+    )
     orch.cfg.runtime.viz_port = port
     try:
         orch.start()

@@ -102,9 +102,9 @@
 - 输入须先 `--materialize`（或 `filter-timeline --hik-dataset` 自动 materialize）
 - 关节优先 `arm_read`，否则 `gello`；夹爪优先 `gripper_read`，否则 `gello` 第 7 轴
 - 相机名来自 **`--camera-map` YAML**（serial → hik 名，例见 `configs/hik_camera_map.yaml`）；filter 时指定后会写入 `export/filtered/camera_map.yaml`，后续 `export-hik-dataset` 可复用
-- DCS 录制无深度 / 无专有 FK 时：`cartesian_*` 填 0，`metadata.cartesian_source=zeros_no_fk`；`depth_camera_num=0`
+- DCS 录制无深度时：`depth_camera_num=0`；笛卡尔默认走 `sensors.kinematics` FK，不可用时才 `zeros_no_fk`
 - `metadata.intrinsic_matrix` 优先取自 episode/`filtered` `manifest.cameras.<agent>.intrinsic_matrix`（录制 start 时 RealSense `open()` 写入）；可用 `--calibration-json` 覆盖
-- `steps.json` 结构与 data_postprocess 相同：`observations`/`actions` 的 `joint_position`、`cartesian_position`、`gripper_position`（**字段含义见 [hik-dataset-steps.md](hik-dataset-steps.md)**）
+- `steps.json` 结构与 data_postprocess 相同（字段见 [hik-dataset-steps.md](hik-dataset-steps.md)；**目录与来源全解**见 [hik-dataset.md](hik-dataset.md)）
 
 ---
 
