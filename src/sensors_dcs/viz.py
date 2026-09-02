@@ -31,15 +31,23 @@ PREVIEW_HTML = """<!DOCTYPE html>
       --line: #2a3a4f;
     }
     * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      overflow: hidden;
+    }
     body {
       margin: 0;
       font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
       background: radial-gradient(1200px 600px at 10% -10%, #1c2b3a 0%, var(--bg) 55%);
       color: var(--text);
       min-height: 100vh;
+      max-height: 100vh;
+      display: flex;
+      flex-direction: column;
     }
     header {
-      padding: 1.25rem 1.5rem 0.5rem;
+      flex-shrink: 0;
+      padding: 0.85rem 1.25rem 0.45rem;
       border-bottom: 1px solid var(--line);
     }
     header h1 {
@@ -48,14 +56,24 @@ PREVIEW_HTML = """<!DOCTYPE html>
       letter-spacing: 0.02em;
       font-weight: 600;
     }
-    header p { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.9rem; }
-    main { padding: 1rem 1.5rem 2rem; display: grid; gap: 1rem; }
+    header p { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.85rem; }
+    main {
+      flex: 1;
+      min-height: 0;
+      padding: 0.75rem 1.25rem 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+      overflow: hidden;
+    }
     .meta {
+      flex-shrink: 0;
       display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem;
       color: var(--muted); font-size: 0.85rem;
     }
     .meta strong { color: var(--accent); font-weight: 600; }
     .actions {
+      flex-shrink: 0;
       display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center;
     }
     .actions button {
@@ -80,6 +98,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .actions .hint { color: var(--muted); font-size: 0.85rem; }
     .save-path {
+      flex-shrink: 0;
       display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
       font-size: 0.85rem;
     }
@@ -101,9 +120,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
       background: color-mix(in srgb, var(--panel) 88%, transparent);
       border: 1px solid var(--line);
       border-radius: 10px;
-      padding: 1rem;
+      padding: 0.75rem;
       display: grid;
-      gap: 0.65rem;
+      gap: 0.5rem;
+      flex-shrink: 0;
     }
     .agent-card h2 {
       margin: 0;
@@ -116,11 +136,22 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .agent-meta strong { color: var(--accent); font-weight: 600; }
     .agent-bars { display: grid; gap: 0.55rem; }
-    #agents {
+    .content-row {
+      flex: 1;
+      min-height: 0;
       display: grid;
-      gap: 1rem;
-      grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
-      align-items: start;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      align-items: stretch;
+    }
+    #agents {
+      min-width: 0;
+      min-height: 0;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+      align-items: stretch;
     }
     .row { display: grid; grid-template-columns: 4.5rem 1fr 5rem; gap: 0.75rem; align-items: center; }
     .row span { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 0.85rem; }
@@ -133,26 +164,39 @@ PREVIEW_HTML = """<!DOCTYPE html>
       background: linear-gradient(90deg, #2f6f66, var(--accent));
       transform-origin: left center;
     }
+    .cam-section {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
     .cam-section h2 {
-      margin: 0 0 0.65rem;
+      margin: 0 0 0.45rem;
       font-size: 1rem;
       font-weight: 600;
+      flex-shrink: 0;
     }
     #cam-grid {
+      flex: 1;
+      min-height: 0;
       display: grid;
       grid-template-columns: 1fr 1fr;
-      grid-template-rows: auto auto;
-      gap: 0.65rem;
-      max-width: 66.67%;
+      grid-template-rows: 1fr 1fr;
+      gap: 0.5rem;
+      width: 100%;
     }
     .cam-cell {
       background: color-mix(in srgb, var(--panel) 88%, transparent);
       border: 1px solid var(--line);
       border-radius: 10px;
-      padding: 0.55rem;
+      padding: 0.45rem;
       display: grid;
-      gap: 0.35rem;
+      grid-template-rows: auto 1fr auto;
+      gap: 0.3rem;
       min-width: 0;
+      min-height: 0;
+      overflow: hidden;
     }
     .cam-cell .cam-title {
       font-size: 0.82rem;
@@ -164,7 +208,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
     .cam-cell .cam-title strong { color: var(--accent); font-weight: 600; }
     .cam-cell img {
       width: 100%;
-      aspect-ratio: 16 / 9;
+      height: 100%;
+      max-height: 100%;
+      aspect-ratio: auto;
       object-fit: contain;
       background: #0b1017;
       border-radius: 8px;
@@ -173,11 +219,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .cam-cell.empty img { opacity: 0.25; }
     .cam-cell .cam-sub { font-size: 0.75rem; color: var(--muted); }
-    pre {
-      margin: 0; padding: 1rem; overflow: auto;
-      background: #0b1017; border: 1px solid var(--line); border-radius: 10px;
-      font-size: 0.78rem; line-height: 1.45; color: #c5d0e0;
-      max-height: 280px;
+    pre#raw {
+      flex-shrink: 0;
+      width: 100%;
+      margin: 0;
+      padding: 0.65rem 0.85rem;
+      overflow: auto;
+      background: #0b1017;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      font-size: 0.72rem;
+      line-height: 1.4;
+      color: #c5d0e0;
+      max-height: 22vh;
+      min-height: 4.5rem;
     }
   </style>
 </head>
@@ -205,11 +260,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <div>前端 hz：<strong id="hzFront">—</strong></div>
       <div>已写帧：<strong id="written">0</strong></div>
     </div>
-    <section class="cam-section">
-      <h2>Camera preview · 2×2</h2>
-      <div id="cam-grid"></div>
-    </section>
-    <div id="agents"></div>
+    <div class="content-row">
+      <section class="cam-section">
+        <h2>Camera preview · 2×2</h2>
+        <div id="cam-grid"></div>
+      </section>
+      <div id="agents"></div>
+    </div>
     <pre id="raw">{}</pre>
   </main>
   <script>

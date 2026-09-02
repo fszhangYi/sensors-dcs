@@ -17,7 +17,21 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="DCS YAML path (must contain sensors_config + agents). "
         "Overrides SENSORS_DCS_CONFIG / AppData default.",
     )
+    parser.add_argument(
+        "--ui",
+        action="store_true",
+        default=False,
+        help="Open viz UI (pywebview window, or system browser as fallback). "
+        "Default: backend only; visit http://127.0.0.1:<port>/ manually.",
+    )
     return parser.parse_args(argv)
+
+
+def _resolve_open_ui(args: argparse.Namespace) -> bool:
+    if args.ui:
+        return True
+    env = (os.environ.get("SENSORS_DCS_UI") or "").strip().lower()
+    return env in {"1", "true", "yes", "ui", "open"}
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -75,10 +89,15 @@ def main(argv: list[str] | None = None) -> None:
             print(f"[sensors-dcs] boot error (UI will show details):\n{e}", flush=True)
 
     port = pick_port(preferred_port)
+    open_ui = _resolve_open_ui(args)
+    url = f"http://{host}:{port}/"
 
     if boot_error is not None:
         app = create_error_app(error=boot_error, config_path=str(cfg_path))
-        serve_app_blocking(app, host=host, port=port, open_ui=True)
+        if not open_ui:
+            print(f"[sensors-dcs] boot error (headless): {boot_error.splitlines()[0]}", flush=True)
+            print(f"[sensors-dcs] details at {url} — run with --ui to open automatically", flush=True)
+        serve_app_blocking(app, host=host, port=port, open_ui=open_ui)
         return
 
     assert orch is not None
@@ -89,8 +108,11 @@ def main(argv: list[str] | None = None) -> None:
         f"[sensors-dcs] site={orch.cfg.site} dry_run={orch.manager.ctx.dry_run}",
         flush=True,
     )
+    if not open_ui:
+        print(f"[sensors-dcs] headless backend at {url}", flush=True)
+        print("[sensors-dcs] open the URL in a browser, or restart with --ui", flush=True)
     try:
-        serve_app_blocking(app, host=host, port=port, open_ui=True)
+        serve_app_blocking(app, host=host, port=port, open_ui=open_ui)
     finally:
         orch.stop()
 

@@ -69,6 +69,19 @@ class RecordController:
         self._last_error: str | None = None
         self._stop_event = threading.Event()
 
+    def _status_unlocked(self) -> dict[str, Any]:
+        return {
+            "state": self.state,
+            "save_dir": str(self.save_dir),
+            "episode_index": self.episode_index,
+            "episode_path": str(self._episode_path) if self._episode_path else None,
+            "accepting": self._accepting,
+            "written": self._written,
+            "dropped": self._dropped,
+            "queue_size": self._q.qsize() if self._q is not None else 0,
+            "last_error": self._last_error,
+        }
+
     def set_save_dir(self, raw: str | None) -> dict[str, Any]:
         """Change save root while idle. Empty/None keeps current path."""
         with self._lock:
@@ -76,15 +89,19 @@ class RecordController:
                 return {
                     "ok": False,
                     "error": f"cannot change save_dir while state={self.state}",
-                    **self.status(),
+                    **self._status_unlocked(),
                 }
             if raw is None or not str(raw).strip():
-                return {"ok": True, **self.status()}
+                return {"ok": True, **self._status_unlocked()}
             path = Path(str(raw).strip()).expanduser().resolve()
             try:
                 path.mkdir(parents=True, exist_ok=True)
             except OSError as e:
-                return {"ok": False, "error": f"cannot create save_dir: {e}", **self.status()}
+                return {
+                    "ok": False,
+                    "error": f"cannot create save_dir: {e}",
+                    **self._status_unlocked(),
+                }
             self.save_dir = path
             self.cfg = self.cfg.model_copy(update={"save_dir": str(path)})
             self.episode_index = discover_next_episode(self.save_dir, int(self.cfg.episode_index))
@@ -93,26 +110,24 @@ class RecordController:
 
     def status(self) -> dict[str, Any]:
         with self._lock:
-            return {
-                "state": self.state,
-                "save_dir": str(self.save_dir),
-                "episode_index": self.episode_index,
-                "episode_path": str(self._episode_path) if self._episode_path else None,
-                "accepting": self._accepting,
-                "written": self._written,
-                "dropped": self._dropped,
-                "queue_size": self._q.qsize() if self._q is not None else 0,
-                "last_error": self._last_error,
-            }
+            return self._status_unlocked()
 
     def start(self) -> dict[str, Any]:
         with self._lock:
             if self.state != "idle":
-                return {"ok": False, "error": f"cannot start while state={self.state}", **self.status()}
+                return {
+                    "ok": False,
+                    "error": f"cannot start while state={self.state}",
+                    **self._status_unlocked(),
+                }
             ep = self.episode_index
             ep_dir = _episode_dir(self.save_dir, ep)
             if ep_dir.exists():
-                return {"ok": False, "error": f"episode dir already exists: {ep_dir}", **self.status()}
+                return {
+                    "ok": False,
+                    "error": f"episode dir already exists: {ep_dir}",
+                    **self._status_unlocked(),
+                }
             ep_dir.mkdir(parents=True, exist_ok=False)
             (ep_dir / "states").mkdir()
             (ep_dir / "cameras").mkdir()
@@ -144,7 +159,11 @@ class RecordController:
         """Stop accepting new frames, drain queue to disk, then bump episode."""
         with self._lock:
             if self.state != "recording":
-                return {"ok": False, "error": f"cannot stop while state={self.state}", **self.status()}
+                return {
+                    "ok": False,
+                    "error": f"cannot stop while state={self.state}",
+                    **self._status_unlocked(),
+                }
             self._accepting = False
             self.state = "flushing"
             q = self._q

@@ -109,6 +109,8 @@ def serve_app_blocking(
         return
 
     print(f"[sensors-dcs] open {url}", flush=True)
+    if not open_ui:
+        print("[sensors-dcs] headless — UI not opened (use --ui or SENSORS_DCS_UI=1)", flush=True)
     if open_ui:
         force_browser = (os.environ.get("SENSORS_DCS_BROWSER") or "").strip().lower() in {
             "1",
