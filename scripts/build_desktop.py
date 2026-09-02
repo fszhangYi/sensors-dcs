@@ -115,13 +115,29 @@ def _wine_bin() -> str:
     raise SystemExit("wine64/wine not found — install wine (win64) first")
 
 
-def _verify_hardware_imports(py_cmd: list[str], *, env: dict | None = None) -> None:
+def _verify_bundled_imports(py_cmd: list[str], *, env: dict | None = None) -> None:
+    required = [
+        "dynamixel_sdk",
+        "serial",
+        "numpy",
+        "pandas",
+        "pyarrow",
+        "cv2",
+        "webview",
+        "httptools",
+        "websockets",
+        "watchfiles",
+        "pydantic_core",
+        "fastapi",
+        "uvicorn",
+    ]
+    mods = ",".join(f"'{m}'" for m in required)
     code = (
         "import importlib.util as u;"
-        "mods=['dynamixel_sdk','serial','numpy'];"
+        f"mods=[{mods}];"
         "missing=[m for m in mods if u.find_spec(m) is None];"
         "import sys;"
-        "sys.exit('missing '+str(missing)) if missing else print('hardware_ok', mods)"
+        "sys.exit('missing '+str(missing)) if missing else print('bundled_ok', len(mods))"
     )
     _run([*py_cmd, "-c", code], env=env)
 
@@ -213,7 +229,7 @@ def build_windows(*, skip_frontend: bool = True) -> Path:
     _run([wine, py_wine, "-m", "pip", "install", "-i", PIP_INDEX, "-r", req_d], env=env)
     _run([wine, py_wine, "-m", "pip", "install", "-i", PIP_INDEX, "-r", req_h], env=env)
     _run([wine, py_wine, "-m", "pip", "install", "-i", PIP_INDEX, "numpy==1.23.5"], env=env)
-    _verify_hardware_imports([wine, py_wine], env=env)
+    _verify_bundled_imports([wine, py_wine], env=env)
 
     TMP_BASE.mkdir(parents=True, exist_ok=True)
     dist = TMP_BASE / "sensors-dcs-dist-win"
@@ -292,6 +308,8 @@ def build_windows(*, skip_frontend: bool = True) -> Path:
                 "    Install FTDI/USB-serial driver; match baudrate (default 57600)",
                 "12. RealSense: install Intel RealSense SDK / pyrealsense2 on target",
                 "    if you need live camera (dry_run synth works without it)",
+                "13. Export: sensors-dcs.exe export-timeline -e episode_00000 --align asof",
+                "    filter-timeline also bundled (pandas/pyarrow included in this build)",
                 "",
             ]
         ),

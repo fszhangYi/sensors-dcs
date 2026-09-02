@@ -47,12 +47,25 @@ hiddenimports = [
     "starlette",
     "yaml",
     "pydantic",
+    "pydantic_core",
+    "httptools",
+    "websockets",
+    "watchfiles",
+    "webview",
     "numpy",
+    "pandas",
+    "pyarrow",
+    "pyarrow.lib",
+    "pyarrow.parquet",
     "pkgutil",
     "sensors_dcs",
     "sensors_dcs.cli",
     "sensors_dcs.config",
     "sensors_dcs.desktop_main",
+    "sensors_dcs.ui_serve",
+    "sensors_dcs.export",
+    "sensors_dcs.export.timeline",
+    "sensors_dcs.export.filter",
     "sensors_dcs.frame",
     "sensors_dcs.buffer",
     "sensors_dcs.paths",
@@ -76,6 +89,8 @@ hiddenimports = [
 ]
 hiddenimports += collect_submodules("sensors.drivers")
 hiddenimports += collect_submodules("sensors_dcs")
+hiddenimports += collect_submodules("pyarrow")
+hiddenimports += collect_submodules("pandas")
 datas, binaries, hiddenimports = extend_analysis(datas, binaries, hiddenimports)
 
 pathex = [str(SRC)]

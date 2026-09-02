@@ -158,7 +158,9 @@ def _require_pandas():
         import pandas as pd  # noqa: F401
     except ImportError as exc:  # pragma: no cover
         raise ImportError(
-            "export-timeline requires pandas. Install with: pip install -e '.[export]'"
+            "export-timeline requires pandas. "
+            "Dev: pip install -e '.[export]'. "
+            "Desktop exe: rebuild with requirements-desktop.txt (includes pandas/pyarrow)."
         ) from exc
     return pd
 

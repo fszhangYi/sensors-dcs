@@ -1,3 +1,10 @@
 pyinstaller>=6.3
 pywebview>=5.0
 numpy==1.23.5
+# timeline export-timeline / filter-timeline (pyproject [export])
+pandas>=2.0,<3
+pyarrow>=14.0
+# uvicorn[standard] extras (also via requirements.txt; listed for desktop audit)
+httptools>=0.6
+websockets>=12.0
+watchfiles>=0.21

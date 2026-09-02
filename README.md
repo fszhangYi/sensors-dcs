@@ -465,4 +465,23 @@ sensors-dcs.exe export-timeline -e episode_00000 --align asof --master gello --m
 sensors-dcs.exe filter-timeline -e episode_00000 --require gello,cam-left --trim both
 ```
 
-（桌面包若未打入 pandas/pyarrow，导出子命令会提示安装 `[export]` 依赖。）
+重新打包后的桌面包已内置 pandas/pyarrow；**当前旧 exe 需重新 `build-desktop` 才生效**。
+
+### 桌面包依赖清单
+
+| 功能 | Python 包 | 是否打入 exe | 说明 |
+|------|-----------|--------------|------|
+| 采集 / viz HTTP+WS | `fastapi`, `uvicorn`, `starlette`, `httptools`, `websockets`, `watchfiles` | 是 | `requirements.txt` |
+| 配置 | `PyYAML`, `pydantic`, `pydantic_core` | 是 | |
+| 预览 JPEG | `opencv-python-headless` (`cv2`) | 是 | `requirements-hardware.txt` |
+| Gello / 串口 | `dynamixel-sdk`, `pyserial` | 是 | |
+| `--ui` 窗口 | `pywebview`（import 名 `webview`） | 是 | 失败时回退系统浏览器 |
+| 时间轴导出 | `pandas`, `pyarrow` | 是 | `requirements-desktop.txt` |
+| 真机 RealSense | `pyrealsense2` | **否** | 目标机装 Intel SDK + wheel；`dry_run` 可不装 |
+
+构建前可在 Linux 开发机自检（Wine 构建环境应能通过 pip 装齐）：
+
+```bash
+pip install -r requirements.txt -r requirements-desktop.txt -r requirements-hardware.txt
+python scripts/check_desktop_deps.py
+```
