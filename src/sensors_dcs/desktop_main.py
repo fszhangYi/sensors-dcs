@@ -10,6 +10,7 @@ import argparse
 import os
 import sys
 import traceback
+from typing import Any
 
 # Subcommands owned by sensors_dcs.cli — not desktop collect/viz flags.
 _CLI_COMMANDS = frozenset(
@@ -138,6 +139,17 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     assert orch is not None
+    shutdown_box: dict[str, Any] = {"server": None}
+
+    def _shutdown() -> dict[str, Any]:
+        result = orch.request_shutdown()
+        server = shutdown_box.get("server")
+        if server is not None:
+            server.should_exit = True
+        return result
+
+    orch._uvicorn_exit = lambda: setattr(shutdown_box.get("server"), "should_exit", True) if shutdown_box.get("server") is not None else None
+
     app = create_viz_app(
         orch.hub,
         orch.status,
@@ -146,6 +158,7 @@ def main(argv: list[str] | None = None) -> None:
         gripper_gello_sync=orch.set_gripper_gello_sync,
         gripper_gello_sync_status=orch.gripper_gello_sync_status,
         arm_command=orch.arm_command,
+        shutdown=_shutdown,
     )
     orch.cfg.runtime.viz_port = port
     try:
@@ -168,9 +181,16 @@ def main(argv: list[str] | None = None) -> None:
         print(f"[sensors-dcs] headless backend at {url}", flush=True)
         print("[sensors-dcs] open the URL in a browser, or restart with --ui", flush=True)
     try:
-        serve_app_blocking(app, host=host, port=port, open_ui=open_ui)
+        serve_app_blocking(
+            app,
+            host=host,
+            port=port,
+            open_ui=open_ui,
+            attach_server=lambda s: shutdown_box.__setitem__("server", s),
+        )
     finally:
-        orch.stop()
+        if not orch._stop.is_set():
+            orch.stop()
 
 
 if __name__ == "__main__":

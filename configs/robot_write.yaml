@@ -1,10 +1,11 @@
-# sensors-dcs — Elite arm WRITE (gated Arm / ± jog). See docs/arm-write.md
+# sensors-dcs — Elite arm READ + WRITE (must pair). See docs/arm-write.md
 #
 # Usage:
 #   sensors-dcs run -c configs/robot_write.yaml
-#   sensors-dcs run -c configs/robot_write.yaml --no-dry-run   # real robot
+#   sensors-dcs run -c configs/robot_write.yaml --no-dry-run
 #
-# Safety: dry_run default true; motion requires UI "Arm" then ± with delta.
+# Safety: share one arm_write sensor; read agent fills live joints; writer only
+# jogs relative to that pose after Arm.
 version: 1
 site: dcs-robot-write
 
@@ -25,8 +26,13 @@ record:
   queue_maxsize: 512
 
 agents:
+  - id: arm
+    type: arm
+    sensor_id: arm-elite
+    hz: 50
+    buffer_frames: 64
   - id: arm-write
     type: arm_write
-    sensor_id: arm-elite-write
+    sensor_id: arm-elite
     hz: 5
     buffer_frames: 8

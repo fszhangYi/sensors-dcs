@@ -68,6 +68,7 @@ class ArmWriteAgent(BaseAgent):
         disarm: bool = False,
         stop: bool = False,
         joints_rad: Sequence[float] | None = None,
+        reference_joints_rad: Sequence[float] | None = None,
         jog_joint: int | None = None,
         delta_rad: float | None = None,
         delta_deg: float | None = None,
@@ -81,7 +82,10 @@ class ArmWriteAgent(BaseAgent):
             body["stop"] = True if stop or disarm else False
         elif joints_rad is not None:
             body["joints_rad"] = [float(x) for x in joints_rad]
+            if reference_joints_rad is not None:
+                body["reference_joints_rad"] = [float(x) for x in reference_joints_rad]
         elif jog_joint is not None:
+            # Prefer orchestrator converting jog→absolute from arm_read; keep for tests.
             body["jog_joint"] = int(jog_joint)
             if delta_rad is not None:
                 body["delta_rad"] = float(delta_rad)

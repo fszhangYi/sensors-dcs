@@ -93,10 +93,17 @@ def serve_app_blocking(
     host: str = "127.0.0.1",
     port: int = 7011,
     open_ui: bool = True,
+    attach_server: Any | None = None,
 ) -> None:
-    """Run uvicorn until SIGINT/SIGTERM; optionally open webview/browser."""
+    """Run uvicorn until SIGINT/SIGTERM; optionally open webview/browser.
+
+    ``attach_server`` if callable is invoked with the ``uvicorn.Server`` once
+    created (so the app can request a clean exit via ``server.should_exit``).
+    """
     config = uvicorn.Config(app, host=host, port=port, log_level="info", access_log=False)
     server = uvicorn.Server(config)
+    if callable(attach_server):
+        attach_server(server)
 
     def _handle_sig(*_args: object) -> None:
         server.should_exit = True

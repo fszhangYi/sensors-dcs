@@ -27,6 +27,7 @@
 
 - [x] Writer 只做 **6 轴关节**；夹爪继续 `gripper_write`
 - [x] 新建 `kind=arm_write` / agent `type: arm_write`
+- [x] **必须与 `type: arm`（read）配对**：同一 `sensor_id`；点动相对 **read 最新 joints**
 - [x] 默认需显式 **Arm**；`dry_run` 可无真机联调 UI
 - [x] 单位：API/UI 用 **rad**（点动 delta 滑条用 **deg** 显示），下发 Elite 用 **deg**
 

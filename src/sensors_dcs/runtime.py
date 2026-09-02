@@ -90,9 +90,33 @@ class Orchestrator:
             self._viz_thread.join(timeout=2.0)
         if self._console_thread and self._console_thread.is_alive():
             self._console_thread.join(timeout=2.0)
-        for agent in self.agents.values():
+        # Stop writers before readers so shared sensors disarm then close once.
+        from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
+        from sensors_dcs.agents.gripper_write_agent import GripperWriteAgent
+
+        writers = [
+            a
+            for a in self.agents.values()
+            if isinstance(a, (ArmWriteAgent, GripperWriteAgent))
+        ]
+        readers = [a for a in self.agents.values() if a not in writers]
+        for agent in writers + readers:
             agent.stop()
         self.manager.close_all()
+
+    def request_shutdown(self) -> dict[str, Any]:
+        """UI/API safe exit: stop agents (close sensors) then signal uvicorn."""
+        try:
+            self.stop()
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": str(e)}
+        hook = getattr(self, "_uvicorn_exit", None)
+        if callable(hook):
+            try:
+                hook()
+            except Exception as e:  # noqa: BLE001
+                return {"ok": False, "error": f"stopped agents but exit failed: {e}"}
+        return {"ok": True, "message": "shutdown requested"}
 
     def _viz_payload(self) -> dict[str, Any]:
         frames = []
@@ -376,12 +400,22 @@ class Orchestrator:
         delta_rad: float | None = None,
         delta_deg: float | None = None,
     ) -> dict[str, Any]:
-        """Dispatch arm/disarm/jog to an ``arm_write`` agent."""
+        """Dispatch arm/disarm/jog to ``arm_write``; jog is always relative to ``arm`` read."""
+        import math
+
+        from sensors_dcs.agents.arm_agent import ArmAgent
         from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
 
+        readers = [a for a in self.agents.values() if isinstance(a, ArmAgent)]
         writers = [a for a in self.agents.values() if isinstance(a, ArmWriteAgent)]
         if not writers:
             return {"ok": False, "error": "no arm_write agent in config"}
+        if not readers:
+            return {
+                "ok": False,
+                "error": "arm_write requires a paired arm (read) agent; refuse motion without live joints",
+            }
+
         agent: ArmWriteAgent
         if agent_id:
             found = self.agents.get(agent_id)
@@ -390,15 +424,69 @@ class Orchestrator:
             agent = found
         else:
             agent = writers[0]
-        return agent.command(
-            arm=arm,
-            disarm=disarm,
-            stop=stop,
-            joints_rad=joints_rad,
-            jog_joint=jog_joint,
-            delta_rad=delta_rad,
-            delta_deg=delta_deg,
-        )
+
+        reader = readers[0]
+        # Prefer read agent that shares the same sensor_id as the writer.
+        for cand in readers:
+            if cand.sensor_id == agent.sensor_id:
+                reader = cand
+                break
+
+        def _read_joints() -> list[float] | None:
+            fr = reader.ring.latest.get()
+            if fr is None:
+                return None
+            raw = fr.payload.get("joints_rad")
+            if not isinstance(raw, list) or not raw:
+                return None
+            try:
+                return [float(x) for x in raw]
+            except (TypeError, ValueError):
+                return None
+
+        if arm:
+            base = _read_joints()
+            if base is None:
+                return {
+                    "ok": False,
+                    "error": "no live arm read joints yet; wait for robot · Read before Arm",
+                }
+            return agent.command(arm=True)
+
+        if disarm or stop:
+            return agent.command(disarm=bool(disarm or stop), stop=True)
+
+        if jog_joint is not None:
+            base = _read_joints()
+            if base is None:
+                return {
+                    "ok": False,
+                    "error": "no live arm read joints; refuse jog without current pose",
+                }
+            if delta_rad is not None:
+                d = float(delta_rad)
+            elif delta_deg is not None:
+                d = math.radians(float(delta_deg))
+            else:
+                return {"ok": False, "error": "delta_rad or delta_deg required for jog"}
+            idx = int(jog_joint)
+            if idx < 0 or idx >= len(base):
+                return {"ok": False, "error": f"jog_joint out of range 0..{len(base)-1}"}
+            target = list(base)
+            target[idx] = float(base[idx]) + d
+            # Absolute write anchored to read pose (guards still apply max Δq vs reference).
+            return agent.command(joints_rad=target, reference_joints_rad=base)
+
+        if joints_rad is not None:
+            base = _read_joints()
+            if base is None:
+                return {
+                    "ok": False,
+                    "error": "no live arm read joints; refuse absolute command without current pose",
+                }
+            return agent.command(joints_rad=list(joints_rad), reference_joints_rad=base)
+
+        return {"ok": False, "error": "arm, disarm/stop, joints_rad, or jog_joint required"}
 
     def serve(self) -> None:
         """Blocking: start agents + uvicorn viz server until SIGINT."""
@@ -411,15 +499,18 @@ class Orchestrator:
             gripper_gello_sync=self.set_gripper_gello_sync,
             gripper_gello_sync_status=self.gripper_gello_sync_status,
             arm_command=self.arm_command,
+            shutdown=self.request_shutdown,
         )
-        config = uvicorn.Config(
-            app,
-            host=rt.viz_host,
-            port=rt.viz_port,
-            log_level="info",
-            access_log=False,
+        self._server = uvicorn.Server(
+            uvicorn.Config(
+                app,
+                host=rt.viz_host,
+                port=rt.viz_port,
+                log_level="info",
+                access_log=False,
+            )
         )
-        self._server = uvicorn.Server(config)
+        self._uvicorn_exit = lambda: setattr(self._server, "should_exit", True)
 
         def _handle_sig(*_args: object) -> None:
             self._stop.set()

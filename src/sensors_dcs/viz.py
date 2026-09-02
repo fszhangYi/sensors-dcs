@@ -161,7 +161,26 @@ PREVIEW_HTML = """<!DOCTYPE html>
       color: var(--muted); font-size: 0.8rem;
     }
     .agent-meta strong { color: var(--accent); font-weight: 600; }
-    .agent-bars { display: grid; gap: 0.55rem; }
+    #status.st-live { color: #3d9a8b; }
+    #status.st-connecting { color: #8b9bb4; }
+    #status.st-reconnecting { color: #e8a838; }
+    #status.st-error { color: #e07070; }
+    #status.st-offline { color: #e07070; }
+    button.danger {
+      background: color-mix(in srgb, #c44 32%, #0b1017); border-color: #a33;
+    }
+    .agent-vals {
+      display: flex; flex-wrap: wrap; gap: 0.35rem 0.55rem;
+      font-variant-numeric: tabular-nums; font-size: 0.8rem;
+    }
+    .agent-vals .jv {
+      background: #0b1017; border: 1px solid var(--line); border-radius: 6px;
+      padding: 0.2rem 0.45rem; color: var(--muted);
+    }
+    .agent-vals .jv b { color: var(--text); font-weight: 600; }
+    .agent-vals .jv .cal { color: var(--accent); }
+    .agent-vals .jv .raw { color: #e8a838; }
+    .agent-bars { display: none; }
     .content-row {
       flex: 1;
       min-height: 0;
@@ -334,6 +353,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     <div class="actions">
       <button type="button" class="primary" id="btnStart">开始</button>
       <button type="button" id="btnStop" disabled>结束</button>
+      <button type="button" class="danger" id="btnExit">安全退出</button>
       <span class="hint" id="runHint">空闲 — 点「开始」录制当前 episode</span>
     </div>
     <div class="save-path">
@@ -342,7 +362,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <button type="button" id="btnSaveDir">应用</button>
     </div>
     <div class="meta">
-      <div>连接：<strong id="status">connecting…</strong></div>
+      <div>连接：<strong id="status" class="st-connecting">connecting…</strong></div>
       <div>录制：<strong id="recState">idle</strong></div>
       <div>保存路径：<strong id="saveDir">—</strong></div>
       <div>episode：<strong id="episode">—</strong></div>
@@ -362,6 +382,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const agentsEl = document.getElementById('agents');
     const camGridEl = document.getElementById('cam-grid');
     const statusEl = document.getElementById('status');
+    function setConnStatus(text, cls) {
+      statusEl.textContent = text;
+      statusEl.className = cls || '';
+    }
     const recStateEl = document.getElementById('recState');
     const saveDirEl = document.getElementById('saveDir');
     const episodeEl = document.getElementById('episode');
@@ -457,6 +481,21 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
     btnStart.addEventListener('click', () => postRecord('/api/record/start'));
     btnStop.addEventListener('click', () => postRecord('/api/record/stop'));
+    const btnExit = document.getElementById('btnExit');
+    if (btnExit) {
+      btnExit.addEventListener('click', async () => {
+        if (!confirm('安全退出：停止录制、关闭传感器并结束进程？')) return;
+        btnExit.disabled = true;
+        runHint.textContent = '正在安全退出…';
+        setConnStatus('shutting down…', 'st-offline');
+        try {
+          const r = await fetch('/api/shutdown', { method: 'POST' }).then((x) => x.json());
+          runHint.textContent = r.ok ? '已请求退出，可关闭页面' : ('退出失败：' + (r.error || JSON.stringify(r)));
+        } catch (e) {
+          runHint.textContent = '退出请求已发送（连接可能已断开）';
+        }
+      });
+    }
 
     async function applySaveDir() {
       const path = saveDirInput.value.trim();
@@ -512,80 +551,56 @@ PREVIEW_HTML = """<!DOCTYPE html>
       return card;
     }
 
-    function ensureRows(barsRoot, n, labelFn, mode) {
-      // mode: 'dual' (gello/gripper read) | 'single' (arm / write status)
-      const want = mode || 'dual';
-      if (barsRoot.dataset.barMode !== want) {
-        barsRoot.innerHTML = '';
-        barsRoot.dataset.barMode = want;
+    function fmtRad(v) {
+      if (v == null || !Number.isFinite(Number(v))) return '—';
+      const r = Number(v);
+      return r.toFixed(3) + ' rad / ' + (r * 180 / Math.PI).toFixed(1) + '°';
+    }
+
+    function ensureValsRoot(card) {
+      let root = card.querySelector('.agent-vals');
+      if (!root) {
+        root = document.createElement('div');
+        root.className = 'agent-vals';
+        const bars = card.querySelector('.agent-bars');
+        if (bars) bars.insertAdjacentElement('afterend', root);
+        else card.appendChild(root);
       }
-      while (barsRoot.children.length > n) barsRoot.removeChild(barsRoot.lastChild);
-      while (barsRoot.children.length < n) {
-        const row = document.createElement('div');
-        row.className = 'row';
-        if (want === 'dual') {
-          row.innerHTML =
-            '<span class="lab"></span>' +
-            '<div class="track track-dual">' +
-              '<div class="track-lane"><div class="fill fill-cal"></div></div>' +
-              '<div class="track-lane"><div class="fill fill-raw"></div></div>' +
-            '</div>' +
-            '<span class="val"><span class="v-cal">—</span><br><span class="v-raw">—</span></span>';
+      return root;
+    }
+
+    function renderJointVals(root, items) {
+      // items: [{lab, cal, raw}]
+      let html = '';
+      for (const it of items) {
+        const lab = it.lab || '';
+        if (it.raw != null && it.showRaw) {
+          html += '<span class="jv"><b>' + lab + '</b> <span class="cal">' +
+            (it.calText != null ? it.calText : fmtRad(it.cal)) +
+            '</span> · <span class="raw">' +
+            (it.rawText != null ? it.rawText : fmtRad(it.raw)) +
+            '</span></span>';
         } else {
-          row.innerHTML =
-            '<span class="lab"></span>' +
-            '<div class="track"><div class="fill fill-cal"></div></div>' +
-            '<span class="val"><span class="v-cal">—</span></span>';
+          html += '<span class="jv"><b>' + lab + '</b> ' +
+            (it.calText != null ? it.calText : fmtRad(it.cal)) + '</span>';
         }
-        barsRoot.appendChild(row);
       }
-      for (let i = 0; i < barsRoot.children.length; i++) {
-        const lab = barsRoot.children[i].querySelector('.lab');
-        if (lab) lab.textContent = labelFn(i);
-      }
+      root.innerHTML = html || '<span class="jv">—</span>';
     }
 
-    function setDualBar(row, calPct, rawPct, calText, rawText) {
-      const calFill = row.querySelector('.fill-cal');
-      const rawFill = row.querySelector('.fill-raw');
-      const vCal = row.querySelector('.v-cal');
-      const vRaw = row.querySelector('.v-raw');
-      if (calFill) calFill.style.width = Math.max(0, Math.min(100, calPct)).toFixed(1) + '%';
-      if (rawFill) rawFill.style.width = Math.max(0, Math.min(100, rawPct)).toFixed(1) + '%';
-      if (vCal) vCal.textContent = calText;
-      if (vRaw) vRaw.textContent = rawText;
-    }
-
-    function setSingleBar(row, pct, text) {
-      const fill = row.querySelector('.fill-cal') || row.querySelector('.fill');
-      const vCal = row.querySelector('.v-cal') || row.querySelector('.val');
-      if (fill) fill.style.width = Math.max(0, Math.min(100, pct)).toFixed(1) + '%';
-      if (vCal) vCal.textContent = text;
-    }
-
-    function jointBarPct(rad) {
-      const r = Number(rad);
-      if (!Number.isFinite(r)) return 0;
-      // Wider range so raw (often ±π offsets) and calibrated (±1) both readable.
-      return Math.max(0, Math.min(1, (r + Math.PI) / (2 * Math.PI))) * 100;
-    }
-
-    function renderArmRead(card, frame, hzText) {
+        function renderArmRead(card, frame, hzText) {
       card.querySelector('h2').textContent = 'robot · Read';
       card.querySelector('.k-kind').textContent = frame.kind;
       card.querySelector('.k-seq').textContent = String(frame.seq);
       card.querySelector('.k-hz').textContent = hzText;
       card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
       const joints = (frame.payload && frame.payload.joints_rad) || [];
-      const barsRoot = card.querySelector('.agent-bars');
-      ensureRows(barsRoot, joints.length, (i) => 'j' + i, 'single');
+      window.__armReadJoints = joints;
+      window.__armReadAgentId = frame.agent_id;
+      const root = ensureValsRoot(card);
       const cmd = card.querySelector('.grip-cmd');
       if (cmd) cmd.remove();
-      for (let i = 0; i < joints.length; i++) {
-        const cal = joints[i];
-        const txt = cal == null || !Number.isFinite(Number(cal)) ? '—' : Number(cal).toFixed(3);
-        setSingleBar(barsRoot.children[i], cal == null ? 0 : jointBarPct(cal), txt);
-      }
+      renderJointVals(root, joints.map((v, i) => ({ lab: 'j' + i, cal: v })));
     }
 
     function renderGello(card, frame, hzText) {
@@ -597,28 +612,22 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const p = frame.payload || {};
       const joints = p.joints_rad || [];
       const jointsRaw = p.joints_rad_raw || [];
-      const barsRoot = card.querySelector('.agent-bars');
       const n = Math.max(joints.length, jointsRaw.length);
-      ensureRows(barsRoot, n, (i) => 'j' + i, 'dual');
+      const root = ensureValsRoot(card);
       const cmd = card.querySelector('.grip-cmd');
       if (cmd) cmd.remove();
+      const items = [];
       for (let i = 0; i < n; i++) {
-        const cal = joints[i];
-        const raw = jointsRaw[i];
-        const calTxt = cal == null || !Number.isFinite(Number(cal))
-          ? '—'
-          : ('cal ' + Number(cal).toFixed(3));
-        const rawTxt = raw == null || !Number.isFinite(Number(raw))
-          ? '—'
-          : ('raw ' + Number(raw).toFixed(3));
-        setDualBar(
-          barsRoot.children[i],
-          cal == null ? 0 : jointBarPct(cal),
-          raw == null ? 0 : jointBarPct(raw),
-          calTxt,
-          rawTxt,
-        );
+        items.push({
+          lab: 'j' + i,
+          cal: joints[i],
+          raw: jointsRaw[i],
+          showRaw: true,
+          calText: joints[i] == null || !Number.isFinite(Number(joints[i])) ? 'cal —' : ('cal ' + fmtRad(joints[i])),
+          rawText: jointsRaw[i] == null || !Number.isFinite(Number(jointsRaw[i])) ? 'raw —' : ('raw ' + fmtRad(jointsRaw[i])),
+        });
       }
+      renderJointVals(root, items);
     }
 
     function renderGripperRead(card, frame, hzText) {
@@ -627,23 +636,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
       card.querySelector('.k-seq').textContent = String(frame.seq);
       card.querySelector('.k-hz').textContent = hzText;
       card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
-      const pos = frame.payload && frame.payload.position_norm;
-      const raw = (frame.payload && (frame.payload.raw_value ?? frame.payload.position_raw));
-      const barsRoot = card.querySelector('.agent-bars');
-      ensureRows(barsRoot, 1, () => 'pos', 'dual');
+      const p = frame.payload || {};
+      const root = ensureValsRoot(card);
       const cmd = card.querySelector('.grip-cmd');
       if (cmd) cmd.remove();
-      const p = pos == null ? null : Number(pos);
-      const r = raw == null ? null : Number(raw);
-      const calPct = p == null || !Number.isFinite(p) ? 0 : Math.max(0, Math.min(1, p / 0.637)) * 100;
-      const rawPct = r == null || !Number.isFinite(r) ? 0 : Math.max(0, Math.min(1, r / 1000)) * 100;
-      setDualBar(
-        barsRoot.children[0],
-        calPct,
-        rawPct,
-        p == null || !Number.isFinite(p) ? '—' : ('norm ' + p.toFixed(3)),
-        r == null || !Number.isFinite(r) ? '—' : ('raw ' + String(Math.round(r))),
-      );
+      const norm = p.position_norm;
+      const raw = p.raw_value != null ? p.raw_value : p.position_raw;
+      renderJointVals(root, [{
+        lab: 'grip',
+        showRaw: true,
+        calText: norm == null || !Number.isFinite(Number(norm)) ? 'norm —' : ('norm ' + Number(norm).toFixed(3)),
+        rawText: raw == null || !Number.isFinite(Number(raw)) ? 'raw —' : ('raw ' + String(Math.round(Number(raw)))),
+      }]);
     }
 
     function renderGripperWrite(card, frame, hzText) {
@@ -652,18 +656,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
       card.querySelector('.k-seq').textContent = String(frame.seq);
       card.querySelector('.k-hz').textContent = hzText;
       card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
-      const barsRoot = card.querySelector('.agent-bars');
-      ensureRows(barsRoot, 1, () => 'cmd', 'single');
       const p = frame.payload || {};
+      const root = ensureValsRoot(card);
       const norm = p.command_position_norm;
-      const pct = norm == null || !Number.isFinite(Number(norm))
-        ? 0
-        : Math.max(0, Math.min(1, Number(norm) / 0.637)) * 100;
       const ok = p.last_ok;
-      const txt = norm == null
-        ? (p.initialized ? '已初始化' : '未下发')
-        : ('norm ' + Number(norm).toFixed(3) + (ok === false ? ' ✗' : ok ? ' ✓' : ''));
-      setSingleBar(barsRoot.children[0], pct, txt);
+      let calText;
+      if (norm == null) calText = p.initialized ? '已初始化' : '未下发';
+      else calText = 'cmd ' + Number(norm).toFixed(3) + (ok === false ? ' ✗' : ok ? ' ✓' : '');
+      renderJointVals(root, [{ lab: 'cmd', calText: calText }]);
       let box = card.querySelector('.grip-cmd');
       if (!box) {
         box = document.createElement('div');
@@ -782,21 +782,24 @@ PREVIEW_HTML = """<!DOCTYPE html>
       card.querySelector('.k-seq').textContent = String(frame.seq);
       card.querySelector('.k-hz').textContent = hzText;
       card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
-      const barsRoot = card.querySelector('.agent-bars');
       const p = frame.payload || {};
       const n = Math.max(1, Number(p.num_joints) || 6);
-      const fb = p.feedback_joints_rad || p.command_joints_rad || [];
-      ensureRows(barsRoot, n, (i) => 'j' + i, 'single');
+      // Prefer live arm-read joints for display (safety: show measured pose).
+      const fb = (window.__armReadJoints && window.__armReadJoints.length)
+        ? window.__armReadJoints
+        : (p.feedback_joints_rad || p.command_joints_rad || []);
+      const root = ensureValsRoot(card);
+      const items = [];
       for (let i = 0; i < n; i++) {
-        const v = fb[i];
-        const pct = v == null || !Number.isFinite(Number(v))
-          ? 0
-          : ((Number(v) + Math.PI) / (2 * Math.PI)) * 100;
-        const txt = v == null || !Number.isFinite(Number(v))
-          ? '—'
-          : (Number(v).toFixed(3) + ' rad');
-        setSingleBar(barsRoot.children[i], pct, txt);
+        items.push({ lab: 'j' + i, cal: fb[i] });
       }
+      if (p.command_joints_rad) {
+        items.push({
+          lab: 'last_cmd',
+          calText: p.last_ok === false ? 'fail' : (p.last_ok ? 'ok' : '—'),
+        });
+      }
+      renderJointVals(root, items);
       let box = card.querySelector('.arm-cmd');
       if (!box) {
         box = document.createElement('div');
@@ -822,7 +825,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             '<span class="arm-armed-tag">idle</span>' +
           '</div>' +
           jogHtml +
-          '<span class="cmd-hint">先 Arm，再用 ± 按 delta 点动（单次 |Δq|≤驱动 max_delta，默认 2°）</span>';
+          '<span class="cmd-hint">须先有 robot·Read 当前角；Arm 后 ± 相对读数点动（|Δq|≤max_delta）</span>';
         card.appendChild(box);
         const delta = box.querySelector('.arm-delta');
         const deltaVal = box.querySelector('.arm-delta-val');
@@ -846,8 +849,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
           box.querySelectorAll('.arm-minus, .arm-plus').forEach((b) => { b.disabled = !on; });
         };
         box._applyArmUi = (armed) => {
-          armedTag.textContent = armed ? 'armed' : 'idle';
-          setJogEnabled(!!armed);
+          const hasRead = Array.isArray(window.__armReadJoints) && window.__armReadJoints.length > 0;
+          armedTag.textContent = !hasRead ? 'need read' : (armed ? 'armed' : 'idle');
+          setJogEnabled(!!armed && hasRead);
+          armBtn.disabled = !hasRead;
         };
         armBtn.addEventListener('click', async () => {
           runHint.textContent = '机械臂 Arm / TT_init…';
@@ -1038,13 +1043,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
     function connect() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      setConnStatus('connecting…', 'st-connecting');
       const ws = new WebSocket(`${proto}://${location.host}/ws`);
-      ws.onopen = () => { statusEl.textContent = 'live'; };
+      ws.onopen = () => { setConnStatus('live', 'st-live'); };
       ws.onclose = () => {
-        statusEl.textContent = 'reconnecting…';
+        setConnStatus('reconnecting…', 'st-reconnecting');
         setTimeout(connect, 800);
       };
-      ws.onerror = () => { statusEl.textContent = 'error'; };
+      ws.onerror = () => { setConnStatus('error', 'st-error'); };
       ws.onmessage = (ev) => {
         try { render(JSON.parse(ev.data)); } catch (e) {}
       };
@@ -1106,6 +1112,7 @@ def create_viz_app(
     gripper_gello_sync: Callable[..., dict[str, Any]] | None = None,
     gripper_gello_sync_status: Callable[[], dict[str, Any]] | None = None,
     arm_command: Callable[..., dict[str, Any]] | None = None,
+    shutdown: Callable[[], dict[str, Any]] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="sensors-dcs viz", version="0.1.0")
 
@@ -1192,6 +1199,12 @@ def create_viz_app(
             delta_rad=req.delta_rad,
             delta_deg=req.delta_deg,
         )
+
+    @app.post("/api/shutdown")
+    async def api_shutdown() -> dict[str, Any]:
+        if shutdown is None:
+            return {"ok": False, "error": "shutdown unavailable"}
+        return await asyncio.to_thread(shutdown)
 
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket) -> None:

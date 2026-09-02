@@ -48,7 +48,9 @@ class ArmAgent(BaseAgent):
 
         joints = sample.get("joints_rad")
         dry = bool(sample.get("dry_run")) or joints is None
-        if dry and self.dry_run_synth:
+        # Only synth when the sensor has no joints yet — if sharing arm_write in
+        # dry_run, keep the driver's reported pose so jog stays relative to it.
+        if dry and self.dry_run_synth and joints is None:
             joints = self._synth_joints(t_wall)
             sample = {
                 **sample,

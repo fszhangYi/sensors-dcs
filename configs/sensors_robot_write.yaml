@@ -1,5 +1,4 @@
-# hik-sensors — Elite arm WRITE (TT stream, arm/disarm gated)
-# Do NOT use for collection-only machines without reviewing docs/arm-write.md
+# One Elite device shared by arm (read) + arm_write agents — single EC session.
 version: 1
 site: dcs-robot-write
 dry_run: true
@@ -15,9 +14,9 @@ defaults:
     tt_response_enable: 0
 
 devices:
-  - id: arm-elite-write
+  - id: arm-elite
     kind: arm_write
-    name: "Elite · Arm (write gated)"
+    name: "Elite · Arm (read+write gated)"
     endpoint: "10.111.34.200"
     params:
       robot_ip: "10.111.34.200"
