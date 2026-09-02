@@ -15,6 +15,7 @@ from sensors import SensorManager  # noqa: E402
 from sensors_dcs.agents import build_agent
 from sensors_dcs.agents.base import BaseAgent
 from sensors_dcs.config import DcsConfig, config_summary
+from sensors_dcs.frame import Frame
 from sensors_dcs.record import RecordController
 from sensors_dcs.viz import VizHub, create_viz_app
 
@@ -83,9 +84,11 @@ class Orchestrator:
         for aid, agent in self.agents.items():
             fr = agent.ring.latest.get()
             if fr is not None:
-                frames.append(fr.to_dict())
+                frames.append(self._frame_for_viz(fr))
+            st = agent.stats()
             agent_rates[aid] = {
                 "hz_target": agent.hz,
+                "hz_meas": st.get("hz_meas"),
                 "seq": fr.seq if fr is not None else None,
                 "t_wall": fr.t_wall if fr is not None else None,
             }
@@ -100,6 +103,19 @@ class Orchestrator:
             "frames": frames,
             "record": self.recorder.status(),
         }
+
+    @staticmethod
+    def _frame_for_viz(fr: Frame) -> dict[str, Any]:
+        """Serialize frame for WebSocket: keep preview JPEG, drop full-res disk JPEG."""
+        data = fr.to_dict()
+        payload = dict(data.get("payload") or {})
+        preview = payload.get("jpeg_b64_preview") or payload.get("jpeg_b64")
+        payload.pop("jpeg_b64", None)
+        payload.pop("jpeg_b64_preview", None)
+        if preview is not None:
+            payload["jpeg_b64_preview"] = preview
+        data["payload"] = payload
+        return data
 
     def _viz_loop(self) -> None:
         period = 1.0 / max(0.1, self.cfg.runtime.viz_hz)

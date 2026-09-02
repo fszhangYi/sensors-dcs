@@ -11,7 +11,7 @@ from sensors_dcs.paths import project_root
 
 class AgentConfig(BaseModel):
     id: str
-    type: Literal["gello", "gripper_read", "realsense"] = "gello"
+    type: Literal["gello", "arm", "gripper_read", "realsense"] = "gello"
     sensor_id: str
     hz: float = 50.0
     buffer_frames: int = 64
@@ -102,6 +102,7 @@ def load_dcs_config(path: str | Path) -> DcsConfig:
             "    %APPDATA%\\sensors-dcs\\configs\\gello_gripper.yaml\n"
             "    %APPDATA%\\sensors-dcs\\configs\\camera-only.yaml\n"
             "    %APPDATA%\\sensors-dcs\\configs\\camera-multi.yaml\n"
+            "    %APPDATA%\\sensors-dcs\\configs\\robot_only.yaml\n"
             "  Or: sensors-dcs.exe -c <path-to-gello_only.yaml>"
         )
 

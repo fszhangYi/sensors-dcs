@@ -37,6 +37,8 @@ class BaseAgent(ABC):
         self._error_count = 0
         self._last_error: str | None = None
         self._ok_count = 0
+        self._last_ok_mono: float | None = None
+        self._hz_ema: float | None = None
 
     @property
     def sensor_id(self) -> str:
@@ -71,6 +73,7 @@ class BaseAgent(ABC):
             "sensor_id": self.sensor_id,
             "kind": self.kind,
             "hz_target": self.hz,
+            "hz_meas": self._hz_ema,
             "ok_count": self._ok_count,
             "error_count": self._error_count,
             "last_error": self._last_error,
@@ -91,6 +94,15 @@ class BaseAgent(ABC):
                 frame = self.read_frame()
                 self._ok_count += 1
                 self._last_error = None
+                now_ok = time.perf_counter()
+                if self._last_ok_mono is not None:
+                    dt = now_ok - self._last_ok_mono
+                    if dt > 1e-4:
+                        inst = 1.0 / dt
+                        self._hz_ema = (
+                            inst if self._hz_ema is None else self._hz_ema * 0.8 + inst * 0.2
+                        )
+                self._last_ok_mono = now_ok
             except Exception as e:  # noqa: BLE001
                 self._error_count += 1
                 self._last_error = str(e)

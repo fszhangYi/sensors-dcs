@@ -118,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     p_filter.add_argument(
         "--materialize",
         action="store_true",
-        help="copy images to export/filtered/images/<agent>/<step>.jpg",
+        help="write episode-shaped export/filtered/{manifest.json,states/,cameras/}",
     )
     p_filter.add_argument(
         "--dedupe",

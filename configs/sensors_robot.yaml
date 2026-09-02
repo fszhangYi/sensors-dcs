@@ -1,0 +1,21 @@
+# hik-sensors bundle — Elite arm READ-ONLY (network monitor)
+# Never use kind: arm (ZMQ control) for collection; use arm_read only.
+version: 1
+site: dcs-robot-read
+dry_run: true
+
+defaults:
+  arm_read:
+    num_joints: 6
+    robot_tcp_port: 54321
+    monitor_wait_s: 10
+
+devices:
+  - id: arm-elite
+    kind: arm_read
+    name: "Elite · Arm (read-only)"
+    # Controller IP — also accepted as params.robot_ip
+    endpoint: "10.111.34.200"
+    params:
+      robot_ip: "10.111.34.200"
+      num_joints: 6

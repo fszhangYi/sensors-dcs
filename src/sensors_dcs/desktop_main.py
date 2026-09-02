@@ -131,7 +131,18 @@ def main(argv: list[str] | None = None) -> None:
     assert orch is not None
     app = create_viz_app(orch.hub, orch.status, recorder=orch.recorder)
     orch.cfg.runtime.viz_port = port
-    orch.start()
+    try:
+        orch.start()
+    except Exception as e:  # noqa: BLE001
+        boot_error = f"{e}\n\n{traceback.format_exc()}"
+        print(f"[sensors-dcs] start error (UI will show details):\n{e}", flush=True)
+        app = create_error_app(error=boot_error, config_path=str(cfg_path))
+        if not open_ui:
+            print(f"[sensors-dcs] start error (headless): {boot_error.splitlines()[0]}", flush=True)
+            print(f"[sensors-dcs] details at {url} — run with --ui to open automatically", flush=True)
+        serve_app_blocking(app, host=host, port=port, open_ui=open_ui)
+        return
+
     print(
         f"[sensors-dcs] site={orch.cfg.site} dry_run={orch.manager.ctx.dry_run}",
         flush=True,

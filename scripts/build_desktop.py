@@ -14,6 +14,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
 APP_ID = "sensors-dcs"
 APP_EXE = "sensors-dcs"
 PIP_INDEX = os.environ.get("PIP_INDEX_URL", "https://pypi.tuna.tsinghua.edu.cn/simple")
@@ -122,6 +123,8 @@ def _verify_bundled_imports(py_cmd: list[str], *, env: dict | None = None) -> No
         "numpy",
         "pandas",
         "pyarrow",
+        "elite",
+        "pyrealsense2",
         "cv2",
         "webview",
         "httptools",
@@ -131,18 +134,134 @@ def _verify_bundled_imports(py_cmd: list[str], *, env: dict | None = None) -> No
         "fastapi",
         "uvicorn",
     ]
-    mods = ",".join(f"'{m}'" for m in required)
-    code = (
-        "import importlib.util as u;"
-        f"mods=[{mods}];"
-        "missing=[m for m in mods if u.find_spec(m) is None];"
-        "import sys;"
-        "sys.exit('missing '+str(missing)) if missing else print('bundled_ok', len(mods))"
+    script = TMP_BASE / "_verify_wine_imports.py"
+    script.write_text(
+        "\n".join(
+            [
+                "import importlib.util as u",
+                "import os",
+                "import sys",
+                "import tempfile",
+                f"mods = {required!r}",
+                "missing = [m for m in mods if u.find_spec(m) is None]",
+                "if missing:",
+                "    sys.exit('missing ' + str(missing))",
+                "import pandas as pd",
+                "import pyarrow",
+                "from elite import EC",
+                "import pyrealsense2",
+                'p = os.path.join(tempfile.gettempdir(), "sensors_dcs_parquet_smoke.parquet")',
+                'pd.DataFrame({"x": [1]}).to_parquet(p, index=False, engine="pyarrow")',
+                "os.remove(p)",
+                "print('bundled_ok', len(mods))",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
     )
-    _run([*py_cmd, "-c", code], env=env)
+    script_arg = _linux_to_wine_path(script) if py_cmd[0] in ("wine64", "wine") else str(script)
+    _run([*py_cmd, script_arg], env=env)
+
+
+def _verify_bundled_pyarrow(release: Path) -> None:
+    internal = release / "_internal"
+    pyarrow_dir = internal / "pyarrow"
+    libs_dir = internal / "pyarrow.libs"
+    if not pyarrow_dir.is_dir():
+        raise SystemExit(
+            f"build verification failed: missing {pyarrow_dir} — "
+            "pyarrow was not collected into the desktop bundle"
+        )
+    has_ext = any(pyarrow_dir.rglob("*.pyd")) or any(pyarrow_dir.rglob("*.so"))
+    if not has_ext:
+        raise SystemExit(
+            f"build verification failed: no pyarrow binary modules under {pyarrow_dir}"
+        )
+    dlls = sorted(libs_dir.glob("*.dll"))
+    if not dlls:
+        raise SystemExit(
+            f"build verification failed: missing MSVC DLLs under {libs_dir} "
+            "(pyarrow.libs must be bundled for Windows parquet export)"
+        )
+    print(
+        f"[verify] pyarrow bundled ({len(list(pyarrow_dir.rglob('*')))} files, "
+        f"{len(dlls)} pyarrow.libs dlls)"
+    )
+
+
+def _bundle_native_libs(built: Path, py_dir: Path) -> None:
+    """Copy ``*.libs`` MSVC runtime folders PyInstaller often drops for pyarrow/pandas."""
+    internal = built / "_internal"
+    site = py_dir / "Lib" / "site-packages"
+    for name in ("pyarrow", "pandas"):
+        src = site / f"{name}.libs"
+        dst = internal / f"{name}.libs"
+        if not src.is_dir():
+            if name == "pyarrow":
+                raise SystemExit(
+                    f"missing {src} in Wine embed Python — pip install pyarrow in build env"
+                )
+            print(f"[warn] {name}.libs not found under {site}")
+            continue
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(src, dst)
+        print(f"[postprocess] bundled {name}.libs ({len(list(dst.glob('*.dll')))} dlls)")
+
+
+def _verify_frozen_parquet_smoke(
+    wine: str,
+    py_dir: Path,
+    built: Path,
+    env: dict[str, str],
+) -> None:
+    """Import pyarrow from the onedir _internal tree under Wine (matches Windows layout)."""
+    internal_w = _linux_to_wine_path(built / "_internal")
+    script = TMP_BASE / "_verify_frozen_parquet.py"
+    script.write_text(
+        "\n".join(
+            [
+                "import os, sys, tempfile",
+                f"internal = {internal_w!r}",
+                'pyarrow_libs = internal + r"\\pyarrow.libs"',
+                'pyarrow_dir = internal + r"\\pyarrow"',
+                "path_add = os.pathsep.join([pyarrow_libs, pyarrow_dir, internal])",
+                'os.environ["PATH"] = path_add + os.pathsep + os.environ.get("PATH", "")',
+                "sys.path.insert(0, internal)",
+                "import pyarrow",
+                "import pandas as pd",
+                'p = os.path.join(tempfile.gettempdir(), "sensors_dcs_parquet_smoke.parquet")',
+                'pd.DataFrame({"x": [1]}).to_parquet(p, index=False, engine="pyarrow")',
+                "os.remove(p)",
+                'print("frozen_parquet_ok", pyarrow.__version__)',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    py_wine = _linux_to_wine_path(py_dir / "python.exe")
+    script_w = _linux_to_wine_path(script)
+    _run([wine, py_wine, script_w], env=env)
+
+
+def _verify_bundled_robot_sdk(release: Path) -> None:
+    internal = release / "_internal"
+    elite_dir = internal / "elite"
+    if not elite_dir.is_dir():
+        raise SystemExit(
+            f"build verification failed: missing {elite_dir} "
+            "(pip install elirobots in Wine build env)"
+        )
+    rs = list(internal.glob("pyrealsense2/**/*.pyd")) + list(internal.glob("pyrealsense2/*.pyd"))
+    if not rs:
+        raise SystemExit(
+            f"build verification failed: pyrealsense2 binaries missing under {internal / 'pyrealsense2'}"
+        )
+    print(f"[verify] elite + pyrealsense2 bundled ({len(list(elite_dir.rglob('*.py')))} elite py files)")
 
 
 def _postprocess_windows(built: Path, py_dir: Path) -> None:
+    _bundle_native_libs(built, py_dir)
     internal = built / "_internal"
     internal.mkdir(parents=True, exist_ok=True)
     embed_zip = py_dir / "python310.zip"
@@ -191,7 +310,32 @@ def _postprocess_windows(built: Path, py_dir: Path) -> None:
                     dst.writestr(name, src.read(name))
 
 
-def build_windows(*, skip_frontend: bool = True) -> Path:
+def _maybe_build_delta(release: Path) -> Path | None:
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        from release_delta import build_delta_zip, pick_baseline, write_manifest
+    finally:
+        if sys.path and sys.path[0] == str(SCRIPTS):
+            sys.path.pop(0)
+
+    write_manifest(release)
+    baseline = pick_baseline(release)
+    if baseline is None:
+        print("[delta] skip (no previous release under release/)")
+        return None
+
+    delta_zip = release.with_name(f"{release.name}-delta.zip")
+    summary = build_delta_zip(current_dir=release, baseline_dir=baseline, output_zip=delta_zip)
+    print(
+        f"[delta] baseline={summary.baseline} "
+        f"changed={len(summary.changed)} added={len(summary.added)} "
+        f"removed={len(summary.removed)}"
+    )
+    print(f"delta zip: {delta_zip}")
+    return delta_zip
+
+
+def build_windows(*, skip_frontend: bool = True, delta: bool = True) -> Path:
     del skip_frontend  # UI is FastAPI-embedded; stub frontend-dist is enough
     if not (ROOT / "sensors" / "src" / "sensors").is_dir():
         raise SystemExit(
@@ -264,6 +408,9 @@ def build_windows(*, skip_frontend: bool = True) -> Path:
         raise SystemExit(f"PyInstaller output missing: {built}")
 
     _postprocess_windows(built, py_dir)
+    _verify_bundled_pyarrow(built)
+    _verify_bundled_robot_sdk(built)
+    _verify_frozen_parquet_smoke(wine, py_dir, built, env)
 
     stamp = _utc_stamp()
     release = ROOT / "release" / f"{APP_ID}-desktop-windows-x64-{stamp}"
@@ -306,10 +453,12 @@ def build_windows(*, skip_frontend: bool = True) -> Path:
                 "10. Desktop window needs Microsoft Edge WebView2 Runtime",
                 "11. Hardware: dynamixel-sdk + pyserial bundled (Gello)",
                 "    Install FTDI/USB-serial driver; match baudrate (default 57600)",
-                "12. RealSense: install Intel RealSense SDK / pyrealsense2 on target",
-                "    if you need live camera (dry_run synth works without it)",
+                "12. RealSense: pyrealsense2 bundled; USB camera still needs Intel driver",
                 "13. Export: sensors-dcs.exe export-timeline -e episode_00000 --align asof",
-                "    filter-timeline also bundled (pandas/pyarrow included in this build)",
+                "    filter-timeline also bundled (pandas/pyarrow in _internal/pyarrow/)",
+                "    First install: use the FULL .zip; delta.zip only patches an existing install",
+                "14. Elite arm (arm_read): elite SDK bundled (PyPI elirobots); set robot_ip in config",
+                "    Monitor port 8056; control port not used (read-only driver)",
                 "",
             ]
         ),
@@ -325,6 +474,8 @@ def build_windows(*, skip_frontend: bool = True) -> Path:
                 zf.write(path, arcname=str(path.relative_to(release.parent)))
     print(f"release: {release}")
     print(f"zip: {zip_path}")
+    if delta:
+        _maybe_build_delta(release)
     return release
 
 
@@ -337,9 +488,14 @@ def main() -> None:
         help="windows = Wine cross-build (scheme-a-linux-to-windows-desktop)",
     )
     parser.add_argument("--skip-frontend", action="store_true", default=True)
+    parser.add_argument(
+        "--no-delta",
+        action="store_true",
+        help="skip incremental delta.zip vs previous release",
+    )
     args = parser.parse_args()
     if args.target == "windows":
-        build_windows(skip_frontend=args.skip_frontend)
+        build_windows(skip_frontend=args.skip_frontend, delta=not args.no_delta)
     else:
         raise SystemExit(f"unsupported target: {args.target}")
 

@@ -25,6 +25,7 @@ Build a self-contained Windows desktop onedir under release/.
 Options:
   --target windows                Build target (default / only: windows)
   --skip-frontend                 Skip frontend build (default; UI is embedded)
+  --no-delta                      Skip incremental delta.zip vs previous release
   -h, --help                      Show this help
 
 Environment:
@@ -41,6 +42,11 @@ Examples:
 Output:
   release/sensors-dcs-desktop-windows-x64-<UTC>/
   release/sensors-dcs-desktop-windows-x64-<UTC>.zip
+  release/sensors-dcs-desktop-windows-x64-<UTC>-delta.zip   (if a prior release exists)
+
+Manual delta (without full rebuild):
+  bash scripts/build-delta.sh
+  bash scripts/build-delta.sh --baseline release/<old> --current release/<new>
 
 Prerequisites:
   wine64 (or wine), curl, unzip, python3
@@ -56,6 +62,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-frontend)
       SKIP_FRONTEND=1
+      shift
+      ;;
+    --no-delta)
+      EXTRA+=("--no-delta")
       shift
       ;;
     -h|--help)

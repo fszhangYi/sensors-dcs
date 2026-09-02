@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from sensors_dcs.export.parquet_io import require_pandas, write_parquet
+
 AlignMode = Literal["asof", "nearest", "grid", "union"]
 ExportFormat = Literal["parquet", "csv", "both"]
 
@@ -49,7 +51,7 @@ def _flatten_state_row(row: dict[str, Any]) -> Sample:
     payload = dict(row.get("payload") or {})
     kind = str(row.get("kind") or "")
     fields: dict[str, Any] = {}
-    if kind == "gello":
+    if kind == "gello" or kind == "arm_read":
         joints = payload.get("joints_rad")
         if joints is not None:
             fields["joints_rad"] = list(joints)
@@ -145,24 +147,15 @@ def pick_default_master(manifest: dict[str, Any], samples: list[Sample]) -> str:
     gello_ids = sorted(aid for aid, kind in agents.items() if kind == "gello")
     if gello_ids:
         return gello_ids[0]
+    arm_ids = sorted(aid for aid, kind in agents.items() if kind == "arm_read")
+    if arm_ids:
+        return arm_ids[0]
     state_ids = sorted(aid for aid, kind in agents.items() if kind != "realsense")
     if state_ids:
         return max(state_ids, key=lambda aid: _agent_hz(manifest, aid))
     if agents:
         return sorted(agents)[0]
     raise ValueError("episode has no samples")
-
-
-def _require_pandas():
-    try:
-        import pandas as pd  # noqa: F401
-    except ImportError as exc:  # pragma: no cover
-        raise ImportError(
-            "export-timeline requires pandas. "
-            "Dev: pip install -e '.[export]'. "
-            "Desktop exe: rebuild with requirements-desktop.txt (includes pandas/pyarrow)."
-        ) from exc
-    return pd
 
 
 def _sample_event_row(sample: Sample, t_start: float) -> dict[str, Any]:
@@ -179,7 +172,7 @@ def _sample_event_row(sample: Sample, t_start: float) -> dict[str, Any]:
         "dry_run": sample.dry_run,
         "file_missing": sample.file_missing,
     }
-    if sample.kind == "gello":
+    if sample.kind in {"gello", "arm_read"}:
         for i, val in enumerate(sample.fields.get("joints_rad") or []):
             row[f"j{i}"] = float(val)
     elif sample.kind == "gripper_read":
@@ -191,7 +184,7 @@ def _sample_event_row(sample: Sample, t_start: float) -> dict[str, Any]:
 
 
 def build_events_frame(manifest: dict[str, Any], samples: list[Sample]):
-    pd = _require_pandas()
+    pd = require_pandas()
     t_start = _t_start(manifest, samples)
     rows = [_sample_event_row(s, t_start) for s in samples]
     if not rows:
@@ -216,7 +209,7 @@ def build_events_frame(manifest: dict[str, Any], samples: list[Sample]):
 
 def _agent_value_columns(agent_id: str, sample: Sample) -> dict[str, Any]:
     cols: dict[str, Any] = {f"{agent_id}.seq": sample.seq, f"{agent_id}.t_wall_src": sample.t_wall}
-    if sample.kind == "gello":
+    if sample.kind in {"gello", "arm_read"}:
         for i, val in enumerate(sample.fields.get("joints_rad") or []):
             cols[f"{agent_id}.j{i}"] = float(val)
     elif sample.kind == "gripper_read":
@@ -231,7 +224,7 @@ def _agent_value_columns(agent_id: str, sample: Sample) -> dict[str, Any]:
 
 
 def _agent_frame(samples: list[Sample], agent_id: str, t_start: float):
-    pd = _require_pandas()
+    pd = require_pandas()
     rows: list[dict[str, Any]] = []
     for s in samples:
         row = {"t_wall": s.t_wall, "t_rel": s.t_wall - t_start}
@@ -245,24 +238,24 @@ def _agent_frame(samples: list[Sample], agent_id: str, t_start: float):
 
 
 def _asof_join(base, agent_df, agent_id: str, *, direction: str = "backward"):
-    pd = _require_pandas()
+    pd = require_pandas()
     if agent_df.empty:
         base[f"{agent_id}.match_dt"] = float("nan")
         return base
     src_col = f"{agent_id}.t_wall_src"
+    right = agent_df.sort_values("t_wall").drop(columns=["t_rel"], errors="ignore")
     merged = pd.merge_asof(
         base.sort_values("t_wall"),
-        agent_df.sort_values("t_wall"),
+        right,
         on="t_wall",
         direction=direction,
-        suffixes=("", "_y"),
     )
     merged[f"{agent_id}.match_dt"] = merged["t_wall"] - merged[src_col]
     return merged.drop(columns=[src_col], errors="ignore")
 
 
 def _nearest_join(base_times: list[float], agent_df, agent_id: str):
-    pd = _require_pandas()
+    pd = require_pandas()
     if agent_df.empty:
         return pd.DataFrame({"t_wall": base_times})
     src_times = agent_df["t_wall"].tolist()
@@ -341,7 +334,7 @@ def build_aligned_frame(
     hz: float | None = None,
     master_hz: float | None = None,
 ):
-    pd = _require_pandas()
+    pd = require_pandas()
     if not samples:
         return pd.DataFrame()
 
@@ -393,7 +386,7 @@ def _write_frame(df, path: Path, fmt: ExportFormat) -> None:
     if fmt == "csv":
         df.to_csv(path, index=False)
     else:
-        df.to_parquet(path, index=False)
+        write_parquet(df, path, index=False)
 
 
 def export_episode_timeline(

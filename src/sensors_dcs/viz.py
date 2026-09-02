@@ -203,9 +203,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
       color: var(--muted);
       display: flex;
       justify-content: space-between;
-      gap: 0.5rem;
+      align-items: baseline;
+      gap: 0.45rem;
+      flex-wrap: wrap;
     }
     .cam-cell .cam-title strong { color: var(--accent); font-weight: 600; }
+    .cam-cell .cam-title .k-hz { color: #7dcea0; font-variant-numeric: tabular-nums; }
     .cam-cell img {
       width: 100%;
       height: 100%;
@@ -302,7 +305,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
         cell.className = 'cam-cell empty';
         cell.id = 'cam-slot-' + slot.key;
         cell.innerHTML =
-          '<div class="cam-title"><span>' + slot.label + '</span><strong class="k-agent">—</strong></div>' +
+          '<div class="cam-title">' +
+            '<span>' + slot.label + '</span>' +
+            '<strong class="k-agent">—</strong>' +
+            '<strong class="k-hz">— Hz</strong>' +
+          '</div>' +
           '<img alt="' + slot.label + '" />' +
           '<div class="cam-sub k-sub">empty</div>';
         camGridEl.appendChild(cell);
@@ -441,7 +448,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
 
     function renderGello(card, frame, hzText) {
-      card.querySelector('h2').textContent = frame.agent_id + ' · Gello';
+      const title =
+        frame.kind === 'arm_read'
+          ? 'robot · Read'
+          : frame.agent_id + ' · Gello';
+      card.querySelector('h2').textContent = title;
       card.querySelector('.k-kind').textContent = frame.kind;
       card.querySelector('.k-seq').textContent = String(frame.seq);
       card.querySelector('.k-hz').textContent = hzText;
@@ -456,7 +467,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
 
     function renderGripperRead(card, frame, hzText) {
-      card.querySelector('h2').textContent = frame.agent_id + ' · Gripper Read';
+      card.querySelector('h2').textContent = 'gripper · Read';
       card.querySelector('.k-kind').textContent = frame.kind;
       card.querySelector('.k-seq').textContent = String(frame.seq);
       card.querySelector('.k-hz').textContent = hzText;
@@ -489,30 +500,38 @@ PREVIEW_HTML = """<!DOCTYPE html>
       cell.classList.remove('empty');
       const p = frame.payload || {};
       cell.querySelector('.k-agent').textContent = frame.agent_id;
+      const hzEl = cell.querySelector('.k-hz');
+      if (hzEl) hzEl.textContent = hzText;
       const img = cell.querySelector('img');
-      if (p.jpeg_b64) img.src = 'data:image/jpeg;base64,' + p.jpeg_b64;
+      if (p.jpeg_b64_preview) img.src = 'data:image/jpeg;base64,' + p.jpeg_b64_preview;
+      else if (p.jpeg_b64) img.src = 'data:image/jpeg;base64,' + p.jpeg_b64;
       const sn = p.serial || '—';
       const dry = p.dry_run ? ' dry' : '';
+      const fps = p.fps != null ? (' · cfg ' + Number(p.fps).toFixed(0) + 'fps') : '';
       cell.querySelector('.k-sub').textContent =
-        'seq ' + frame.seq + ' · ' + hzText + ' · sn ' + sn + dry;
+        'seq ' + frame.seq + ' · sn ' + sn + fps + dry;
     }
 
-    function updateBackHz(agentId, frame, target) {
+    function updateBackHz(agentId, frame, target, measFromBackend, nowT) {
       let st = backState[agentId];
       if (!st) {
         st = { lastSeq: null, lastT: null, ema: null };
         backState[agentId] = st;
       }
-      if (st.lastSeq != null && st.lastT != null) {
+      // Prefer agent-loop measured rate from backend (stable even if sensor ts stalls).
+      if (measFromBackend != null && Number.isFinite(Number(measFromBackend))) {
+        st.ema = Number(measFromBackend);
+      } else if (st.lastSeq != null && st.lastT != null) {
         const dSeq = frame.seq - st.lastSeq;
-        const dT = frame.t_wall - st.lastT;
+        // Use viz message clock, not sensor t_wall (camera ts can repeat).
+        const dT = nowT - st.lastT;
         if (dSeq > 0 && dT > 1e-4) {
           const inst = dSeq / dT;
           st.ema = st.ema == null ? inst : st.ema * 0.8 + inst * 0.2;
         }
       }
       st.lastSeq = frame.seq;
-      st.lastT = frame.t_wall;
+      st.lastT = nowT;
       return fmtRate(st.ema, target);
     }
 
@@ -537,7 +556,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const usedSlots = new Set();
       frames.forEach((frame) => {
         const ar = agentRates[frame.agent_id] || {};
-        const hzText = updateBackHz(frame.agent_id, frame, ar.hz_target);
+        const hzText = updateBackHz(
+          frame.agent_id,
+          frame,
+          ar.hz_target,
+          ar.hz_meas,
+          msg.t_wall,
+        );
         if (frame.kind === 'realsense') {
           const slot = pickCamSlot(frame, usedSlots);
           if (slot) {
@@ -555,7 +580,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       });
 
       rawEl.textContent = JSON.stringify(msg, (k, v) => {
-        if (k === 'jpeg_b64' && typeof v === 'string') {
+        if ((k === 'jpeg_b64' || k === 'jpeg_b64_preview') && typeof v === 'string') {
           return '<jpeg ' + v.length + ' chars>';
         }
         return v;

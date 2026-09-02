@@ -122,6 +122,83 @@ def test_filter_dedupe_option(episode_with_aligned: Path) -> None:
     assert len(out) < len(df)
 
 
+def test_materialize_writes_episode_tree(tmp_path: Path) -> None:
+    ep = tmp_path / "episode_00000"
+    (ep / "states").mkdir(parents=True)
+    (ep / "cameras" / "camera").mkdir(parents=True)
+    manifest = {
+        "site": "test",
+        "episode_index": 0,
+        "t_start": 1000.0,
+        "t_end": 1000.04,
+        "agents": [
+            {"agent_id": "gello", "kind": "gello", "hz_target": 50.0, "sensor_id": "g"},
+            {"agent_id": "camera", "kind": "realsense", "hz_target": 15.0, "sensor_id": "rs"},
+        ],
+        "format": "dcs_episode_v1",
+    }
+    (ep / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    for i, tw in enumerate([1000.00, 1000.02, 1000.04]):
+        row = {
+            "agent_id": "gello",
+            "sensor_id": "g",
+            "kind": "gello",
+            "seq": i,
+            "t_wall": tw,
+            "t_mono": float(i),
+            "payload": {"joints_rad": [0.1 * i, 0.2]},
+        }
+        with (ep / "states" / "gello.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+    for i, tw in enumerate([1000.00, 1000.02]):
+        name = f"{i:08d}.jpg"
+        (ep / "cameras" / "camera" / name).write_bytes(b"jpeg" + bytes([i]))
+        crow = {
+            "agent_id": "camera",
+            "sensor_id": "rs",
+            "kind": "realsense",
+            "seq": i,
+            "t_wall": tw,
+            "t_mono": float(i),
+            "file": name,
+            "role": "middle",
+        }
+        with (ep / "cameras" / "camera" / "index.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps(crow) + "\n")
+
+    export_episode_timeline(ep, align="asof", master="gello", fmt="parquet")
+    meta = filter_episode_timeline(
+        ep,
+        require="gello,camera",
+        trim="none",
+        max_match_dt="0.05",
+        materialize=True,
+    )
+    filtered = ep / "export" / "filtered"
+    assert (filtered / "manifest.json").is_file()
+    assert (filtered / "states" / "gello.jsonl").is_file()
+    assert (filtered / "cameras" / "camera" / "index.jsonl").is_file()
+    assert meta["materialize_info"]["rows"] >= 1
+
+    gello_lines = (filtered / "states" / "gello.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert len(gello_lines) == meta["rows_out"]
+    first = json.loads(gello_lines[0])
+    assert first["seq"] == 0
+    assert first["kind"] == "gello"
+    assert "joints_rad" in first["payload"]
+
+    cam_index = (filtered / "cameras" / "camera" / "index.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert len(cam_index) >= 1
+    cam0 = json.loads(cam_index[0])
+    assert cam0["file"] == "00000000.jpg"
+    assert (filtered / "cameras" / "camera" / "00000000.jpg").is_file()
+
+    fm = json.loads((filtered / "manifest.json").read_text(encoding="utf-8"))
+    assert fm["format"] == "dcs_episode_v1"
+    assert fm["derived_from"] == "episode_00000"
+    assert fm["rows"] == meta["rows_out"]
+
+
 def test_filter_meta_written(episode_with_aligned: Path) -> None:
     filter_episode_timeline(episode_with_aligned, require="gello", trim="none")
     meta_path = episode_with_aligned / "export" / "filter_meta.json"

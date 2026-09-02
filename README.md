@@ -1,6 +1,6 @@
 # sensors-dcs
 
-在 **hik-sensors**（本地 `./sensors` 软链接）之上的数据采集运行时（Agent / 缓冲 / 可视化）。当前 Agent：`gello` / `gripper_read` / `realsense`。
+在 **hik-sensors**（本地 `./sensors` 软链接）之上的数据采集运行时（Agent / 缓冲 / 可视化）。当前 Agent：`gello` / `arm`（Elite 只读） / `gripper_read` / `realsense`。
 
 ## 依赖布局
 
@@ -44,7 +44,27 @@ sensors-dcs run -c configs/camera-multi.yaml
 
 # gello + gripper + 多相机
 sensors-dcs run -c configs/full_cell.yaml
+
+# 仅 Elite 机械臂（网络只读，不下发）
+sensors-dcs run -c configs/robot_only.yaml
 ```
+
+### Elite 机械臂只读（`robot_only`）
+
+与串口类 sensor 不同，Elite 通过 **以太网** 读控制器监控流（`elite.EC` → `monitor_info.machinePos`），对齐 `hik_gello/.../elite_robot.py` 的读关节路径。
+
+**硬约束：只读取，永不下发。** 驱动 `kind=arm_read` 不调用 `robot_servo_on` / `TT_init` / `move_joint` / `TT_add_joint` / IO 等；`write()` 直接抛错。
+
+```bash
+# 1) 默认 dry_run=true：合成关节角，无需 SDK / 真机
+sensors-dcs run -c configs/robot_only.yaml
+
+# 2) 真机：改 configs/sensors_robot.yaml 里 robot_ip / endpoint，
+#    本机安装 Elite EC Python SDK（import elite），再：
+sensors-dcs run -c configs/robot_only.yaml --no-dry-run
+```
+
+配套文件：`configs/robot_only.yaml`（DCS）+ `configs/sensors_robot.yaml`（设备清单）。
 
 浏览器打开：`http://127.0.0.1:7011/`（CLI `run` 会尝试打开浏览器）  
 页面显示保存路径与 episode；「开始/结束」控制流水线写盘（传感器常开）。  
@@ -370,7 +390,7 @@ sensors-dcs filter-timeline -e configs/data/episode_00000 \
   --max-match-dt 0.033 \
   --trim both
 
-# per-agent 阈值 + 物化图片到 export/filtered/images/<agent>/<step>.jpg
+# per-agent 阈值 + 物化成与生数据同构的 episode 树
 sensors-dcs filter-timeline -e episode_00000 \
   --require cam-left,cam-right \
   --max-match-dt cam-left:0.033,cam-right:0.05 \
@@ -384,7 +404,7 @@ sensors-dcs filter-timeline -e episode_00000 \
 | `--trim` | `none` / `start` / `end` / `both`（默认 `both`） |
 | `--dedupe` | 按列去重**连续重复行**（如 `cam-left.image_relpath` 或 `cam-left.*`） |
 | `--master` | 覆盖 master（默认读 `export_meta.json`） |
-| `--materialize` | 按 `step` 复制相机图到 `export/filtered/images/` |
+| `--materialize` | 写出 `export/filtered/{manifest.json,states/,cameras/}`（与生数据同构） |
 
 输出：
 
@@ -392,7 +412,11 @@ sensors-dcs filter-timeline -e episode_00000 \
 episode_00000/export/
   timeline_filtered.parquet
   filter_meta.json              # rows_in/out, tail_after_master, drop_reasons
-  filtered/images/cam-left/00000000.jpg   # --materialize 时
+  filtered/                     # --materialize
+    manifest.json
+    states/gello.jsonl
+    cameras/cam-left/00000000.jpg
+    cameras/cam-left/index.jsonl
 ```
 
 Python 读取过滤结果：
@@ -412,8 +436,8 @@ step = int(row["step"])  # 从 0 连续
 
 ```text
 episode → export-timeline --align asof --master …
-        → filter-timeline --require … --trim both
-        → timeline_filtered.parquet（step=0..N-1）
+        → filter-timeline --require … --trim both [--materialize]
+        → timeline_filtered.parquet +（可选）export/filtered/{manifest,states,cameras}
 ```
 
 ## 配置
@@ -430,6 +454,8 @@ episode → export-timeline --align asof --master …
 | `configs/sensors_cameras.yaml` | 多路设备清单（middle 已写死；left/right 需填 serial） |
 | `configs/full_cell.yaml` | gello + gripper_read + 多路 RealSense |
 | `configs/sensors_full_cell.yaml` | 对应全量设备清单 |
+| `configs/robot_only.yaml` | 仅 Elite 机械臂 **只读** Agent |
+| `configs/sensors_robot.yaml` | `kind: arm_read` 设备清单（填 `robot_ip`） |
 | `sensors/configs/*.yaml` | 软链接指向的 hik-sensors 设备清单 |
 
 ## 桌面打包（Linux → Windows）
@@ -447,6 +473,18 @@ bash scripts/build-desktop.sh --target windows
 
 - `release/sensors-dcs-desktop-windows-x64-<UTC>/sensors-dcs.exe`
 - 同名 `.zip`
+- 若 `release/` 里已有上一版，还会生成 `<UTC>-delta.zip`（仅含相对上一版变更的文件，可直接解压覆盖旧安装目录）
+
+单独生成增量包（不重新 build）：
+
+```bash
+bash scripts/build-delta.sh
+# 或指定基线 / 当前版本
+bash scripts/build-delta.sh --baseline release/sensors-dcs-desktop-windows-x64-<old> \
+  --current release/sensors-dcs-desktop-windows-x64-<new>
+```
+
+`delta.zip` 内路径与安装目录一致（与 `sensors-dcs.exe` 同级）；`DELTA_INFO.json` 列出新增 / 变更 / 删除项。
 
 目标机无需安装 Python；用户数据在 `%APPDATA%\sensors-dcs\`。
 
@@ -467,6 +505,25 @@ sensors-dcs.exe filter-timeline -e episode_00000 --require gello,cam-left --trim
 
 重新打包后的桌面包已内置 pandas/pyarrow；**当前旧 exe 需重新 `build-desktop` 才生效**。
 
+### 常见问题（桌面包）
+
+**export-timeline / filter-timeline 报 pyarrow / fastparquet 缺失**
+
+1. 确认 `_internal/pyarrow/` 目录存在；若没有，说明当前安装不完整。
+2. **首次安装必须用完整 `.zip`**，不要只靠 `delta.zip` 叠在很旧的版本上（旧版可能没有 pyarrow 整包）。
+3. 重新 `./build.sh` 打新包后再试。
+
+**arm_read 报 `No module named 'elite'`**
+
+- 20260902 之后的桌面包应已内置 `elite`（来自 PyPI `elirobots`）。
+- 确认 `_internal/elite/` 存在；若没有，请用最新完整 `.zip` 重装，不要只靠旧版 delta。
+- 仍失败时重新 `./build.sh --target windows` 打新包。
+
+**真机零 Python 依赖说明**
+
+- Python 侧：`elite`、`pyrealsense2`、pyarrow 等已打入 exe。
+- 系统侧仍可能需要：USB 串口驱动（Gello）、RealSense USB 驱动、网口连通 Elite 控制器、`--ui` 时的 WebView2。
+
 ### 桌面包依赖清单
 
 | 功能 | Python 包 | 是否打入 exe | 说明 |
@@ -477,7 +534,8 @@ sensors-dcs.exe filter-timeline -e episode_00000 --require gello,cam-left --trim
 | Gello / 串口 | `dynamixel-sdk`, `pyserial` | 是 | |
 | `--ui` 窗口 | `pywebview`（import 名 `webview`） | 是 | 失败时回退系统浏览器 |
 | 时间轴导出 | `pandas`, `pyarrow` | 是 | `requirements-desktop.txt` |
-| 真机 RealSense | `pyrealsense2` | **否** | 目标机装 Intel SDK + wheel；`dry_run` 可不装 |
+| 真机 RealSense | `pyrealsense2` | **是** | 桌面包已内置；USB 相机仍需 Intel 驱动 |
+| Elite 机械臂真机读 | `elite`（via `elirobots`） | **是** | 桌面包已内置；配置 `robot_ip`，监控端口 8056 |
 
 构建前可在 Linux 开发机自检（Wine 构建环境应能通过 pip 装齐）：
 

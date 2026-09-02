@@ -57,13 +57,32 @@
 
 ### 2.5 `--materialize`
 
-将 require 中相机 agent 的图片复制到：
+写出与原始 episode **同构** 的目录（下采样 + 时间对齐后的结果）：
 
 ```text
-<episode>/export/filtered/images/<agent_id>/<step:08d>.jpg
+<episode>/export/filtered/
+  manifest.json
+  states/
+    gello.jsonl
+    gripper-read.jsonl
+    …
+  cameras/
+    cam-left/
+      00000000.jpg
+      index.jsonl
+    cam-middle/
+      …
 ```
 
-并写入 `{agent}.filtered_file` 相对路径。不修改原始 `cameras/`。
+约定：
+
+- 每个 step 一行，各 agent 共用对齐后的 `t_wall`（master 时钟）
+- `seq` 等于 `step`（从 0 连续编号）
+- 相机图片按 `cameras/<agent>/<step:08d>.jpg` 落盘；`index.jsonl` 与生数据格式一致
+- state jsonl 从宽表还原 `joints_rad` / `position_norm` 等；`payload` 可含 `src_seq` / `src_t_wall` / `match_dt` 便于追溯
+- **不修改** 原始 `episode_*/cameras|states`
+
+宽表里额外写入 `{agent}.filtered_file`（相对 episode 的路径，如 `filtered/cameras/cam-left/00000000.jpg`）。
 
 ---
 
@@ -121,7 +140,7 @@ sensors-dcs filter-timeline -e episode_00000 \
 episode_*  →  export-timeline --align asof --master …
            →  filter-timeline --require … --trim both
            →  timeline_filtered.parquet（step 从 0）
-           →  （可选）filtered/images/
+           →  （可选 --materialize）export/filtered/{manifest,states,cameras}
 ```
 
 ---

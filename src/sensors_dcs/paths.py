@@ -140,6 +140,8 @@ def ensure_runtime_env(*, desktop: bool = False) -> Path:
         "sensors_cameras.yaml",
         "full_cell.yaml",
         "sensors_full_cell.yaml",
+        "robot_only.yaml",
+        "sensors_robot.yaml",
     ):
         _seed_file(root / "configs" / name, data / "configs" / name)
 
@@ -158,6 +160,7 @@ def ensure_runtime_env(*, desktop: bool = False) -> Path:
         ("camera-only.yaml", "sensors_camera.yaml"),
         ("camera-multi.yaml", "sensors_cameras.yaml"),
         ("full_cell.yaml", "sensors_full_cell.yaml"),
+        ("robot_only.yaml", "sensors_robot.yaml"),
     ):
         seeded = data / "configs" / dcs_name
         sensors_local = data / "configs" / sensors_name

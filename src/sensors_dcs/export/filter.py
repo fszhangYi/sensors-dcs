@@ -7,20 +7,10 @@ from typing import Any, Literal
 
 from sensors_dcs.export.timeline import load_episode, resolve_episode_dir
 
+from sensors_dcs.export.parquet_io import read_parquet, require_pandas, write_parquet
+
 TrimMode = Literal["none", "start", "end", "both"]
 FilterFormat = Literal["parquet", "csv"]
-
-
-def _require_pandas():
-    try:
-        import pandas as pd  # noqa: F401
-    except ImportError as exc:  # pragma: no cover
-        raise ImportError(
-            "filter-timeline requires pandas. "
-            "Dev: pip install -e '.[export]'. "
-            "Desktop exe: rebuild with requirements-desktop.txt (includes pandas/pyarrow)."
-        ) from exc
-    return pd
 
 
 def parse_max_match_dt(spec: str | None, *, default: float = 0.033) -> tuple[float, dict[str, float]]:
@@ -80,14 +70,69 @@ def resolve_master(df, export_meta: dict[str, Any], explicit: str | None) -> str
     return None
 
 
-def _agent_kind(df_columns: list[str], agent_id: str) -> str:
+def _agent_kind(
+    df_columns: list[str],
+    agent_id: str,
+    *,
+    kind_hint: dict[str, str] | None = None,
+) -> str:
+    if kind_hint and agent_id in kind_hint:
+        return str(kind_hint[agent_id])
     if f"{agent_id}.image_relpath" in df_columns or f"{agent_id}.file" in df_columns:
         return "realsense"
-    if any(c.startswith(f"{agent_id}.j") and c[len(agent_id) + 1 :].isdigit() for c in df_columns):
-        return "gello"
     if f"{agent_id}.position_norm" in df_columns:
         return "gripper_read"
+    if any(
+        c.startswith(f"{agent_id}.j") and c[len(agent_id) + 1 :].isdigit()
+        for c in df_columns
+    ):
+        # Joint-like columns: prefer arm_read when agent_id looks like robot/arm.
+        aid = agent_id.lower()
+        if "arm" in aid or "robot" in aid or "elite" in aid:
+            return "arm_read"
+        return "gello"
     return "unknown"
+
+
+def _kind_hints_from_manifest(manifest: dict[str, Any] | None) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not manifest:
+        return out
+    for item in manifest.get("agents") or []:
+        aid = item.get("agent_id")
+        kind = item.get("kind")
+        if aid and kind:
+            out[str(aid)] = str(kind)
+    return out
+
+
+def _agents_in_frame(columns: list[str]) -> list[str]:
+    skip = {"step", "t_wall", "t_rel", "t_mono"}
+    agents: set[str] = set()
+    for col in columns:
+        if col in skip or "." not in col:
+            continue
+        agents.add(col.split(".", 1)[0])
+    return sorted(agents)
+
+
+def _joints_from_row(row: Any, agent_id: str, columns: list[str]) -> list[float] | None:
+    joints: list[tuple[int, float]] = []
+    prefix = f"{agent_id}.j"
+    for col in columns:
+        if not col.startswith(prefix):
+            continue
+        suffix = col[len(prefix) :]
+        if not suffix.isdigit():
+            continue
+        val = row.get(col)
+        if not _value_present(val):
+            return None
+        joints.append((int(suffix), float(val)))
+    if not joints:
+        return None
+    joints.sort(key=lambda x: x[0])
+    return [v for _, v in joints]
 
 
 def _value_present(val: Any) -> bool:
@@ -124,7 +169,7 @@ def row_passes(
         miss_col = f"{prefix}file_missing"
         if miss_col in columns and row.get(miss_col) is True:
             return False, "file_missing"
-    elif kind == "gello":
+    elif kind in {"gello", "arm_read"}:
         j0 = f"{prefix}j0"
         if j0 in columns and not _value_present(row.get(j0)):
             return False, "missing_joints"
@@ -158,6 +203,7 @@ def compute_row_mask(
     master: str | None,
     default_max_dt: float,
     per_agent_max_dt: dict[str, float],
+    kind_hint: dict[str, str] | None = None,
 ) -> tuple[list[bool], dict[str, int]]:
     columns = list(df.columns)
     reasons: dict[str, int] = {}
@@ -165,7 +211,7 @@ def compute_row_mask(
     for _, row in df.iterrows():
         ok = True
         for aid in require:
-            kind = _agent_kind(columns, aid)
+            kind = _agent_kind(columns, aid, kind_hint=kind_hint)
             is_master = aid == master
             max_dt = per_agent_max_dt.get(aid, default_max_dt)
             passed, reason = row_passes(
@@ -259,10 +305,10 @@ def _resolve_input_path(ep_dir: Path, input_path: str | Path | None) -> Path:
 
 
 def _load_frame(path: Path):
-    pd = _require_pandas()
     if path.suffix.lower() == ".csv":
+        pd = require_pandas()
         return pd.read_csv(path)
-    return pd.read_parquet(path)
+    return read_parquet(path)
 
 
 def _write_frame(df, path: Path, fmt: FilterFormat) -> None:
@@ -270,9 +316,212 @@ def _write_frame(df, path: Path, fmt: FilterFormat) -> None:
     if fmt == "csv":
         df.to_csv(path, index=False)
     else:
-        df.to_parquet(path, index=False)
+        write_parquet(df, path, index=False)
 
 
+def materialize_filtered_episode(
+    df,
+    *,
+    ep_dir: Path,
+    filtered_root: Path,
+    columns: list[str],
+    master: str | None,
+    source_manifest: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Write episode-shaped tree under ``filtered_root`` (states / cameras / manifest)."""
+    if filtered_root.exists():
+        shutil.rmtree(filtered_root)
+    (filtered_root / "states").mkdir(parents=True)
+    (filtered_root / "cameras").mkdir(parents=True)
+
+    kind_hints = _kind_hints_from_manifest(source_manifest)
+    agents = _agents_in_frame(columns)
+    agent_kinds = {aid: _agent_kind(columns, aid, kind_hint=kind_hints) for aid in agents}
+    camera_agents = [aid for aid, kind in agent_kinds.items() if kind == "realsense"]
+    filtered_file_cols: dict[str, list[str | None]] = {aid: [] for aid in camera_agents}
+
+    state_fps: dict[str, Any] = {}
+    cam_index_fps: dict[str, Any] = {}
+    written = 0
+
+    def state_fp(aid: str):
+        if aid not in state_fps:
+            path = filtered_root / "states" / f"{aid}.jsonl"
+            state_fps[aid] = path.open("w", encoding="utf-8")
+        return state_fps[aid]
+
+    def cam_index_fp(aid: str):
+        if aid not in cam_index_fps:
+            d = filtered_root / "cameras" / aid
+            d.mkdir(parents=True, exist_ok=True)
+            cam_index_fps[aid] = (d / "index.jsonl").open("w", encoding="utf-8")
+        return cam_index_fps[aid]
+
+    try:
+        for _, row in df.iterrows():
+            step = int(row["step"])
+            t_wall = float(row["t_wall"])
+            t_rel = (
+                float(row["t_rel"])
+                if "t_rel" in columns and _value_present(row.get("t_rel"))
+                else None
+            )
+            name = f"{step:08d}.jpg"
+
+            for aid in agents:
+                kind = agent_kinds[aid]
+                src_seq = row.get(f"{aid}.seq") if f"{aid}.seq" in columns else None
+                src_t = row.get(f"{aid}.t_wall_src") if f"{aid}.t_wall_src" in columns else None
+                match_dt = row.get(f"{aid}.match_dt") if f"{aid}.match_dt" in columns else None
+
+                if kind == "realsense":
+                    path_col = f"{aid}.image_relpath"
+                    file_col = f"{aid}.file"
+                    rel = row.get(path_col) if path_col in columns else None
+                    if not _value_present(rel) and file_col in columns:
+                        fname = row.get(file_col)
+                        if _value_present(fname):
+                            rel = f"cameras/{aid}/{fname}"
+                    dest_rel = f"cameras/{aid}/{name}"
+                    if not _value_present(rel):
+                        filtered_file_cols[aid].append(None)
+                        continue
+                    src = ep_dir / str(rel)
+                    dst = filtered_root / "cameras" / aid / name
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    if not src.is_file():
+                        filtered_file_cols[aid].append(None)
+                        continue
+                    shutil.copy2(src, dst)
+                    filtered_file_cols[aid].append(f"filtered/{dest_rel}")
+
+                    rec = {
+                        "agent_id": aid,
+                        "sensor_id": aid,
+                        "kind": "realsense",
+                        "seq": step,
+                        "t_wall": t_wall,
+                        "t_mono": 0.0,
+                        "file": name,
+                        "role": row.get(f"{aid}.role") if f"{aid}.role" in columns else None,
+                        "dry_run": None,
+                        "src_seq": int(src_seq) if _value_present(src_seq) else None,
+                        "src_t_wall": float(src_t) if _value_present(src_t) else None,
+                        "match_dt": float(match_dt) if _value_present(match_dt) else None,
+                    }
+                    cam_index_fp(aid).write(json.dumps(rec, ensure_ascii=False) + "\n")
+                    written += 1
+                    continue
+
+                if kind in {"gello", "arm_read"}:
+                    joints = _joints_from_row(row, aid, columns)
+                    if joints is None:
+                        continue
+                    payload: dict[str, Any] = {"joints_rad": joints, "dry_run": None}
+                elif kind == "gripper_read":
+                    pos = (
+                        row.get(f"{aid}.position_norm")
+                        if f"{aid}.position_norm" in columns
+                        else None
+                    )
+                    if not _value_present(pos):
+                        continue
+                    raw = (
+                        row.get(f"{aid}.position_raw")
+                        if f"{aid}.position_raw" in columns
+                        else None
+                    )
+                    payload = {
+                        "position_norm": float(pos),
+                        "position_raw": float(raw) if _value_present(raw) else None,
+                        "dry_run": None,
+                    }
+                else:
+                    continue
+
+                if _value_present(src_seq):
+                    payload["src_seq"] = int(src_seq)
+                if _value_present(src_t):
+                    payload["src_t_wall"] = float(src_t)
+                if _value_present(match_dt):
+                    payload["match_dt"] = float(match_dt)
+                if t_rel is not None:
+                    payload["t_rel"] = t_rel
+
+                rec = {
+                    "agent_id": aid,
+                    "sensor_id": aid,
+                    "kind": kind,
+                    "seq": step,
+                    "t_wall": t_wall,
+                    "t_mono": 0.0,
+                    "payload": payload,
+                }
+                state_fp(aid).write(json.dumps(rec, ensure_ascii=False) + "\n")
+                written += 1
+    finally:
+        for fp in state_fps.values():
+            try:
+                fp.close()
+            except Exception:  # noqa: BLE001
+                pass
+        for fp in cam_index_fps.values():
+            try:
+                fp.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    for aid, paths in filtered_file_cols.items():
+        df[f"{aid}.filtered_file"] = paths
+
+    t_start = float(df["t_wall"].iloc[0]) if len(df) else None
+    t_end = float(df["t_wall"].iloc[-1]) if len(df) else None
+    agents_meta: list[dict[str, Any]] = []
+    for aid in agents:
+        item: dict[str, Any] = {
+            "agent_id": aid,
+            "kind": agent_kinds[aid],
+            "hz_target": None,
+        }
+        if source_manifest:
+            for src in source_manifest.get("agents") or []:
+                if src.get("agent_id") == aid:
+                    item["sensor_id"] = src.get("sensor_id")
+                    item["hz_target"] = src.get("hz_target")
+                    break
+        agents_meta.append(item)
+
+    manifest = {
+        "site": (source_manifest or {}).get("site"),
+        "episode_index": (source_manifest or {}).get("episode_index"),
+        "t_start": t_start,
+        "t_end": t_end,
+        "duration_s": (t_end - t_start) if t_start is not None and t_end is not None else None,
+        "written": written,
+        "dropped": 0,
+        "agents": agents_meta,
+        "valid": True,
+        "format": "dcs_episode_v1",
+        "derived_from": ep_dir.name,
+        "align_master": master,
+        "rows": len(df),
+        "note": "Filtered / time-aligned materialization of source episode (step == seq).",
+    }
+    (filtered_root / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return {
+        "filtered_root": str(filtered_root.relative_to(ep_dir))
+        if filtered_root.is_relative_to(ep_dir)
+        else str(filtered_root),
+        "agents": agent_kinds,
+        "written": written,
+        "rows": len(df),
+    }
+
+
+# Back-compat alias used by older tests / callers
 def materialize_images(
     df,
     *,
@@ -281,41 +530,21 @@ def materialize_images(
     require: list[str],
     columns: list[str],
 ) -> None:
-    camera_agents = [aid for aid in require if _agent_kind(columns, aid) == "realsense"]
-    if not camera_agents:
-        camera_agents = sorted(
-            {
-                col.split(".", 1)[0]
-                for col in columns
-                if col.endswith(".image_relpath") or col.endswith(".file")
-            }
-        )
-    for aid in camera_agents:
-        path_col = f"{aid}.image_relpath"
-        file_col = f"{aid}.file"
-        filt_col = f"{aid}.filtered_file"
-        dest_root = out_dir / "filtered" / "images" / aid
-        dest_root.mkdir(parents=True, exist_ok=True)
-        filtered_paths: list[str | None] = []
-        for _, row in df.iterrows():
-            rel = row.get(path_col) if path_col in columns else None
-            if not _value_present(rel) and file_col in columns:
-                fname = row.get(file_col)
-                if _value_present(fname):
-                    rel = f"cameras/{aid}/{fname}"
-            if not _value_present(rel):
-                filtered_paths.append(None)
-                continue
-            src = ep_dir / str(rel)
-            step = int(row["step"])
-            name = f"{step:08d}.jpg"
-            dst = dest_root / name
-            if src.is_file():
-                shutil.copy2(src, dst)
-                filtered_paths.append(f"filtered/images/{aid}/{name}")
-            else:
-                filtered_paths.append(None)
-        df[filt_col] = filtered_paths
+    del require
+    filtered_root = out_dir / "filtered"
+    source_manifest = None
+    try:
+        source_manifest, _ = load_episode(ep_dir)
+    except Exception:  # noqa: BLE001
+        pass
+    materialize_filtered_episode(
+        df,
+        ep_dir=ep_dir,
+        filtered_root=filtered_root,
+        columns=columns,
+        master=None,
+        source_manifest=source_manifest,
+    )
 
 
 def filter_episode_timeline(
@@ -335,6 +564,12 @@ def filter_episode_timeline(
     root = resolve_episode_dir(ep_dir)
     in_path = _resolve_input_path(root, input_path)
     export_meta = _read_export_meta(root)
+    source_manifest: dict[str, Any] | None = None
+    try:
+        source_manifest, _ = load_episode(root)
+    except Exception:  # noqa: BLE001
+        pass
+    kind_hint = _kind_hints_from_manifest(source_manifest)
     df = _load_frame(in_path)
     if df.empty:
         raise ValueError("aligned timeline is empty")
@@ -351,6 +586,7 @@ def filter_episode_timeline(
         master=master_id,
         default_max_dt=default_dt,
         per_agent_max_dt=per_agent_dt,
+        kind_hint=kind_hint,
     )
     rows_in = len(df)
     start, end, trimmed_start, trimmed_end = apply_trim_indices(mask, trim)
@@ -380,13 +616,15 @@ def filter_episode_timeline(
         out_path = root / "export" / "timeline_filtered.csv"
 
     out_dir = out_path.parent
+    materialize_info = None
     if materialize and len(filtered) > 0:
-        materialize_images(
+        materialize_info = materialize_filtered_episode(
             filtered,
             ep_dir=root,
-            out_dir=out_dir,
-            require=require_agents,
+            filtered_root=out_dir / "filtered",
             columns=list(filtered.columns),
+            master=master_id,
+            source_manifest=source_manifest,
         )
 
     _write_frame(filtered, out_path, fmt)
@@ -414,6 +652,7 @@ def filter_episode_timeline(
         "tail_after_master": tail,
         "drop_reasons": drop_reasons,
         "materialize": materialize,
+        "materialize_info": materialize_info,
     }
     meta_path = out_dir / "filter_meta.json"
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

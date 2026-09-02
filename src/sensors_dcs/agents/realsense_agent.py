@@ -15,13 +15,22 @@ from sensors_dcs.agents.base import BaseAgent
 from sensors_dcs.frame import Frame
 
 
-def _jpeg_b64(bgr: np.ndarray, *, quality: int = 70, max_width: int = 640) -> str:
-    """Encode BGR image to JPEG base64 for WebSocket viz (no raw ndarray in JSON)."""
+def _jpeg_b64(
+    bgr: np.ndarray,
+    *,
+    quality: int = 70,
+    max_width: int | None = 640,
+) -> str:
+    """Encode BGR image to JPEG base64.
+
+    ``max_width=None`` keeps native resolution (for episode write).
+    A finite ``max_width`` downscales for WebSocket preview only.
+    """
     import cv2
 
     img = bgr
     h, w = img.shape[:2]
-    if w > max_width:
+    if max_width is not None and w > max_width:
         scale = max_width / float(w)
         img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
     ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
@@ -43,7 +52,8 @@ class RealSenseAgent(BaseAgent):
         hz: float = 15.0,
         buffer_frames: int = 2,
         dry_run_synth: bool = True,
-        jpeg_quality: int = 70,
+        jpeg_quality: int = 90,
+        viz_jpeg_quality: int = 70,
         viz_max_width: int = 427,
     ) -> None:
         super().__init__(
@@ -54,6 +64,7 @@ class RealSenseAgent(BaseAgent):
         )
         self.dry_run_synth = dry_run_synth
         self.jpeg_quality = jpeg_quality
+        self.viz_jpeg_quality = viz_jpeg_quality
         self.viz_max_width = viz_max_width
 
     def read_frame(self) -> Frame:
@@ -75,24 +86,33 @@ class RealSenseAgent(BaseAgent):
             }
 
         jpeg_b64 = None
+        jpeg_b64_preview = None
         shape = None
         if color is not None:
             arr = np.asarray(color)
             shape = list(arr.shape)
+            # Full-resolution JPEG for episode write (matches sensor width/height).
             jpeg_b64 = _jpeg_b64(
                 arr,
                 quality=self.jpeg_quality,
+                max_width=None,
+            )
+            # Downscaled copy only for WebSocket viz (keeps WS light).
+            jpeg_b64_preview = _jpeg_b64(
+                arr,
+                quality=self.viz_jpeg_quality,
                 max_width=self.viz_max_width,
             )
 
         payload: dict[str, Any] = {
             "serial": sample.get("serial") or getattr(self.sensor, "serial", None),
             "role": sample.get("role") or getattr(self.sensor, "role", None),
-            "width": sample.get("width"),
-            "height": sample.get("height"),
+            "width": sample.get("width") or (shape[1] if shape and len(shape) >= 2 else None),
+            "height": sample.get("height") or (shape[0] if shape else None),
             "fps": sample.get("fps"),
             "color_shape": shape,
             "jpeg_b64": jpeg_b64,
+            "jpeg_b64_preview": jpeg_b64_preview,
             "dry_run": dry,
             "synth": bool(sample.get("synth")),
         }
@@ -110,12 +130,10 @@ class RealSenseAgent(BaseAgent):
         """Moving color bars so dry-run viz looks alive without a camera."""
         w = int(getattr(self.sensor, "width", 640) or 640)
         h = int(getattr(self.sensor, "height", 480) or 480)
-        w = min(w, 427)
-        h = min(h, 320)
         img = np.zeros((h, w, 3), dtype=np.uint8)
         sn = str(getattr(self.sensor, "serial", "") or "")
         # Offset phase by serial so multi-camera dry-run previews look distinct
-        phase = int((t_wall * 40 + (hash(sn) % 360)) % w)
+        phase = int((t_wall * 40 + (hash(sn) % 360)) % max(w, 1))
         for x in range(w):
             v = int(40 + 180 * abs(((x + phase) % w) / max(w - 1, 1) - 0.5) * 2)
             img[:, x, 0] = v // 3
@@ -125,7 +143,7 @@ class RealSenseAgent(BaseAgent):
             import cv2
 
             role = str(getattr(self.sensor, "role", "") or "")
-            label = f"RS {role} {sn or 'dry-run'}".strip()
+            label = f"RS {role} {sn or 'dry-run'} {self.hz:.0f}Hz".strip()
             cv2.putText(
                 img,
                 label[:48],

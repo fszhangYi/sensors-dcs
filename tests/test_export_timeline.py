@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from sensors_dcs.export.timeline import (
+    Sample,
     build_aligned_frame,
     build_events_frame,
     export_episode_timeline,
@@ -156,6 +157,89 @@ def test_export_master_hz_in_meta(episode_dir: Path) -> None:
         episode_dir, align="asof", master="gello", master_hz=15.0
     )
     assert meta["align"]["master_hz"] == 15.0
+
+
+def test_aligned_asof_multi_agent_no_duplicate_columns() -> None:
+    """Regression: each asof join must not leave duplicate t_rel_y columns."""
+    t0 = 1000.0
+    manifest = {
+        "t_start": t0,
+        "t_end": t0 + 0.2,
+        "agents": [
+            {"agent_id": "cam-left", "kind": "realsense", "hz_target": 15.0},
+            {"agent_id": "cam-middle", "kind": "realsense", "hz_target": 15.0},
+            {"agent_id": "cam-right", "kind": "realsense", "hz_target": 15.0},
+            {"agent_id": "gello", "kind": "gello", "hz_target": 50.0},
+            {"agent_id": "gripper-read", "kind": "gripper_read", "hz_target": 50.0},
+        ],
+    }
+
+    def cam(agent_id: str, seq: int, dt: float, role: str):
+        return Sample(
+            t_wall=t0 + dt,
+            t_mono=dt,
+            agent_id=agent_id,
+            sensor_id=agent_id,
+            kind="realsense",
+            seq=seq,
+            fields={"file": f"{seq:08d}.jpg", "role": role},
+            image_relpath=f"cameras/{agent_id}/{seq:08d}.jpg",
+            role=role,
+            dry_run=True,
+        )
+
+    samples = [
+        cam("cam-left", 1, 0.00, "left"),
+        cam("cam-left", 2, 0.04, "left"),
+        cam("cam-middle", 1, 0.01, "middle"),
+        cam("cam-middle", 2, 0.05, "middle"),
+        cam("cam-right", 1, 0.02, "right"),
+        cam("cam-right", 2, 0.06, "right"),
+        Sample(
+            t_wall=t0 + 0.00,
+            t_mono=0.0,
+            agent_id="gello",
+            sensor_id="gello-main",
+            kind="gello",
+            seq=1,
+            fields={"joints_rad": [0.0] * 7},
+            dry_run=True,
+        ),
+        Sample(
+            t_wall=t0 + 0.02,
+            t_mono=0.02,
+            agent_id="gello",
+            sensor_id="gello-main",
+            kind="gello",
+            seq=2,
+            fields={"joints_rad": [0.1] * 7},
+            dry_run=True,
+        ),
+        Sample(
+            t_wall=t0 + 0.00,
+            t_mono=0.0,
+            agent_id="gripper-read",
+            sensor_id="gripper-main",
+            kind="gripper_read",
+            seq=1,
+            fields={"position_norm": 0.5, "position_raw": 2048},
+            dry_run=True,
+        ),
+    ]
+
+    df = build_aligned_frame(
+        manifest,
+        samples,
+        master="cam-left",
+        mode="asof",
+        master_hz=5.0,
+    )
+    assert len(df) >= 1
+    assert df.columns.is_unique
+    assert "t_rel_y" not in df.columns
+    assert "t_rel" in df.columns
+    assert "cam-left.match_dt" in df.columns
+    assert "gello.match_dt" in df.columns
 
 
 def test_real_episode_if_present() -> None:

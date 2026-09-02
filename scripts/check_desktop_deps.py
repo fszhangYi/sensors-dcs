@@ -24,7 +24,8 @@ CHECKS: list[tuple[str, str, bool]] = [
     ("pandas", "export-timeline / filter-timeline", True),
     ("pyarrow", "Parquet export", True),
     ("webview", "desktop --ui window", True),
-    ("pyrealsense2", "live RealSense (not bundled in exe)", False),
+    ("elite", "Elite arm EC SDK (elirobots)", True),
+    ("pyrealsense2", "live RealSense", True),
 ]
 
 OPTIONAL_OK = {name for name, _, required in CHECKS if not required}

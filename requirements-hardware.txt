@@ -1,6 +1,9 @@
 # Gello agent needs Dynamixel + serial
 pyserial>=3.5
 dynamixel-sdk>=3.7
-# RealSense agent (optional on Wine Windows builds — dry_run works without it)
-# pyrealsense2
+# Elite arm_read (PyPI elirobots provides ``from elite import EC``)
+elirobots>=0.0.7
+loguru>=0.6.0,<0.7
+# RealSense live camera (bundled for zero-deps desktop; still needs USB + Intel driver)
+pyrealsense2>=2.54
 opencv-python-headless>=4.8

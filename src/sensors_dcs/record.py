@@ -341,6 +341,9 @@ class RecordController:
                 "serial": (fr.payload or {}).get("serial"),
                 "role": (fr.payload or {}).get("role"),
                 "dry_run": (fr.payload or {}).get("dry_run"),
+                "width": (fr.payload or {}).get("width"),
+                "height": (fr.payload or {}).get("height"),
+                "color_shape": (fr.payload or {}).get("color_shape"),
             }
             idx_fp.write(json.dumps(rec, ensure_ascii=False) + "\n")
             idx_fp.flush()
@@ -350,6 +353,7 @@ class RecordController:
         payload = dict(fr.payload or {})
         # strip heavy fields if any
         payload.pop("jpeg_b64", None)
+        payload.pop("jpeg_b64_preview", None)
         rec = {
             "agent_id": fr.agent_id,
             "sensor_id": fr.sensor_id,

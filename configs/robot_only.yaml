@@ -1,0 +1,36 @@
+# sensors-dcs — Elite arm READ-ONLY only (no gello / camera / gripper)
+#
+# Usage:
+#   sensors-dcs run -c configs/robot_only.yaml
+#   # or desktop:
+#   python -m sensors_dcs.desktop_main -c configs/robot_only.yaml --ui
+#
+# Safety: agent type=arm → sensor kind=arm_read → Elite EC monitor only.
+#         write/command path is hard-disabled in the driver.
+version: 1
+site: dcs-robot-read
+
+sensors_config: ./sensors_robot.yaml
+# true = 合成关节角（无需 elite SDK / 控制器）
+# false = 读真实 Elite monitor（需网络可达 + 本机安装 elite SDK）
+dry_run: true
+
+runtime:
+  control_host: "0.0.0.0"
+  control_port: 7010
+  viz_host: "0.0.0.0"
+  viz_port: 7011
+  viz_hz: 15
+  console_hz: 5
+
+record:
+  save_dir: ./data
+  episode_index: 0
+  queue_maxsize: 512
+
+agents:
+  - id: arm
+    type: arm
+    sensor_id: arm-elite
+    hz: 50
+    buffer_frames: 64
