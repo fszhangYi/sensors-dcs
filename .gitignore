@@ -29,6 +29,10 @@ data/
 **/episode_*/
 NEXT_EPISODE
 
+# Auth secrets (local user store)
+**/configs/users.json
+**/configs/.auth.json
+
 # Desktop packaging
 release/
 packaging/dist*/

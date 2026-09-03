@@ -56,6 +56,11 @@ class PostprocessBody(BaseModel):
     allow_invalid: bool = False
 
 
+class AuthLoginBody(BaseModel):
+    username: str = ""
+    password: str = ""
+
+
 class GelloArmSyncBody(BaseModel):
     enabled: bool
     gello_agent_id: str | None = None
@@ -672,7 +677,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         <button type="button" class="lang-btn active" data-locale="zh" data-i18n="lang.zh">中文</button>
         <button type="button" class="lang-btn" data-locale="en" data-i18n="lang.en">EN</button>
       </div>
-      <button type="button" class="danger" id="btnExit" data-i18n="header.exit">安全退出</button>
+      <div style="display:flex;gap:0.4rem;align-items:center;">
+        <button type="button" id="btnLogout" data-i18n="header.logout" style="appearance:none;border:1px solid var(--border);background:var(--chrome);color:var(--text);font:inherit;font-size:0.85rem;font-weight:550;padding:0.45rem 1.05rem;border-radius:999px;cursor:pointer;">退出登录</button>
+        <button type="button" class="danger" id="btnExit" data-i18n="header.exit">安全退出</button>
+      </div>
     </div>
   </header>
   <nav class="tabs" role="tablist">
@@ -1220,6 +1228,19 @@ PREVIEW_HTML = """<!DOCTYPE html>
       loadPpForm(j);
       fillEpisodeSelect(j.episodes || []);
     }).catch(() => loadPpForm({}));
+    const btnLogout = document.getElementById('btnLogout');
+    if (btnLogout) {
+      btnLogout.addEventListener('click', async () => {
+        try {
+          await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+        } catch (e) {}
+        location.href = '/login';
+      });
+      // Hide logout when auth disabled
+      fetch('/api/auth/me', { credentials: 'same-origin' }).then((r) => r.json()).then((j) => {
+        if (!j.authRequired) btnLogout.style.display = 'none';
+      }).catch(() => {});
+    }
     const btnExit = document.getElementById('btnExit');
     if (btnExit) {
       btnExit.addEventListener('click', async () => {
@@ -1997,17 +2018,112 @@ def create_viz_app(
     gello_arm_teleop_status: Callable[[], dict[str, Any]] | None = None,
     shutdown: Callable[[], dict[str, Any]] | None = None,
 ) -> FastAPI:
+    from sensors_dcs.auth_session import (
+        auth_enabled,
+        cookie_header_clear,
+        cookie_header_set,
+        destroy_session,
+        init_auth,
+        is_authenticated,
+        parse_session_cookie,
+        path_requires_auth,
+        public_status,
+        request_profile,
+        sanitize_from,
+        try_login,
+    )
+    from sensors_dcs.login_page import LOGIN_HTML
+    from sensors_dcs.ui_i18n import inject_i18n_json
+    from fastapi.responses import JSONResponse, RedirectResponse
+
+    init_auth()
     app = FastAPI(title="sensors-dcs viz", version="0.1.0")
+
+    @app.middleware("http")
+    async def _auth_gate(request: Request, call_next):  # type: ignore[no-untyped-def]
+        path = request.url.path
+        if not path_requires_auth(path):
+            return await call_next(request)
+        cookie = request.headers.get("cookie")
+        if is_authenticated(cookie):
+            return await call_next(request)
+        if path.startswith("/api/") or path.startswith("/ws"):
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "unauthorized",
+                    "authRequired": True,
+                    "loginPath": "/login",
+                },
+                status_code=401,
+            )
+        dest = sanitize_from(path)
+        return RedirectResponse(url=f"/login?from={dest}", status_code=302)
 
     @app.on_event("startup")
     async def _startup() -> None:
         hub.bind_loop(asyncio.get_running_loop())
 
-    @app.get("/", response_class=HTMLResponse)
-    async def index() -> str:
-        from sensors_dcs.ui_i18n import inject_i18n_json
+    @app.get("/login", response_class=HTMLResponse)
+    async def login_page() -> str:
+        return inject_i18n_json(LOGIN_HTML)
 
-        return inject_i18n_json(PREVIEW_HTML)
+    @app.get("/", response_class=HTMLResponse)
+    async def index(request: Request):
+        if path_requires_auth("/") and not is_authenticated(request.headers.get("cookie")):
+            return RedirectResponse(url="/login?from=/", status_code=302)
+        return HTMLResponse(inject_i18n_json(PREVIEW_HTML))
+
+    @app.get("/api/health")
+    async def health() -> dict[str, Any]:
+        return {"ok": True, "authRequired": auth_enabled()}
+
+    @app.get("/api/auth/status")
+    async def auth_status() -> dict[str, Any]:
+        return public_status()
+
+    @app.get("/api/auth/me")
+    async def auth_me(request: Request) -> dict[str, Any]:
+        if not auth_enabled():
+            return {
+                "ok": True,
+                "authRequired": False,
+                "authenticated": True,
+                "user": None,
+            }
+        prof = request_profile(request.headers.get("cookie"))
+        return {
+            "ok": True,
+            "authRequired": True,
+            "authenticated": prof is not None,
+            "user": prof,
+            "usernameHint": public_status().get("usernameHint"),
+        }
+
+    @app.post("/api/auth/login")
+    async def auth_login(req: AuthLoginBody) -> JSONResponse:
+        out = try_login(req.username, req.password)
+        if not out.get("ok"):
+            return JSONResponse(out, status_code=401)
+        resp = JSONResponse(
+            {
+                "ok": True,
+                "authRequired": out.get("authRequired", True),
+                "user": out.get("user"),
+            }
+        )
+        token = out.get("token")
+        if token:
+            resp.headers["Set-Cookie"] = cookie_header_set(str(token))
+        return resp
+
+    @app.post("/api/auth/logout")
+    async def auth_logout(request: Request) -> JSONResponse:
+        token = parse_session_cookie(request.headers.get("cookie"))
+        destroy_session(token)
+        resp = JSONResponse({"ok": True})
+        resp.headers["Set-Cookie"] = cookie_header_clear()
+        return resp
 
     @app.get("/api/status")
     async def status() -> dict[str, Any]:
@@ -2178,6 +2294,11 @@ def create_viz_app(
 
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket) -> None:
+        from sensors_dcs.auth_session import is_authenticated as _is_auth
+
+        if not _is_auth(ws.headers.get("cookie")):
+            await ws.close(code=4401)
+            return
         await hub.register(ws)
         try:
             while True:

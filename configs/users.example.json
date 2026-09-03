@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "users": [
+    {
+      "username": "sensors",
+      "role": "admin",
+      "password_hash": "pbkdf2_sha256$120000$replace_me$replace_me",
+      "note": "Copy to AppData/configs/users.json or set SENSORS_DCS_AUTH_PASSWORD. Do not commit real hashes with known passwords."
+    }
+  ]
+}
