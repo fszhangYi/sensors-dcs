@@ -744,6 +744,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         <input type="checkbox" id="chkQuickCollect" />
         <span data-i18n="quick.label">快速采集</span>
       </label>
+      <label class="quick-collect" data-i18n-title="async.title" title="结束/作废后后台落盘；未写完也可开始下一集">
+        <input type="checkbox" id="chkAsyncFlush" />
+        <span data-i18n="async.label">异步落盘</span>
+      </label>
       <span class="hint" id="runHint" data-i18n="hint.idle">空闲 — 点「开始」录制当前 episode</span>
     </div>
     <div class="save-path">
@@ -964,17 +968,24 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const saveDirInput = document.getElementById('saveDirInput');
     const runHint = document.getElementById('runHint');
     const chkQuickCollect = document.getElementById('chkQuickCollect');
+    const chkAsyncFlush = document.getElementById('chkAsyncFlush');
     const LS_QUICK = 'dcs.quickCollect';
+    const LS_ASYNC = 'dcs.asyncFlush';
     const LS_PP = 'dcs.postprocess';
     try {
       chkQuickCollect.checked = localStorage.getItem(LS_QUICK) === '1';
+      if (chkAsyncFlush && localStorage.getItem(LS_ASYNC) === '1') chkAsyncFlush.checked = true;
     } catch (e) {}
     chkQuickCollect.addEventListener('change', () => {
       try {
         localStorage.setItem(LS_QUICK, chkQuickCollect.checked ? '1' : '0');
       } catch (e) {}
     });
-    let lastMsgT = null, emaFront = null;
+    if (chkAsyncFlush) {
+      chkAsyncFlush.addEventListener('change', () => {
+        try { localStorage.setItem(LS_ASYNC, chkAsyncFlush.checked ? '1' : '0'); } catch (e) {}
+      });
+    }    let lastMsgT = null, emaFront = null;
     let busy = false;
     const backState = {};
     const CAM_SLOTS = [
@@ -1005,11 +1016,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     initCamGrid();
 
+    const chkAsyncFlush = document.getElementById('chkAsyncFlush');
+
     function applyRecordUi(rec) {
       if (!rec) return;
       window.__lastRecordStatus = rec;
       const st = rec.state || 'idle';
-      recStateEl.textContent = st;
+      const flushN = rec.flushing_count || 0;
+      recStateEl.textContent = flushN > 0 && st === 'idle'
+        ? (st + ' · flush×' + flushN)
+        : st;
       saveDirEl.textContent = rec.save_dir || '—';
       if (document.activeElement !== saveDirInput) {
         saveDirInput.placeholder = rec.save_dir || t('save.placeholder');
@@ -1026,6 +1042,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         btnDiscard.disabled = false;
         runHint.textContent = t('hint.recording');
       } else if (st === 'flushing') {
+        // Sync flush: wait. Async mode never stays here.
         btnStart.disabled = true;
         btnStop.disabled = true;
         btnDiscard.disabled = true;
@@ -1034,7 +1051,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
         btnStart.disabled = false;
         btnStop.disabled = true;
         btnDiscard.disabled = true;
-        runHint.textContent = t('hint.idle_ep', { ep: episodeEl.textContent });
+        if (flushN > 0) {
+          runHint.textContent = t('hint.async_flushing', { n: flushN, ep: episodeEl.textContent });
+        } else {
+          runHint.textContent = t('hint.idle_ep', { ep: episodeEl.textContent });
+        }
       }
     }
 
@@ -1045,9 +1066,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
       btnDiscard.disabled = true;
       const isStop = path.indexOf('stop') >= 0;
       const discarding = isStop && body && body.valid === false;
+      const asyncFlush = !!(chkAsyncFlush && chkAsyncFlush.checked);
+      if (isStop && body && typeof body === 'object') {
+        body.async_flush = asyncFlush;
+      }
       runHint.textContent = discarding
         ? t('hint.discarding')
-        : (isStop ? t('hint.stopping') : t('hint.starting'));
+        : (isStop ? (asyncFlush ? t('hint.async_stopping') : t('hint.stopping')) : t('hint.starting'));
       try {
         const opts = { method: 'POST' };
         if (body !== undefined) {
@@ -1065,21 +1090,34 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (isStop && j.ok && chkQuickCollect.checked && j.finished_episode_path) {
           const epPath = j.finished_episode_path;
           if (ppEpisode) ppEpisode.value = epPath;
-          runHint.textContent = discarding
-            ? t('hint.qc_discard')
-            : t('hint.qc_stop');
-          const pp = await runPostprocess({
-            steps: ['export-timeline', 'filter-timeline', 'export-hik-dataset'],
-            allow_invalid: discarding || (document.getElementById('ppAllowInvalid') || {}).checked,
-          }, epPath);
-          if (pp && pp.ok) {
-            runHint.textContent = t('hint.qc_ok', { path: epPath });
-            showAppModal(t('modal.qc_ok'), epPath);
-          } else if (pp) {
-            runHint.textContent = t('hint.qc_fail', { error: pp.error || 'unknown' });
-            showAppModal(t('modal.qc_fail'), pp.error || JSON.stringify(pp));
-            try { switchTab('post'); } catch (e) {}
+          const runQc = async () => {
+            runHint.textContent = discarding
+              ? t('hint.qc_discard')
+              : t('hint.qc_stop');
+            const pp = await runPostprocess({
+              steps: ['export-timeline', 'filter-timeline', 'export-hik-dataset'],
+              allow_invalid: discarding || (document.getElementById('ppAllowInvalid') || {}).checked,
+            }, epPath);
+            if (pp && pp.ok) {
+              runHint.textContent = t('hint.qc_ok', { path: epPath });
+              showAppModal(t('modal.qc_ok'), epPath);
+            } else if (pp) {
+              runHint.textContent = t('hint.qc_fail', { error: pp.error || 'unknown' });
+              showAppModal(t('modal.qc_fail'), pp.error || JSON.stringify(pp));
+              try { switchTab('post'); } catch (e) {}
+            }
+          };
+          if (asyncFlush || j.async_flush) {
+            // Do not hold Start disabled while QC / flush continues.
+            busy = false;
+            try {
+              const s = await fetch('/api/record/status').then((x) => x.json());
+              applyRecordUi(s);
+            } catch (e) {}
+            runQc();
+            return;
           }
+          await runQc();
         }
       } catch (e) {
         runHint.textContent = String(e);
@@ -2270,19 +2308,26 @@ def create_viz_app(
             return {"ok": False, "error": "collect unavailable (boot error)", "state": "idle"}
         if recorder is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
-        # Accept JSON ``{"valid": true|false}``; empty / legacy POST → valid=true.
+        # Accept JSON ``{"valid": true|false, "async_flush": true|false}``.
         valid = True
+        async_flush = False
         try:
             ctype = (request.headers.get("content-type") or "").lower()
             if "application/json" in ctype:
                 raw = await request.body()
                 if raw and raw.strip():
                     data = json.loads(raw)
-                    if isinstance(data, dict) and "valid" in data:
-                        valid = bool(data["valid"])
+                    if isinstance(data, dict):
+                        if "valid" in data:
+                            valid = bool(data["valid"])
+                        if "async_flush" in data:
+                            async_flush = bool(data["async_flush"])
         except Exception:  # noqa: BLE001
             valid = True
-        return await asyncio.to_thread(recorder.stop, valid=valid)
+            async_flush = False
+        return await asyncio.to_thread(
+            recorder.stop, valid=valid, async_flush=async_flush
+        )
 
     @app.post("/api/record/save_dir")
     async def record_save_dir(req: SaveDirBody) -> dict[str, Any]:
