@@ -818,7 +818,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     </div>
   </div>
   <script>
-    const DCS_I18N = JSON.parse('__DCS_I18N_JSON__');
+    const DCS_I18N = __DCS_I18N_JSON__;
     const LS_LOCALE = 'sensors-dcs.locale';
     let currentLocale = 'zh';
     try {
@@ -2419,7 +2419,7 @@ ERROR_HTML = """<!DOCTYPE html>
     </div>
   </main>
   <script>
-    const DCS_I18N = JSON.parse('__DCS_I18N_JSON__');
+    const DCS_I18N = __DCS_I18N_JSON__;
     const LS_LOCALE = 'sensors-dcs.locale';
     let currentLocale = 'zh';
     try {

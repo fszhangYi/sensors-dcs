@@ -13,6 +13,6 @@
 | 动态串 | JS `t(path, {vars})`，`{name}` 插值 |
 | UI | 顶栏 pill：中文 / EN |
 
-服务端在 `GET /` 用 `inject_i18n_json()` 把 catalog 注入 `__DCS_I18N_JSON__`。错误页同样支持切换。
+服务端在 `GET /` 用 `inject_i18n_json()` 把 catalog 注入为 JS 对象字面量（`const DCS_I18N = __DCS_I18N_JSON__;`，勿再 `JSON.parse('...')`）。错误页 / 登录页同样支持切换。
 
 未接 `docsLocale` / LocaleProvider（无 React 树）。

@@ -239,7 +239,7 @@ LOGIN_HTML = r"""<!DOCTYPE html>
   </div>
 
   <script>
-    const DCS_I18N = JSON.parse('__DCS_I18N_JSON__');
+    const DCS_I18N = __DCS_I18N_JSON__;
     const LS_LOCALE = 'sensors-dcs.locale';
     let currentLocale = 'zh';
     try {

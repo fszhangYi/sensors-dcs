@@ -344,9 +344,14 @@ def assert_parity() -> None:
 
 
 def inject_i18n_json(html: str, *, marker: str = "__DCS_I18N_JSON__") -> str:
-    """Replace marker token with JSON catalog (safe inside a JS string literal)."""
+    """Replace marker with a JS object literal (not a quoted string).
+
+    Call sites must use ``const DCS_I18N = __DCS_I18N_JSON__;`` — never
+    ``JSON.parse('...')``, which breaks on backslashes in catalog values
+    (e.g. Windows paths ``D:\\\\data``).
+    """
     assert_parity()
-    # Escape for embedding inside a single-quoted JS string via JSON.parse
+    # Escape </ so a catalog value cannot terminate the surrounding <script>.
     payload = catalog_json().replace("</", "<\\/")
     if marker not in html:
         return html
