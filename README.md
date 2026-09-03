@@ -16,6 +16,7 @@ sensors-dcs/
   docs/gello-joint-affine.md        # Gello 关节仿射标定（offsets/signs）
   docs/arm-write.md                 # Elite arm_write 安全计划与点动 UI
   docs/gello-arm-sync.md            # Gello→Arm 一次性对齐同步（非遥操作）
+  docs/gello-arm-teleop.md          # Gello→Arm 摇操（遥操作）安全计划（未实现）
   configs/hik_camera_map.yaml       # serial→hik 相机名（export-hik-dataset）
 ```
 
@@ -94,6 +95,10 @@ sensors-dcs run -c configs/robot_write.yaml --no-dry-run
 ```bash
 sensors-dcs run -c configs/gello_arm_sync.yaml
 ```
+
+### Gello → Arm 摇操（计划，未实现）
+
+见 [docs/gello-arm-teleop.md](docs/gello-arm-teleop.md)。须先 Arm，再点「摇操」；开环要求与臂已对齐（否则提示先「同步」）；跟随中跳变超限自动解除。与一次性对齐并列，默认关闭。
 
 浏览器打开：`http://127.0.0.1:7011/`（CLI `run` 会尝试打开浏览器）  
 页面显示保存路径与 episode；「开始/结束」控制流水线写盘（传感器常开）。  

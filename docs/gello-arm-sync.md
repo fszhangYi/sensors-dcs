@@ -3,7 +3,7 @@
 > 参考旧项目：`autodl-tmp/hww/hik_gello`（启动前对齐 + 斜坡）  
 > 对照 DCS：`arm_write` 点动（`docs/arm-write.md`）、gello→gripper sync  
 > 状态：**已实现首版**（Runtime + API/UI + `configs/gello_arm_sync.yaml`）；默认关闭。  
-> **范围声明：本功能只做「把臂对齐到下发命令时刻的 gello 姿态」的一次性同步，不是遥操作。**
+> **范围声明：本功能只做「把臂对齐到下发命令时刻的 gello 姿态」的一次性同步，不是遥操作。** 持续跟随见 [gello-arm-teleop.md](gello-arm-teleop.md)。
 
 ---
 
@@ -246,7 +246,7 @@ gello_arm_sync:
 
 ### 明确不做
 
-- [ ] 同步完成后的 gello 遥操作 / 100Hz streaming 跟随  
+- [ ] 同步完成后的 gello 遥操作 / 100Hz streaming 跟随 → 见独立计划 [gello-arm-teleop.md](gello-arm-teleop.md)  
 - [ ] ramping 中重读 gello 改终点或改路径（**目标只采一次**）  
 - [ ] 把夹爪并进臂同步  
 - [ ] open/启动自动同步  

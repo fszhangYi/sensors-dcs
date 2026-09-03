@@ -45,6 +45,7 @@
 - [x] 两段式：**Arm → 点动**；**Disarm / Estop**
 - [x] UI：每轴 **±** + **delta 滚动条**（不做自由填绝对角首版）
 - [x] （后续）gello→arm 同步：独立开关、默认关、限速+死人手 → 见 [gello-arm-sync.md](gello-arm-sync.md)（一次性对齐，非遥操作）
+- [ ] （后续）gello→arm 摇操：Arm +「摇操」按钮、开环对齐闸、跳变解除 → 见 [gello-arm-teleop.md](gello-arm-teleop.md)
 
 ### 3. 配置与部署
 
@@ -56,7 +57,7 @@
 
 - [x] dry_run 冒烟：Arm / ±点动 / Disarm
 - [ ] 真机低速、清空空间、急停在手：仅 Arm + 读回
-- [ ] 小 Δq 点动 → 再考虑连续 TT / 遥操作
+- [ ] 小 Δq 点动 → 再考虑连续 TT / 遥操作（摇操计划见 [gello-arm-teleop.md](gello-arm-teleop.md)）
 
 ### 5. 首版明确不做
 
