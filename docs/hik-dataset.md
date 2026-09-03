@@ -10,7 +10,8 @@
 - 过滤与 CLI：[filter-timeline.md](filter-timeline.md)
 - Gello 关节标定：[gello-joint-affine.md](gello-joint-affine.md)
 
-上游对照：`hww/hik_gello/save_data.py`、`data_postprocess.py`、`gello/zmq_core/robot_node.py`、`gello/robots/elite_robot.py`、`gello/robots/dh_ag95.py`。
+上游对照：`hww/hik_gello/save_data.py`、`data_postprocess.py`、`gello/zmq_core/robot_node.py`、`gello/robots/elite_robot.py`、`gello/robots/dh_ag95.py`。  
+**在线 save_data vs DCS 录制深度对比（优势 / 不足 / 错误标出）**：[save-data-compare.md](save-data-compare.md)。
 
 ---
 
