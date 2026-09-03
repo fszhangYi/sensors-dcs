@@ -43,6 +43,17 @@ class GelloArmSyncConfig(BaseModel):
     max_ramp_rounds: int = 3
 
 
+class GelloArmTeleopConfig(BaseModel):
+    """Live gello→arm teleop (see docs/gello-arm-teleop.md). Default off."""
+
+    teleop_hz: float = 50.0
+    teleop_enter_max_rad: float = 0.05
+    teleop_step_max_rad: float = 0.05
+    teleop_jump_abort_rad: float = 0.35
+    teleop_stale_max_ticks: int = 3
+    teleop_write_fail_max: int = 5
+
+
 class RecordConfig(BaseModel):
     save_dir: str | None = "./data"
     episode_index: int = 0
@@ -57,6 +68,7 @@ class DcsConfig(BaseModel):
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     record: RecordConfig = Field(default_factory=RecordConfig)
     gello_arm_sync: GelloArmSyncConfig = Field(default_factory=GelloArmSyncConfig)
+    gello_arm_teleop: GelloArmTeleopConfig = Field(default_factory=GelloArmTeleopConfig)
     agents: list[AgentConfig] = Field(default_factory=list)
 
     @field_validator("agents")
@@ -142,5 +154,6 @@ def config_summary(cfg: DcsConfig) -> dict[str, Any]:
         "runtime": cfg.runtime.model_dump(),
         "record": cfg.record.model_dump(),
         "gello_arm_sync": cfg.gello_arm_sync.model_dump(),
+        "gello_arm_teleop": cfg.gello_arm_teleop.model_dump(),
         "agents": [a.model_dump() for a in cfg.agents],
     }

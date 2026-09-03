@@ -160,6 +160,8 @@ def main(argv: list[str] | None = None) -> None:
         arm_command=orch.arm_command,
         gello_arm_sync=orch.set_gello_arm_sync,
         gello_arm_sync_status=orch.gello_arm_sync_status,
+        gello_arm_teleop=orch.set_gello_arm_teleop,
+        gello_arm_teleop_status=orch.gello_arm_teleop_status,
         shutdown=_shutdown,
     )
     orch.cfg.runtime.viz_port = port

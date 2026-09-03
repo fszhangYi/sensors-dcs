@@ -2,7 +2,7 @@
 
 > 参考旧项目：`autodl-tmp/hww/hik_gello`（`experiments/run_env.py` 启动闸 + 100Hz 跟随；`gello/robots/elite_robot.py` `TT_add_joint`）  
 > 对照 DCS：一次性对齐 [gello-arm-sync.md](gello-arm-sync.md)、点动 [arm-write.md](arm-write.md)、`runtime.set_gello_arm_sync`  
-> 状态：**计划（未实现）**；默认关闭；须显式点「摇操」。  
+> 状态：**已实现首版**（Runtime + API/UI + `configs/gello_arm_sync.yaml` 中 `gello_arm_teleop`）；默认关闭；须显式点「摇操」。  
 > **范围声明：本功能是「对齐之后」的持续关节跟随；与「同步」并列，不是把同步改成遥操作。**
 
 ---
@@ -213,11 +213,11 @@ UI 建议（`arm_write` 卡片，`同步` 按钮旁）：
 
 ### Runtime
 
-- [ ] `set_gello_arm_teleop(enabled, …)`：开 → gate → 写环线程；关 → 停写
-- [ ] `gello_arm_teleop_status()`：见下表字段
-- [ ] 任何退出路径保证：无 gello→arm 后台写
-- [ ] `arm_command` 点动：teleop 中拒绝
-- [ ] Disarm / Estop / shutdown：先 `teleop=false`
+- [x] `set_gello_arm_teleop(enabled, …)`：开 → gate → 写环线程；关 → 停写
+- [x] `gello_arm_teleop_status()`：见下表字段
+- [x] 任何退出路径保证：无 gello→arm 后台写
+- [x] `arm_command` 点动：teleop 中拒绝
+- [x] Disarm / Estop / shutdown：先 `teleop=false`
 
 ### Status 字段（建议）
 
@@ -235,8 +235,8 @@ UI 建议（`arm_write` 卡片，`同步` 按钮旁）：
 
 ### HTTP
 
-- [ ] `GET /api/arm/gello-teleop` → status
-- [ ] `POST /api/arm/gello-teleop` body：`{ "enabled": bool, "gello_agent_id"?, "arm_agent_id"?, "arm_write_agent_id"? }`
+- [x] `GET /api/arm/gello-teleop` → status
+- [x] `POST /api/arm/gello-teleop` body：`{ "enabled": bool, "gello_agent_id"?, "arm_agent_id"?, "arm_write_agent_id"? }`
 
 ### 配置
 
@@ -247,6 +247,7 @@ gello_arm_teleop:
   teleop_step_max_rad: 0.05     # 单拍最大跟随步长（限速）
   teleop_jump_abort_rad: 0.35   # 超此视为跳变 → 自动解除
   teleop_stale_max_ticks: 3     # gello 连续无效拍数上限
+  teleop_write_fail_max: 5      # 连续写失败次数上限 → 自动解除
 ```
 
 挂在 DCS YAML（可与 `gello_arm_sync` 同文件扩展）；`GelloArmTeleopConfig` 进 `config.py`。
@@ -257,21 +258,20 @@ gello_arm_teleop:
 
 ### Runtime / Config
 
-- [ ] `GelloArmTeleopConfig` + `DcsConfig.gello_arm_teleop`
-- [ ] `_gello_arm_teleop_gate` + `set_gello_arm_teleop` + `_gello_arm_teleop_loop`
-- [ ] 跳变两档 + stale 解除；status 字段
-- [ ] 与 sync / jog / disarm / shutdown 互斥钩子
+- [x] `GelloArmTeleopConfig` + `DcsConfig.gello_arm_teleop`
+- [x] `_gello_arm_teleop_gate` + `set_gello_arm_teleop` + `_gello_arm_teleop_loop`
+- [x] 跳变两档 + stale 解除；status 字段
+- [x] 与 sync / jog / disarm / shutdown 互斥钩子
 
 ### API / UI
 
-- [ ] `GET/POST /api/arm/gello-teleop`（`viz.py` + `desktop_main` 注入）
-- [ ] 按钮「摇操」↔「解除摇操」；弹窗；状态行
-- [ ] WS/status 广播 `gello_arm_teleop`（便于 UI 刷新，同 sync）
+- [x] `GET/POST /api/arm/gello-teleop`（`viz.py` + `desktop_main` 注入）
+- [x] 按钮「摇操」↔「解除摇操」；弹窗；状态行
+- [x] WS/status 广播 `gello_arm_teleop`（便于 UI 刷新，同 sync）
 
 ### 验证阶梯
 
-- [ ] dry_run：未 Arm → 弹窗，零写
-- [ ] dry_run：\(\Delta_{\max}\) 过大 → 弹窗「先同步」，零写
+- [x] dry_run / 单测：限速步长、gate（未 Arm / 未对齐 / sync 互斥 / 对齐通过）
 - [ ] dry_run：对齐后开摇操 → `write_count` 随 hz 增长；解除后停止
 - [ ] dry_run：注入单拍 \(\delta>0.35\) → 自动解除 + error 文案
 - [ ] dry_run：摇操中点动被拒；Disarm 停环
@@ -280,11 +280,11 @@ gello_arm_teleop:
 
 ### 明确不做（首版）
 
-- [ ] 启动 / open / Arm 后自动摇操
-- [ ] 摇操写夹爪或合并 gripper sync
-- [ ] 笛卡尔空间遥操作
-- [ ] 用 WebSocket 从浏览器下发关节命令
-- [ ] 跳变后静默 hold 却仍显示摇操中
+- [x] 启动 / open / Arm 后自动摇操
+- [x] 摇操写夹爪或合并 gripper sync
+- [x] 笛卡尔空间遥操作
+- [x] 用 WebSocket 从浏览器下发关节命令
+- [x] 跳变后静默 hold 却仍显示摇操中
 
 ---
 

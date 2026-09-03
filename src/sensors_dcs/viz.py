@@ -48,6 +48,13 @@ class GelloArmSyncBody(BaseModel):
     arm_write_agent_id: str | None = None
 
 
+class GelloArmTeleopBody(BaseModel):
+    enabled: bool
+    gello_agent_id: str | None = None
+    arm_agent_id: str | None = None
+    arm_write_agent_id: str | None = None
+
+
 PREVIEW_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -279,8 +286,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
     .arm-cmd .arm-sync-prog {
       color: var(--muted); font-size: 0.78rem; min-height: 1.1em;
     }
+    .arm-cmd .arm-teleop-prog {
+      color: var(--muted); font-size: 0.78rem; min-height: 1.1em;
+    }
     .arm-cmd button.arm-sync-on {
       background: color-mix(in srgb, #c90 32%, #0b1017); border-color: #a70;
+    }
+    .arm-cmd button.arm-teleop-on {
+      background: color-mix(in srgb, #3d9a8b 40%, #0b1017); border-color: var(--accent);
     }
     .modal-backdrop {
       display: none; position: fixed; inset: 0; z-index: 50;
@@ -869,14 +882,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
             '<button type="button" class="arm-disarm">Disarm</button>' +
             '<button type="button" class="arm-estop">Estop</button>' +
             '<button type="button" class="arm-gello-sync">同步</button>' +
+            '<button type="button" class="arm-gello-teleop">摇操</button>' +
             '<label>delta°</label>' +
             '<input type="range" class="arm-delta" min="0.1" max="5" step="0.1" value="1.0" />' +
             '<span class="arm-delta-val">1.0°</span>' +
             '<span class="arm-armed-tag">idle</span>' +
           '</div>' +
           '<div class="arm-sync-prog">gello→arm：空闲（完成后 gello 不控臂）</div>' +
+          '<div class="arm-teleop-prog">摇操：空闲（gello 不控臂）</div>' +
           jogHtml +
-          '<span class="cmd-hint">须先有 robot·Read；Arm 后可 ± 点动，或「同步」一次对齐到命令时刻 gello 姿态（20s/5Hz，非遥操作）</span>';
+          '<span class="cmd-hint">须先有 robot·Read；Arm →「同步」对齐 →「摇操」跟随；解除后 gello 不再控臂</span>';
         card.appendChild(box);
         const delta = box.querySelector('.arm-delta');
         const deltaVal = box.querySelector('.arm-delta-val');
@@ -885,7 +900,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const disarmBtn = box.querySelector('.arm-disarm');
         const estopBtn = box.querySelector('.arm-estop');
         const syncBtn = box.querySelector('.arm-gello-sync');
+        const teleopBtn = box.querySelector('.arm-gello-teleop');
         const syncProg = box.querySelector('.arm-sync-prog');
+        const teleopProg = box.querySelector('.arm-teleop-prog');
         const updateDeltaLabel = () => {
           deltaVal.textContent = Number(delta.value).toFixed(1) + '°';
         };
@@ -904,14 +921,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
         box._applyArmUi = (armed) => {
           const hasRead = Array.isArray(window.__armReadJoints) && window.__armReadJoints.length > 0;
           const sync = window.__gelloArmSync || {};
+          const teleop = window.__gelloArmTeleop || {};
           const syncing = !!sync.enabled;
+          const teleoping = !!teleop.enabled;
           armedTag.textContent = !hasRead ? 'need read' : (armed ? 'armed' : 'idle');
-          setJogEnabled(!!armed && hasRead && !syncing);
-          armBtn.disabled = !hasRead || syncing;
-          syncBtn.disabled = !hasRead;
+          setJogEnabled(!!armed && hasRead && !syncing && !teleoping);
+          armBtn.disabled = !hasRead || syncing || teleoping;
+          syncBtn.disabled = !hasRead || teleoping;
           syncBtn.textContent = syncing ? '取消同步' : '同步';
           syncBtn.classList.toggle('arm-sync-on', syncing);
           syncBtn.dataset.enabled = syncing ? '1' : '0';
+          teleopBtn.disabled = !hasRead || syncing;
+          teleopBtn.textContent = teleoping ? '解除摇操' : '摇操';
+          teleopBtn.classList.toggle('arm-teleop-on', teleoping);
+          teleopBtn.dataset.enabled = teleoping ? '1' : '0';
           if (sync.phase === 'ramping' && sync.ramp_n) {
             const left = Math.max(0, (Number(sync.ramp_n) - Number(sync.ramp_index || 0)) / 5);
             syncProg.textContent =
@@ -929,12 +952,25 @@ PREVIEW_HTML = """<!DOCTYPE html>
           } else {
             syncProg.textContent = 'gello→arm：空闲（完成后 gello 不控臂）';
           }
+          if (teleop.phase === 'teleop' || teleoping) {
+            teleopProg.textContent = teleop.message || (
+              teleop.rate_limited
+                ? ('限速中 · ' + (teleop.hz || '?') + ' Hz')
+                : ('摇操中 · ' + (teleop.hz || '?') + ' Hz · 已写 ' + (teleop.write_count || 0))
+            );
+          } else if (teleop.phase === 'error' && teleop.last_error) {
+            teleopProg.textContent = '失败：' + teleop.last_error;
+          } else if (teleop.message) {
+            teleopProg.textContent = String(teleop.message);
+          } else {
+            teleopProg.textContent = '摇操：空闲（gello 不控臂）';
+          }
         };
         armBtn.addEventListener('click', async () => {
           runHint.textContent = '机械臂 Arm / TT_init…';
           try {
             const r = await postArm({ arm: true });
-            runHint.textContent = r.ok ? 'Arm 成功，可用 ± 点动 / 同步' : ('Arm 失败：' + (r.error || JSON.stringify(r)));
+            runHint.textContent = r.ok ? 'Arm 成功，可用 ± 点动 / 同步 / 摇操' : ('Arm 失败：' + (r.error || JSON.stringify(r)));
             box._applyArmUi(!!(r.ok && r.armed));
           } catch (e) {
             runHint.textContent = 'Arm 异常：' + e;
@@ -992,7 +1028,41 @@ PREVIEW_HTML = """<!DOCTYPE html>
             showAppModal('同步异常', String(e));
           } finally {
             syncBtn.disabled = false;
-            box._applyArmUi(!!(window.__gelloArmSync && window.__gelloArmSync.enabled) ? !!p.armed : !!p.armed);
+            box._applyArmUi(!!p.armed);
+          }
+        });
+        teleopBtn.addEventListener('click', async () => {
+          const want = teleopBtn.dataset.enabled !== '1';
+          teleopBtn.disabled = true;
+          try {
+            const r = await fetch('/api/arm/gello-teleop', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                enabled: want,
+                arm_write_agent_id: frame.agent_id,
+              }),
+            }).then((x) => x.json());
+            window.__gelloArmTeleop = r;
+            if (!r.ok) {
+              showAppModal(
+                r.gate_failed ? '无法进入摇操' : '摇操失败',
+                r.error || JSON.stringify(r),
+              );
+              runHint.textContent = '摇操失败：' + (r.error || JSON.stringify(r));
+              box._applyArmUi(!!p.armed);
+              return;
+            }
+            box._applyArmUi(!!p.armed);
+            runHint.textContent = r.enabled
+              ? (r.message || '摇操已开启')
+              : (r.message || '已解除摇操；gello 未控制机械臂');
+          } catch (e) {
+            runHint.textContent = '摇操异常：' + e;
+            showAppModal('摇操异常', String(e));
+          } finally {
+            teleopBtn.disabled = false;
+            box._applyArmUi(!!p.armed);
           }
         });
         const jog = async (jointIndex, sign) => {
@@ -1125,6 +1195,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
           showAppModal('同步失败', cur.last_error);
         }
       }
+      if (msg.gello_arm_teleop) {
+        const prevT = window.__gelloArmTeleop || {};
+        const curT = msg.gello_arm_teleop;
+        window.__gelloArmTeleop = curT;
+        if (prevT.phase === 'teleop' && curT.phase === 'error' && curT.last_error) {
+          showAppModal('摇操已解除', curT.last_error);
+        }
+      }
       frames.forEach((frame) => {
         const ar = agentRates[frame.agent_id] || {};
         const hzText = updateBackHz(
@@ -1237,6 +1315,8 @@ def create_viz_app(
     arm_command: Callable[..., dict[str, Any]] | None = None,
     gello_arm_sync: Callable[..., dict[str, Any]] | None = None,
     gello_arm_sync_status: Callable[[], dict[str, Any]] | None = None,
+    gello_arm_teleop: Callable[..., dict[str, Any]] | None = None,
+    gello_arm_teleop_status: Callable[[], dict[str, Any]] | None = None,
     shutdown: Callable[[], dict[str, Any]] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="sensors-dcs viz", version="0.1.0")
@@ -1337,6 +1417,24 @@ def create_viz_app(
             return {"ok": False, "error": "gello arm sync unavailable", "enabled": False}
         return await asyncio.to_thread(
             gello_arm_sync,
+            enabled=bool(req.enabled),
+            gello_agent_id=req.gello_agent_id,
+            arm_agent_id=req.arm_agent_id,
+            arm_write_agent_id=req.arm_write_agent_id,
+        )
+
+    @app.get("/api/arm/gello-teleop")
+    async def arm_gello_teleop_get() -> dict[str, Any]:
+        if gello_arm_teleop_status is None:
+            return {"ok": False, "error": "gello arm teleop unavailable", "enabled": False}
+        return {"ok": True, **gello_arm_teleop_status()}
+
+    @app.post("/api/arm/gello-teleop")
+    async def arm_gello_teleop_set(req: GelloArmTeleopBody) -> dict[str, Any]:
+        if gello_arm_teleop is None:
+            return {"ok": False, "error": "gello arm teleop unavailable", "enabled": False}
+        return await asyncio.to_thread(
+            gello_arm_teleop,
             enabled=bool(req.enabled),
             gello_agent_id=req.gello_agent_id,
             arm_agent_id=req.arm_agent_id,

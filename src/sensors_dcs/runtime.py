@@ -85,6 +85,24 @@ class Orchestrator:
         self._arm_sync_write_count = 0
         self._arm_sync_last_t_wall: float | None = None
         self._arm_sync_target_joints: list[float] | None = None
+        # Live gello→arm teleop (docs/gello-arm-teleop.md); default off.
+        self._arm_teleop_lock = threading.Lock()
+        self._arm_teleop_stop = threading.Event()
+        self._arm_teleop_thread: threading.Thread | None = None
+        self._arm_teleop_enabled = False
+        self._arm_teleop_gello_id: str | None = None
+        self._arm_teleop_arm_id: str | None = None
+        self._arm_teleop_writer_id: str | None = None
+        self._arm_teleop_phase = "idle"
+        self._arm_teleop_delta_max: float | None = None
+        self._arm_teleop_worst_joint: int | None = None
+        self._arm_teleop_last_ok: bool | None = None
+        self._arm_teleop_last_error: str | None = None
+        self._arm_teleop_last_message: str | None = None
+        self._arm_teleop_write_count = 0
+        self._arm_teleop_last_t_wall: float | None = None
+        self._arm_teleop_rate_limited = False
+        self._arm_teleop_hz = 50.0
 
     def status(self) -> dict[str, Any]:
         return {
@@ -95,6 +113,7 @@ class Orchestrator:
             "record": self.recorder.status(),
             "gripper_gello_sync": self.gripper_gello_sync_status(),
             "gello_arm_sync": self.gello_arm_sync_status(),
+            "gello_arm_teleop": self.gello_arm_teleop_status(),
         }
 
     def start(self) -> None:
@@ -109,6 +128,7 @@ class Orchestrator:
         self._console_thread.start()
 
     def stop(self) -> None:
+        self.set_gello_arm_teleop(enabled=False)
         self.set_gello_arm_sync(enabled=False)
         self.set_gripper_gello_sync(enabled=False)
         self._stop.set()
@@ -176,6 +196,7 @@ class Orchestrator:
             "record": self.recorder.status(),
             "gripper_gello_sync": self.gripper_gello_sync_status(),
             "gello_arm_sync": self.gello_arm_sync_status(),
+            "gello_arm_teleop": self.gello_arm_teleop_status(),
         }
 
     @staticmethod
@@ -573,6 +594,9 @@ class Orchestrator:
         arm_write_agent_id: str | None = None,
     ) -> dict[str, Any]:
         """Start/stop one-shot gello→arm alignment. After finish, gello does not command arm."""
+        if enabled:
+            # Sync wins: stop teleop before starting alignment.
+            self.set_gello_arm_teleop(enabled=False)
         if not enabled:
             self._arm_sync_stop.set()
             th = self._arm_sync_thread
@@ -811,6 +835,321 @@ class Orchestrator:
                     self._arm_sync_last_message = final_message or self._arm_sync_last_message
                 self._arm_sync_last_t_wall = time.time()
 
+    def gello_arm_teleop_status(self) -> dict[str, Any]:
+        with self._arm_teleop_lock:
+            return {
+                "enabled": self._arm_teleop_enabled,
+                "phase": self._arm_teleop_phase,
+                "gello_agent_id": self._arm_teleop_gello_id,
+                "arm_agent_id": self._arm_teleop_arm_id,
+                "arm_write_agent_id": self._arm_teleop_writer_id,
+                "delta_max": self._arm_teleop_delta_max,
+                "worst_joint": self._arm_teleop_worst_joint,
+                "last_ok": self._arm_teleop_last_ok,
+                "last_error": self._arm_teleop_last_error,
+                "message": self._arm_teleop_last_message,
+                "write_count": self._arm_teleop_write_count,
+                "last_t_wall": self._arm_teleop_last_t_wall,
+                "rate_limited": self._arm_teleop_rate_limited,
+                "hz": self._arm_teleop_hz,
+                "params": self.cfg.gello_arm_teleop.model_dump(),
+            }
+
+    @staticmethod
+    def _rate_limit_step(
+        q_prev: list[float], q_target: list[float], step_max: float
+    ) -> list[float]:
+        """Move from q_prev toward q_target with max |Δ| per joint capped by step_max on the vector."""
+        dmax, _ = Orchestrator._delta_max_joint(q_prev, q_target)
+        if dmax <= step_max + 1e-12:
+            return [float(x) for x in q_target]
+        if dmax <= 1e-15:
+            return [float(x) for x in q_prev]
+        scale = float(step_max) / dmax
+        return [
+            float(q_prev[i]) + scale * (float(q_target[i]) - float(q_prev[i]))
+            for i in range(6)
+        ]
+
+    def _writer_armed(self, writer: BaseAgent) -> bool:
+        armed = bool(getattr(writer.sensor, "armed", False))
+        if not armed:
+            fr = writer.ring.latest.get()
+            if fr is not None:
+                armed = bool(fr.payload.get("armed"))
+        return armed
+
+    def _gello_arm_teleop_gate(
+        self,
+        gello: BaseAgent,
+        reader: BaseAgent,
+        writer: BaseAgent,
+    ) -> dict[str, Any]:
+        params = self.cfg.gello_arm_teleop
+        if self._arm_sync_enabled:
+            return {
+                "ok": False,
+                "gate_failed": True,
+                "error": "gello→arm sync active; cancel sync before teleop",
+            }
+        if not self._writer_armed(writer):
+            return {
+                "ok": False,
+                "gate_failed": True,
+                "error": "请先点 Arm，再开摇操。",
+            }
+        qg = self._joints6_from_ring(gello)
+        qa = self._joints6_from_ring(reader)
+        if qg is None:
+            return {
+                "ok": False,
+                "gate_failed": True,
+                "error": "no live gello joints_rad[0:6]; wait for gello read",
+            }
+        if qa is None:
+            return {
+                "ok": False,
+                "gate_failed": True,
+                "error": "no live arm read joints; wait for robot · Read",
+            }
+        dmax, ji = self._delta_max_joint(qa, qg)
+        enter = float(params.teleop_enter_max_rad)
+        if dmax > enter + 1e-12:
+            return {
+                "ok": False,
+                "gate_failed": True,
+                "error": (
+                    f"当前最大关节差 Δ={dmax:.4f} rad（第 {ji} 轴）超过 "
+                    f"teleop_enter_max_rad={enter}。请先点「同步」对齐后再摇操。"
+                ),
+                "delta_max": dmax,
+                "worst_joint": ji,
+                "q_gello": qg,
+                "q_arm": qa,
+            }
+        return {
+            "ok": True,
+            "q_gello": qg,
+            "q_arm": qa,
+            "delta_max": dmax,
+            "worst_joint": ji,
+        }
+
+    def set_gello_arm_teleop(
+        self,
+        *,
+        enabled: bool,
+        gello_agent_id: str | None = None,
+        arm_agent_id: str | None = None,
+        arm_write_agent_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Start/stop live gello→arm teleop. Jump/stale auto-disables; keeps armed."""
+        if not enabled:
+            self._arm_teleop_stop.set()
+            th = self._arm_teleop_thread
+            if th is not None and th.is_alive():
+                th.join(timeout=3.0)
+            with self._arm_teleop_lock:
+                was = self._arm_teleop_enabled or self._arm_teleop_phase == "teleop"
+                self._arm_teleop_enabled = False
+                self._arm_teleop_thread = None
+                self._arm_teleop_rate_limited = False
+                if was and self._arm_teleop_phase == "teleop":
+                    self._arm_teleop_phase = "idle"
+                    self._arm_teleop_last_message = "已解除摇操；gello 未控制机械臂"
+                    self._arm_teleop_last_ok = True
+                    self._arm_teleop_last_error = None
+                self._arm_teleop_last_t_wall = time.time()
+            return {"ok": True, **self.gello_arm_teleop_status()}
+
+        resolved = self._resolve_gello_arm_agents(
+            gello_agent_id=gello_agent_id,
+            arm_agent_id=arm_agent_id,
+            arm_write_agent_id=arm_write_agent_id,
+        )
+        if isinstance(resolved, dict):
+            return {**resolved, **self.gello_arm_teleop_status()}
+        gello, reader, writer = resolved
+
+        gate = self._gello_arm_teleop_gate(gello, reader, writer)
+        if not gate.get("ok"):
+            with self._arm_teleop_lock:
+                self._arm_teleop_phase = "error"
+                self._arm_teleop_last_ok = False
+                self._arm_teleop_last_error = gate.get("error")
+                self._arm_teleop_last_message = gate.get("error")
+                self._arm_teleop_delta_max = gate.get("delta_max")
+                self._arm_teleop_worst_joint = gate.get("worst_joint")
+                self._arm_teleop_last_t_wall = time.time()
+            return {**gate, **self.gello_arm_teleop_status()}
+
+        self._arm_teleop_stop.set()
+        th_old = self._arm_teleop_thread
+        if th_old is not None and th_old.is_alive():
+            th_old.join(timeout=3.0)
+
+        params = self.cfg.gello_arm_teleop
+        hz = max(1.0, min(100.0, float(params.teleop_hz)))
+        with self._arm_teleop_lock:
+            self._arm_teleop_enabled = True
+            self._arm_teleop_gello_id = gello.agent_id
+            self._arm_teleop_arm_id = reader.agent_id
+            self._arm_teleop_writer_id = writer.agent_id
+            self._arm_teleop_phase = "teleop"
+            self._arm_teleop_delta_max = gate.get("delta_max")
+            self._arm_teleop_worst_joint = gate.get("worst_joint")
+            self._arm_teleop_last_ok = None
+            self._arm_teleop_last_error = None
+            self._arm_teleop_last_message = f"摇操中 · {hz:g} Hz"
+            self._arm_teleop_write_count = 0
+            self._arm_teleop_rate_limited = False
+            self._arm_teleop_hz = hz
+            self._arm_teleop_last_t_wall = time.time()
+
+        self._arm_teleop_stop.clear()
+        self._arm_teleop_thread = threading.Thread(
+            target=self._gello_arm_teleop_loop,
+            name="gello-arm-teleop",
+            daemon=True,
+            args=(gello.agent_id, reader.agent_id, writer.agent_id),
+        )
+        self._arm_teleop_thread.start()
+        return {"ok": True, **self.gello_arm_teleop_status()}
+
+    def _gello_arm_teleop_loop(self, gello_id: str, arm_id: str, writer_id: str) -> None:
+        """Live follow with per-step rate limit and jump/stale abort (keeps armed)."""
+        from sensors_dcs.agents.arm_agent import ArmAgent
+        from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
+        from sensors_dcs.agents.gello_agent import GelloAgent
+
+        params = self.cfg.gello_arm_teleop
+        hz = max(1.0, min(100.0, float(params.teleop_hz)))
+        period = 1.0 / hz
+        step_max = float(params.teleop_step_max_rad)
+        jump_abort = float(params.teleop_jump_abort_rad)
+        stale_max = max(1, int(params.teleop_stale_max_ticks))
+        fail_max = max(1, int(params.teleop_write_fail_max))
+
+        q_cmd_prev: list[float] | None = None
+        stale_ticks = 0
+        fail_streak = 0
+        final_error: str | None = None
+        final_message: str | None = None
+        abort_phase = "idle"
+
+        try:
+            while not self._arm_teleop_stop.is_set() and not self._stop.is_set():
+                gello = self.agents.get(gello_id)
+                reader = self.agents.get(arm_id)
+                writer = self.agents.get(writer_id)
+                if not isinstance(gello, GelloAgent) or not isinstance(reader, ArmAgent):
+                    final_error = "teleop agents missing"
+                    abort_phase = "error"
+                    break
+                if not isinstance(writer, ArmWriteAgent):
+                    final_error = "arm_write agent missing"
+                    abort_phase = "error"
+                    break
+                if not self._writer_armed(writer):
+                    final_error = "Arm 已断开，已解除摇操"
+                    abort_phase = "error"
+                    break
+
+                q_g = self._joints6_from_ring(gello)
+                q_a = self._joints6_from_ring(reader)
+                if q_g is None:
+                    stale_ticks += 1
+                    if stale_ticks > stale_max:
+                        final_error = "gello 读数中断，已解除摇操"
+                        abort_phase = "error"
+                        break
+                    with self._arm_teleop_lock:
+                        self._arm_teleop_last_message = (
+                            f"摇操中 · 等待 gello（stale {stale_ticks}/{stale_max}）"
+                        )
+                        self._arm_teleop_last_t_wall = time.time()
+                    self._arm_teleop_stop.wait(period)
+                    continue
+                stale_ticks = 0
+
+                rate_limited = False
+                if q_cmd_prev is None:
+                    q_cmd = list(q_g)
+                    dmax, ji = self._delta_max_joint(q_a or q_cmd, q_g)
+                else:
+                    dmax, ji = self._delta_max_joint(q_cmd_prev, q_g)
+                    if dmax > jump_abort + 1e-12:
+                        final_error = (
+                            f"检测到 gello 关节跳变（Δ={dmax:.4f} rad，轴 {ji}），"
+                            f"已自动解除摇操。请检查主手后先「同步」，再开摇操。"
+                        )
+                        abort_phase = "error"
+                        break
+                    if dmax > step_max + 1e-12:
+                        q_cmd = self._rate_limit_step(q_cmd_prev, q_g, step_max)
+                        rate_limited = True
+                    else:
+                        q_cmd = list(q_g)
+
+                ref = q_a if q_a is not None else (q_cmd_prev or q_cmd)
+                result = writer.command(joints_rad=list(q_cmd), reference_joints_rad=list(ref))
+                ok = bool(result.get("ok"))
+                if ok:
+                    fail_streak = 0
+                    q_cmd_prev = list(q_cmd)
+                else:
+                    fail_streak += 1
+                    if fail_streak >= fail_max:
+                        final_error = (
+                            "摇操写臂连续失败："
+                            + str(result.get("error") or "write rejected")
+                            + "；已解除摇操"
+                        )
+                        abort_phase = "error"
+                        break
+
+                with self._arm_teleop_lock:
+                    self._arm_teleop_delta_max = dmax
+                    self._arm_teleop_worst_joint = ji
+                    self._arm_teleop_rate_limited = rate_limited
+                    self._arm_teleop_last_ok = ok
+                    self._arm_teleop_last_error = result.get("error")
+                    self._arm_teleop_write_count += 1 if ok else 0
+                    self._arm_teleop_last_t_wall = time.time()
+                    if rate_limited:
+                        self._arm_teleop_last_message = (
+                            f"限速中 · {hz:g} Hz · 已写 {self._arm_teleop_write_count}"
+                        )
+                    else:
+                        self._arm_teleop_last_message = (
+                            f"摇操中 · {hz:g} Hz · 已写 {self._arm_teleop_write_count}"
+                        )
+
+                self._arm_teleop_stop.wait(period)
+
+            if final_error is None and (
+                self._arm_teleop_stop.is_set() or self._stop.is_set()
+            ):
+                final_message = "已解除摇操；gello 未控制机械臂"
+                abort_phase = "idle"
+        finally:
+            with self._arm_teleop_lock:
+                self._arm_teleop_enabled = False
+                self._arm_teleop_thread = None
+                self._arm_teleop_rate_limited = False
+                self._arm_teleop_phase = abort_phase
+                if final_error:
+                    self._arm_teleop_last_ok = False
+                    self._arm_teleop_last_error = final_error
+                    self._arm_teleop_last_message = final_error
+                else:
+                    self._arm_teleop_last_ok = True
+                    self._arm_teleop_last_error = None
+                    self._arm_teleop_last_message = (
+                        final_message or "已解除摇操；gello 未控制机械臂"
+                    )
+                self._arm_teleop_last_t_wall = time.time()
+
     def gripper_command(
         self,
         *,
@@ -912,9 +1251,17 @@ class Orchestrator:
             return agent.command(arm=True)
 
         if disarm or stop:
-            # Always kill alignment write loop before disarm/estop.
+            # Always kill teleop + alignment write loops before disarm/estop.
+            self.set_gello_arm_teleop(enabled=False)
             self.set_gello_arm_sync(enabled=False)
             return agent.command(disarm=bool(disarm or stop), stop=True)
+
+        if self._arm_teleop_enabled:
+            return {
+                "ok": False,
+                "error": "gello→arm teleop active; 解除摇操 before jog",
+                **self.gello_arm_teleop_status(),
+            }
 
         if self._arm_sync_enabled:
             return {
@@ -968,6 +1315,8 @@ class Orchestrator:
             arm_command=self.arm_command,
             gello_arm_sync=self.set_gello_arm_sync,
             gello_arm_sync_status=self.gello_arm_sync_status,
+            gello_arm_teleop=self.set_gello_arm_teleop,
+            gello_arm_teleop_status=self.gello_arm_teleop_status,
             shutdown=self.request_shutdown,
         )
         self._server = uvicorn.Server(
