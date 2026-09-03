@@ -50,8 +50,12 @@ class GripperReadAgent(BaseAgent):
         raw = sample.get("raw_value")
         if raw is None:
             raw = sample.get("position_raw")
-        dry = bool(sample.get("dry_run")) or pos is None
-        if dry and self.dry_run_synth:
+        # Fake mode may return null until first command — do not synth over that.
+        if sample.get("fake") and sample.get("position_source") == "last_command":
+            dry = bool(sample.get("dry_run"))
+        else:
+            dry = bool(sample.get("dry_run")) or pos is None
+        if dry and self.dry_run_synth and not sample.get("fake"):
             pos = self._synth_position(t_wall)
             # Inverse of (1000 - raw) * 0.000637 for viz-only synth
             raw = int(round(1000.0 - float(pos) / 0.000637))
@@ -74,6 +78,10 @@ class GripperReadAgent(BaseAgent):
             "port": getattr(self.sensor, "port", None) or sample.get("port"),
             "dry_run": dry,
             "synth": bool(sample.get("synth")),
+            "fake": bool(sample.get("fake")),
+            "position_source": sample.get("position_source"),
+            "command_t_wall": sample.get("command_t_wall"),
+            "error": sample.get("error"),
         }
         return Frame(
             sensor_id=self.sensor_id,
