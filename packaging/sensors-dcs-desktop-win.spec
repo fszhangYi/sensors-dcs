@@ -75,6 +75,7 @@ hiddenimports = [
     "sensors_dcs.frame",
     "sensors_dcs.buffer",
     "sensors_dcs.paths",
+    "sensors_dcs.static_assets",
     "sensors_dcs.runtime",
     "sensors_dcs.viz",
     "sensors_dcs.agents",
