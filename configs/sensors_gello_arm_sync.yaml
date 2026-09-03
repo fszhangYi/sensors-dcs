@@ -1,4 +1,4 @@
-# Gello leader + Elite arm_write (shared read/write) for one-shot alignment sync.
+# Gello leader + Elite arm_write — 参数与 sensors_full_cell_plus.yaml 对齐
 version: 1
 site: dcs-gello-arm-sync
 dry_run: true
@@ -21,7 +21,7 @@ defaults:
     num_joints: 6
     robot_tcp_port: 54321
     monitor_wait_s: 10
-    max_delta_deg: 2.0
+    max_delta_deg: 15.0
     enforce_soft_limits: true
     tt_t: 2
     tt_response_enable: 0
@@ -30,7 +30,7 @@ devices:
   - id: gello-leader
     kind: gello
     name: "Gello · Leader"
-    endpoint: "COM3"
+    endpoint: "COM10"
     params:
       port_substr: ""
       gripper_config: null
@@ -50,5 +50,5 @@ devices:
     params:
       robot_ip: "10.111.34.200"
       num_joints: 6
-      max_delta_deg: 2.0
+      max_delta_deg: 15.0
       enforce_soft_limits: true

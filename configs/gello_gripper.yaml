@@ -14,11 +14,9 @@ runtime:
   viz_hz: 15
   console_hz: 5
 
-
 record:
-  save_dir: ./data
+  save_dir: D:\data_new
   episode_index: 0
-  queue_maxsize: 512
 
 agents:
   - id: gello

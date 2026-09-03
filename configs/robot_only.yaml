@@ -2,17 +2,14 @@
 #
 # Usage:
 #   sensors-dcs run -c configs/robot_only.yaml
-#   # or desktop:
 #   python -m sensors_dcs.desktop_main -c configs/robot_only.yaml --ui
 #
 # Safety: agent type=arm → sensor kind=arm_read → Elite EC monitor only.
-#         write/command path is hard-disabled in the driver.
 version: 1
 site: dcs-robot-read
 
 sensors_config: ./sensors_robot.yaml
-# true = 合成关节角（无需 elite SDK / 控制器）
-# false = 读真实 Elite monitor（需网络可达 + 本机安装 elite SDK）
+# true = 合成关节角；false = 读真实 Elite monitor
 dry_run: true
 
 runtime:
@@ -24,9 +21,8 @@ runtime:
   console_hz: 5
 
 record:
-  save_dir: ./data
+  save_dir: D:\data_new
   episode_index: 0
-  queue_maxsize: 512
 
 agents:
   - id: arm

@@ -1,13 +1,13 @@
-# hik-sensors bundle — single RealSense (serial hardcoded)
+# hik-sensors bundle — single RealSense（middle，与 plus 工位对齐）
 version: 1
 site: dcs-camera-only
 dry_run: true
 
 defaults:
   realsense:
-    width: 1280
-    height: 720
-    fps: 15
+    width: 640
+    height: 480
+    fps: 30
     exposure: 200
     gain: 64
     enable_depth: true
@@ -20,5 +20,4 @@ devices:
     name: "RealSense · Main"
     params:
       role: middle
-      # Hardcoded for this cell
       serial: "336222075436"

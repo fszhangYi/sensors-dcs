@@ -1,9 +1,9 @@
 # hik-sensors bundle — gello + DH gripper + multi RealSense + Elite arm
-# 参数与 sensors_full_cell_plus.yaml 对齐（演示默认可 dry_run: true）
+# 真机工位参考配置（与 full_cell_plus.yaml 配对）
 version: 1
 site: dcs-full-cell
 # Windows 真机：改 false；无硬件演示：true
-dry_run: true
+dry_run: false
 
 defaults:
   gello:
@@ -65,7 +65,7 @@ devices:
   - id: gripper-dh
     kind: gripper
     name: "DH AG95 夹爪"
-    # Windows：勿与 Gello 同口
+    # Windows：改成实际夹爪串口（勿与 Gello 同口）
     endpoint: "COM13"
     params:
       port_substr: ""

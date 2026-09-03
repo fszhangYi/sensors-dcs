@@ -1,11 +1,10 @@
-# sensors-dcs — gello + gripper + multi RealSense + Elite arm
-# 结构与 full_cell_plus.yaml 对齐（演示默认 dry_run: true）
+# sensors-dcs — gello + gripper_read + multi RealSense
 version: 1
 site: dcs-full-cell
 
-sensors_config: ./sensors_full_cell.yaml
+sensors_config: ./sensors_full_cell_plus.yaml
 # true = 合成假数据；false = 真机（串口 + RealSense serial）
-dry_run: true
+dry_run: false
 
 runtime:
   control_host: "0.0.0.0"
@@ -25,7 +24,7 @@ gello_arm_sync:
 
 record:
   save_dir: D:\data_new
-  episode_index: 0
+  episode_index: 5
 
 agents:
   - id: gello
@@ -68,3 +67,4 @@ agents:
     sensor_id: arm-elite
     hz: 5
     buffer_frames: 8
+

@@ -8,6 +8,7 @@
 #     --camera-map configs/hik_camera_map.yaml
 #
 # Keys must be camera serial numbers (quoted). Edit per cell / station.
+# This cell (full_cell_plus): left=218722271098 right=327122077544 middle=336222075436
 
 cameras:
   "317222074437": rear_left_1
@@ -20,6 +21,7 @@ cameras:
   "334622072861": rear_left_1
   "337122074288": rear_right_1
   "218622279681": wrist_1
-  "218722271098": wrist_2
-  "327122077544": chest
+  # full_cell_plus / sensors_full_cell_plus
+  "218722271098": rear_left_1
+  "327122077544": rear_right_1
   "336222075436": top

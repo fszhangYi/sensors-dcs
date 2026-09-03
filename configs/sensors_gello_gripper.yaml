@@ -1,4 +1,5 @@
-# hik-sensors bundle — gello + DH gripper (read agent uses gripper device)
+# hik-sensors bundle — gello + DH gripper
+# 串口 / 仿射与 sensors_full_cell_plus.yaml 对齐
 version: 1
 site: dcs-gello-gripper
 # Windows 真机：改 false；无硬件演示：true
@@ -9,7 +10,6 @@ defaults:
     baudrate: 57600
     max_delta_rad: 0.8
     joint_ids: [1, 2, 3, 4, 5, 6, 7]
-    # Affine q=(q_raw-offsets)*signs — see docs/gello-joint-affine.md
     joint_offsets:
       - 1.5707963267948966
       - 6.283185307179586
@@ -25,15 +25,12 @@ defaults:
     default_force: 100
     default_speed: 100
     init_on_open: false
-    # false: hardware feedback; true: last commanded position (see docs/gripper-fake-read.md)
-    fake: false
 
 devices:
   - id: gello-leader
     kind: gello
     name: "Gello · Leader"
-    # Windows 示例：COM3
-    endpoint: "COM3"
+    endpoint: "COM10"
     params:
       port_substr: ""
       gripper_config: null
@@ -50,13 +47,10 @@ devices:
   - id: gripper-dh
     kind: gripper
     name: "DH AG95 夹爪"
-    # Windows：改成实际夹爪串口，如 COM4（勿与 Gello 同口）
-    endpoint: "COM4"
+    endpoint: "COM13"
     params:
       port_substr: ""
       read_scale: [1.0]
       read_offset: [0.0]
       write_scale: [1.0]
       write_offset: [0.0]
-      # Unreliable AG95 feedback → set true
-      fake: false

@@ -1,8 +1,9 @@
 # Minimal hik-sensors bundle — gello only (for sensors-dcs MVP)
+# 串口 / 仿射与 sensors_full_cell_plus.yaml 对齐
 version: 1
 site: dcs-gello-mvp
-# Windows 真机：改 false；Linux / 无硬件演示：true
-dry_run: false
+# Windows 真机：改 false；无硬件演示：true
+dry_run: true
 
 defaults:
   gello:
@@ -10,30 +11,24 @@ defaults:
     max_delta_rad: 0.8
     joint_ids: [1, 2, 3, 4, 5, 6, 7]
     # Affine q=(q_raw-offsets)*signs — see docs/gello-joint-affine.md
-    # Default matches gello.py PORT_CONFIG_MAP for FTAA088F / COM6 (edit per station).
     joint_offsets:
-      - 1.5707963267948966   # 1 * pi/2
-      - 6.283185307179586    # 4 * pi/2
+      - 1.5707963267948966
       - 6.283185307179586
       - 6.283185307179586
-      - 4.71238898038469     # 3 * pi/2
-      - 3.141592653589793    # 2 * pi/2
-      - 1.78                 # gripper axis (not k*pi/2)
+      - 6.283185307179586
+      - 4.71238898038469
+      - 3.141592653589793
+      - 1.78
     joint_signs: [1, 1, -1, 1, 1, 1, -1]
 
 devices:
   - id: gello-leader
     kind: gello
     name: "Gello · Leader"
-    # Windows 示例：COM3
-    # Linux 示例：/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTAA088F-if00-port0
-    endpoint: "COM3"
+    endpoint: "COM10"
     params:
-      # Windows 用 COM 口时可留空；Linux by-id 可填 FTDI 串号片段
       port_substr: ""
       gripper_config: null
-      # Affine lives next to the port (overrides defaults.gello when set).
-      # q = (q_raw - joint_offsets) * joint_signs  → payload.joints_rad
       joint_offsets:
         - 1.5707963267948966
         - 6.283185307179586

@@ -1,9 +1,9 @@
-# sensors-dcs — multi RealSense (one agent per camera)
+# sensors-dcs — multi RealSense（三路 left/right/middle，与 full_cell_plus 对齐）
 version: 1
 site: dcs-camera-multi
 
 sensors_config: ./sensors_cameras.yaml
-# true = 合成预览图；false = 真机（请先改 sensors_cameras.yaml 里各 serial）
+# true = 合成预览图；false = 真机
 dry_run: true
 
 runtime:
@@ -12,33 +12,26 @@ runtime:
   viz_host: "0.0.0.0"
   viz_port: 7011
   # 多路 JPEG 预览略降推送频率
-  viz_hz: 10
+  viz_hz: 5
   console_hz: 5
 
-
 record:
-  save_dir: ./data
+  save_dir: D:\data_new
   episode_index: 0
-  queue_maxsize: 512
 
 agents:
   - id: cam-left
     type: realsense
     sensor_id: rs-left
-    hz: 15
+    hz: 60
     buffer_frames: 2
   - id: cam-right
     type: realsense
     sensor_id: rs-right
-    hz: 15
+    hz: 60
     buffer_frames: 2
   - id: cam-middle
     type: realsense
     sensor_id: rs-middle
-    hz: 15
-    buffer_frames: 2
-  - id: cam-wrist
-    type: realsense
-    sensor_id: rs-wrist
-    hz: 15
+    hz: 60
     buffer_frames: 2
