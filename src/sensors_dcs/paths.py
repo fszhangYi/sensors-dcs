@@ -146,6 +146,7 @@ def ensure_runtime_env(*, desktop: bool = False) -> Path:
         "sensors_robot_write.yaml",
         "gello_arm_sync.yaml",
         "sensors_gello_arm_sync.yaml",
+        "hik_camera_map.yaml",
     ):
         _seed_file(root / "configs" / name, data / "configs" / name)
 

@@ -40,6 +40,22 @@ class ArmCommandBody(BaseModel):
     delta_deg: float | None = None
 
 
+class PostprocessBody(BaseModel):
+    """UI / quick-collect payload for the three offline CLI steps."""
+
+    episode: str
+    steps: list[str] | None = None
+    align: str = "asof"
+    master: str = "cam-left"
+    master_hz: float | None = 5.0
+    require: str = "arm,cam-left,cam-right,cam-middle,gripper-read"
+    max_match_dt: str = "0.033"
+    trim: str = "both"
+    materialize: bool = True
+    camera_map: str | None = None
+    allow_invalid: bool = False
+
+
 class GelloArmSyncBody(BaseModel):
     enabled: bool
     gello_agent_id: str | None = None
@@ -59,7 +75,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>sensors-dcs · Agents</title>
+  <title>sensors-dcs · 采集 / 后处理</title>
   <style>
     :root {
       --bg: #0f1419;
@@ -216,6 +232,128 @@ PREVIEW_HTML = """<!DOCTYPE html>
       background: color-mix(in srgb, #c90 26%, var(--panel));
       border-color: #a70;
       color: var(--text);
+    }
+    .tabs {
+      flex-shrink: 0;
+      display: flex;
+      gap: 0.35rem;
+      padding: 0.45rem 1.25rem 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .tabs button.tab {
+      appearance: none;
+      border: 1px solid transparent;
+      border-bottom: none;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: 0.9rem;
+      padding: 0.45rem 1rem;
+      border-radius: 8px 8px 0 0;
+      cursor: pointer;
+    }
+    .tabs button.tab:hover { color: var(--text); }
+    .tabs button.tab.active {
+      color: var(--text);
+      background: color-mix(in srgb, var(--panel) 90%, transparent);
+      border-color: var(--line);
+      border-bottom-color: transparent;
+      box-shadow: inset 0 -1px 0 var(--accent);
+    }
+    .tab-panel { display: none; }
+    .tab-panel.active {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      flex-direction: column;
+      gap: 0.65rem;
+      overflow: hidden;
+    }
+    #tab-post.active { overflow-y: auto; }
+    .quick-collect {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      color: var(--muted);
+      font-size: 0.85rem;
+      user-select: none;
+      cursor: pointer;
+    }
+    .quick-collect input { accent-color: var(--accent); }
+    .pp-grid {
+      display: grid;
+      gap: 0.75rem;
+      padding-bottom: 1rem;
+    }
+    .pp-card {
+      background: color-mix(in srgb, var(--panel) 88%, transparent);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0.85rem 1rem;
+      display: grid;
+      gap: 0.55rem;
+    }
+    .pp-card h2 {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+    .pp-card .pp-hint {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+    .pp-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 0.75rem;
+      align-items: center;
+      font-size: 0.85rem;
+    }
+    .pp-row label { color: var(--muted); min-width: 5.5rem; }
+    .pp-row input[type="text"],
+    .pp-row input[type="number"],
+    .pp-row select {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: #0b1017;
+      color: var(--text);
+      font: inherit;
+      padding: 0.35rem 0.55rem;
+      border-radius: 8px;
+      min-width: 8rem;
+    }
+    .pp-row input.wide { flex: 1 1 16rem; min-width: 12rem; }
+    .pp-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+    .pp-actions button {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.85rem;
+      padding: 0.4rem 0.9rem;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .pp-actions button.primary {
+      background: color-mix(in srgb, var(--accent) 28%, var(--panel));
+      border-color: var(--accent);
+    }
+    .pp-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+    pre#ppLog {
+      margin: 0;
+      padding: 0.65rem 0.85rem;
+      overflow: auto;
+      background: #0b1017;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      font-size: 0.72rem;
+      line-height: 1.4;
+      color: #c5d0e0;
+      max-height: 28vh;
+      min-height: 5rem;
+      white-space: pre-wrap;
     }
     .agent-vals {
       display: flex; flex-wrap: wrap; gap: 0.35rem 0.55rem;
@@ -423,16 +561,25 @@ PREVIEW_HTML = """<!DOCTYPE html>
 <body>
   <header>
     <div class="header-text">
-      <h1>sensors-dcs · Agents</h1>
-      <p>低频整帧预览。连接 <code>/ws</code>。「开始 / 结束 / 作废」控制录制写盘（作废仍落盘但 manifest.valid=false）。相机固定四宫格；状态卡不含相机预览。</p>
+      <h1>sensors-dcs</h1>
+      <p>「数据采集」录制写盘；「数据后处理」等价于 export-timeline → filter-timeline → export-hik-dataset。勾选「快速采集」后，结束/作废会自动跑后处理。</p>
     </div>
     <button type="button" class="danger" id="btnExit">安全退出</button>
   </header>
+  <nav class="tabs" role="tablist">
+    <button type="button" class="tab active" id="tabBtnCollect" data-tab="collect" role="tab" aria-selected="true">数据采集</button>
+    <button type="button" class="tab" id="tabBtnPost" data-tab="post" role="tab" aria-selected="false">数据后处理</button>
+  </nav>
   <main>
+    <div class="tab-panel active" id="tab-collect" role="tabpanel">
     <div class="actions">
       <button type="button" class="primary" id="btnStart">开始</button>
       <button type="button" id="btnStop" disabled>结束</button>
       <button type="button" class="discard" id="btnDiscard" disabled>作废</button>
+      <label class="quick-collect" title="结束或作废后自动执行后处理三步（参数见「数据后处理」Tab）">
+        <input type="checkbox" id="chkQuickCollect" />
+        快速采集
+      </label>
       <span class="hint" id="runHint">空闲 — 点「开始」录制当前 episode</span>
     </div>
     <div class="save-path">
@@ -456,6 +603,95 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <div id="agents"></div>
     </div>
     <pre id="raw">{}</pre>
+    </div>
+
+    <div class="tab-panel" id="tab-post" role="tabpanel">
+      <div class="pp-grid">
+        <section class="pp-card">
+          <h2>Episode</h2>
+          <p class="pp-hint">选择已落盘目录，或粘贴完整路径（如 D:\\data_new\\episode_00016）。</p>
+          <div class="pp-row">
+            <label for="ppEpisodeSelect">列表</label>
+            <select id="ppEpisodeSelect"></select>
+            <button type="button" id="btnPpRefresh">刷新</button>
+          </div>
+          <div class="pp-row">
+            <label for="ppEpisode">路径</label>
+            <input type="text" class="wide" id="ppEpisode" placeholder="D:\\data_new\\episode_00016" />
+          </div>
+          <div class="pp-row">
+            <label class="quick-collect"><input type="checkbox" id="ppAllowInvalid" /> allow-invalid（作废 episode 也导出）</label>
+          </div>
+        </section>
+
+        <section class="pp-card">
+          <h2>1 · export-timeline</h2>
+          <p class="pp-hint">sensors-dcs export-timeline -e … --align asof --master cam-left --master-hz 5</p>
+          <div class="pp-row">
+            <label for="ppAlign">align</label>
+            <select id="ppAlign">
+              <option value="asof" selected>asof</option>
+              <option value="nearest">nearest</option>
+              <option value="grid">grid</option>
+              <option value="union">union</option>
+            </select>
+            <label for="ppMaster">master</label>
+            <input type="text" id="ppMaster" value="cam-left" />
+            <label for="ppMasterHz">master-hz</label>
+            <input type="number" id="ppMasterHz" value="5" step="0.1" min="0.1" />
+          </div>
+          <div class="pp-actions">
+            <button type="button" id="btnPpExport">运行 Step 1</button>
+          </div>
+        </section>
+
+        <section class="pp-card">
+          <h2>2 · filter-timeline</h2>
+          <p class="pp-hint">--require arm,cam-left,cam-right,cam-middle,gripper-read --max-match-dt 0.033 --trim both --materialize</p>
+          <div class="pp-row">
+            <label for="ppRequire">require</label>
+            <input type="text" class="wide" id="ppRequire" value="arm,cam-left,cam-right,cam-middle,gripper-read" />
+          </div>
+          <div class="pp-row">
+            <label for="ppMaxDt">max-match-dt</label>
+            <input type="text" id="ppMaxDt" value="0.033" />
+            <label for="ppTrim">trim</label>
+            <select id="ppTrim">
+              <option value="both" selected>both</option>
+              <option value="start">start</option>
+              <option value="end">end</option>
+              <option value="none">none</option>
+            </select>
+            <label class="quick-collect"><input type="checkbox" id="ppMaterialize" checked /> materialize</label>
+          </div>
+          <div class="pp-actions">
+            <button type="button" id="btnPpFilter">运行 Step 2</button>
+          </div>
+        </section>
+
+        <section class="pp-card">
+          <h2>3 · export-hik-dataset</h2>
+          <p class="pp-hint">--camera-map …\\hik_camera_map.yaml</p>
+          <div class="pp-row">
+            <label for="ppCameraMap">camera-map</label>
+            <input type="text" class="wide" id="ppCameraMap" placeholder="路径到 hik_camera_map.yaml" />
+          </div>
+          <div class="pp-actions">
+            <button type="button" id="btnPpHik">运行 Step 3</button>
+          </div>
+        </section>
+
+        <section class="pp-card">
+          <h2>一键三步</h2>
+          <p class="pp-hint">顺序执行上述三步；「快速采集」勾选后结束/作废也会走同一套参数。</p>
+          <div class="pp-actions">
+            <button type="button" class="primary" id="btnPpRunAll">一键执行三步</button>
+            <span class="hint" id="ppHint"></span>
+          </div>
+          <pre id="ppLog">（尚未运行）</pre>
+        </section>
+      </div>
+    </div>
   </main>
   <div class="modal-backdrop" id="appModal" role="dialog" aria-modal="true">
     <div class="modal-card">
@@ -504,6 +740,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const btnSaveDir = document.getElementById('btnSaveDir');
     const saveDirInput = document.getElementById('saveDirInput');
     const runHint = document.getElementById('runHint');
+    const chkQuickCollect = document.getElementById('chkQuickCollect');
+    const LS_QUICK = 'dcs.quickCollect';
+    const LS_PP = 'dcs.postprocess';
+    try {
+      chkQuickCollect.checked = localStorage.getItem(LS_QUICK) === '1';
+    } catch (e) {}
+    chkQuickCollect.addEventListener('change', () => {
+      try {
+        localStorage.setItem(LS_QUICK, chkQuickCollect.checked ? '1' : '0');
+      } catch (e) {}
+    });
     let lastMsgT = null, emaFront = null;
     let busy = false;
     const backState = {};
@@ -591,11 +838,29 @@ PREVIEW_HTML = """<!DOCTYPE html>
         } else if (discarding && j.ok) {
           runHint.textContent = '已作废 episode（manifest.valid=false），可开始下一集';
         }
+        if (isStop && j.ok && chkQuickCollect.checked && j.finished_episode_path) {
+          const epPath = j.finished_episode_path;
+          if (ppEpisode) ppEpisode.value = epPath;
+          runHint.textContent = discarding
+            ? '已作废，正在快速后处理…'
+            : '已结束，正在快速后处理…';
+          const pp = await runPostprocess({
+            steps: ['export-timeline', 'filter-timeline', 'export-hik-dataset'],
+            allow_invalid: discarding || (document.getElementById('ppAllowInvalid') || {}).checked,
+          }, epPath);
+          if (pp && pp.ok) {
+            runHint.textContent = '快速后处理完成 — ' + epPath;
+            showAppModal('快速后处理完成', epPath);
+          } else if (pp) {
+            runHint.textContent = '快速后处理失败：' + (pp.error || 'unknown');
+            showAppModal('快速后处理失败', pp.error || JSON.stringify(pp));
+            try { switchTab('post'); } catch (e) {}
+          }
+        }
       } catch (e) {
         runHint.textContent = String(e);
       } finally {
         busy = false;
-        // refresh authoritative status
         try {
           const s = await fetch('/api/record/status').then((x) => x.json());
           applyRecordUi(s);
@@ -609,6 +874,183 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (!confirm('作废本局？数据仍会落盘，但 manifest.valid=false；导出默认跳过。')) return;
       postRecord('/api/record/stop', { valid: false });
     });
+
+    // ---- tabs + postprocess ----
+    const tabBtnCollect = document.getElementById('tabBtnCollect');
+    const tabBtnPost = document.getElementById('tabBtnPost');
+    const tabCollect = document.getElementById('tab-collect');
+    const tabPost = document.getElementById('tab-post');
+    const ppEpisode = document.getElementById('ppEpisode');
+    const ppEpisodeSelect = document.getElementById('ppEpisodeSelect');
+    const ppAlign = document.getElementById('ppAlign');
+    const ppMaster = document.getElementById('ppMaster');
+    const ppMasterHz = document.getElementById('ppMasterHz');
+    const ppRequire = document.getElementById('ppRequire');
+    const ppMaxDt = document.getElementById('ppMaxDt');
+    const ppTrim = document.getElementById('ppTrim');
+    const ppMaterialize = document.getElementById('ppMaterialize');
+    const ppCameraMap = document.getElementById('ppCameraMap');
+    const ppAllowInvalid = document.getElementById('ppAllowInvalid');
+    const ppHint = document.getElementById('ppHint');
+    const ppLog = document.getElementById('ppLog');
+    let ppBusy = false;
+
+    function switchTab(name) {
+      const isCollect = name === 'collect';
+      tabBtnCollect.classList.toggle('active', isCollect);
+      tabBtnPost.classList.toggle('active', !isCollect);
+      tabBtnCollect.setAttribute('aria-selected', isCollect ? 'true' : 'false');
+      tabBtnPost.setAttribute('aria-selected', isCollect ? 'false' : 'true');
+      tabCollect.classList.toggle('active', isCollect);
+      tabPost.classList.toggle('active', !isCollect);
+    }
+    tabBtnCollect.addEventListener('click', () => switchTab('collect'));
+    tabBtnPost.addEventListener('click', () => {
+      switchTab('post');
+      refreshEpisodeList();
+    });
+
+    function readPpForm() {
+      const hz = parseFloat(ppMasterHz.value);
+      return {
+        episode: (ppEpisode.value || '').trim(),
+        align: ppAlign.value || 'asof',
+        master: (ppMaster.value || '').trim() || 'cam-left',
+        master_hz: Number.isFinite(hz) ? hz : 5,
+        require: (ppRequire.value || '').trim(),
+        max_match_dt: (ppMaxDt.value || '').trim() || '0.033',
+        trim: ppTrim.value || 'both',
+        materialize: !!ppMaterialize.checked,
+        camera_map: (ppCameraMap.value || '').trim() || null,
+        allow_invalid: !!ppAllowInvalid.checked,
+      };
+    }
+
+    function savePpForm() {
+      try {
+        localStorage.setItem(LS_PP, JSON.stringify(readPpForm()));
+      } catch (e) {}
+    }
+
+    function loadPpForm(defaults) {
+      let saved = null;
+      try {
+        saved = JSON.parse(localStorage.getItem(LS_PP) || 'null');
+      } catch (e) {}
+      const src = Object.assign({}, defaults || {}, saved || {});
+      if (src.align) ppAlign.value = src.align;
+      if (src.master) ppMaster.value = src.master;
+      if (src.master_hz != null) ppMasterHz.value = src.master_hz;
+      if (src.require) ppRequire.value = src.require;
+      if (src.max_match_dt) ppMaxDt.value = src.max_match_dt;
+      if (src.trim) ppTrim.value = src.trim;
+      if (src.materialize != null) ppMaterialize.checked = !!src.materialize;
+      if (src.camera_map) ppCameraMap.value = src.camera_map;
+      else if (defaults && defaults.camera_map) ppCameraMap.value = defaults.camera_map;
+      if (src.allow_invalid != null) ppAllowInvalid.checked = !!src.allow_invalid;
+      if (src.episode) ppEpisode.value = src.episode;
+    }
+
+    [ppAlign, ppMaster, ppMasterHz, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppAllowInvalid, ppEpisode].forEach((el) => {
+      el.addEventListener('change', savePpForm);
+      el.addEventListener('blur', savePpForm);
+    });
+
+    function fillEpisodeSelect(episodes) {
+      const cur = ppEpisode.value;
+      ppEpisodeSelect.innerHTML = '';
+      const opt0 = document.createElement('option');
+      opt0.value = '';
+      opt0.textContent = episodes && episodes.length ? '选择 episode…' : '（无 episode，先采集或改保存路径）';
+      ppEpisodeSelect.appendChild(opt0);
+      (episodes || []).forEach((ep) => {
+        const o = document.createElement('option');
+        o.value = ep.path;
+        let label = ep.name;
+        if (ep.valid === false) label += ' [作废]';
+        else if (ep.valid === true) label += ' [valid]';
+        if (ep.has_hik) label += ' · hik';
+        else if (ep.has_export) label += ' · export';
+        o.textContent = label;
+        ppEpisodeSelect.appendChild(o);
+      });
+      if (cur) {
+        ppEpisodeSelect.value = cur;
+        if (ppEpisodeSelect.value !== cur) ppEpisodeSelect.value = '';
+      }
+    }
+
+    async function refreshEpisodeList() {
+      try {
+        const j = await fetch('/api/postprocess/defaults').then((r) => r.json());
+        if (j.ok) {
+          fillEpisodeSelect(j.episodes || []);
+          if (!ppCameraMap.value && j.camera_map) ppCameraMap.value = j.camera_map;
+        }
+      } catch (e) {}
+    }
+
+    ppEpisodeSelect.addEventListener('change', () => {
+      if (ppEpisodeSelect.value) {
+        ppEpisode.value = ppEpisodeSelect.value;
+        savePpForm();
+      }
+    });
+    document.getElementById('btnPpRefresh').addEventListener('click', () => refreshEpisodeList());
+
+    function setPpBusy(on, text) {
+      ppBusy = !!on;
+      ['btnPpExport', 'btnPpFilter', 'btnPpHik', 'btnPpRunAll', 'btnPpRefresh'].forEach((id) => {
+        const b = document.getElementById(id);
+        if (b) b.disabled = !!on;
+      });
+      if (text) ppHint.textContent = text;
+    }
+
+    async function runPostprocess(extra, episodeOverride) {
+      const body = Object.assign(readPpForm(), extra || {});
+      if (episodeOverride) body.episode = episodeOverride;
+      if (!body.episode) {
+        ppHint.textContent = '请填写 episode 路径';
+        return { ok: false, error: 'missing episode' };
+      }
+      savePpForm();
+      setPpBusy(true, '后处理运行中…');
+      ppLog.textContent = 'running…\\n' + JSON.stringify(body, null, 2);
+      try {
+        const r = await fetch('/api/postprocess/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const j = await r.json();
+        ppLog.textContent = (j.log || '') + '\\n\\n' + JSON.stringify(j, null, 2);
+        ppHint.textContent = j.ok ? '完成' : ('失败：' + (j.error || ''));
+        return j;
+      } catch (e) {
+        ppHint.textContent = String(e);
+        ppLog.textContent = String(e);
+        return { ok: false, error: String(e) };
+      } finally {
+        setPpBusy(false);
+        refreshEpisodeList();
+      }
+    }
+
+    document.getElementById('btnPpExport').addEventListener('click', () =>
+      runPostprocess({ steps: ['export-timeline'] }));
+    document.getElementById('btnPpFilter').addEventListener('click', () =>
+      runPostprocess({ steps: ['filter-timeline'] }));
+    document.getElementById('btnPpHik').addEventListener('click', () =>
+      runPostprocess({ steps: ['export-hik-dataset'] }));
+    document.getElementById('btnPpRunAll').addEventListener('click', () =>
+      runPostprocess({ steps: ['export-timeline', 'filter-timeline', 'export-hik-dataset'] }));
+
+    fetch('/api/postprocess/defaults').then((r) => r.json()).then((j) => {
+      if (!j.ok) return;
+      loadPpForm(j);
+      fillEpisodeSelect(j.episodes || []);
+    }).catch(() => loadPpForm({}));
     const btnExit = document.getElementById('btnExit');
     if (btnExit) {
       btnExit.addEventListener('click', async () => {
@@ -1435,6 +1877,44 @@ def create_viz_app(
         if recorder is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
         return recorder.set_save_dir(req.save_dir)
+
+    _pp_lock = threading.Lock()
+
+    @app.get("/api/postprocess/defaults")
+    async def postprocess_defaults() -> dict[str, Any]:
+        from sensors_dcs.postprocess_service import postprocess_defaults as _defaults
+
+        save_dir = None
+        if recorder is not None:
+            try:
+                save_dir = recorder.status().get("save_dir")
+            except Exception:  # noqa: BLE001
+                save_dir = None
+        return {"ok": True, **_defaults(save_dir=save_dir)}
+
+    @app.post("/api/postprocess/run")
+    async def postprocess_run(req: PostprocessBody) -> dict[str, Any]:
+        from sensors_dcs.postprocess_service import run_postprocess
+
+        if not _pp_lock.acquire(blocking=False):
+            return {"ok": False, "error": "another postprocess job is running"}
+        try:
+            return await asyncio.to_thread(
+                run_postprocess,
+                episode=req.episode,
+                steps=req.steps,
+                align=req.align,
+                master=req.master,
+                master_hz=req.master_hz,
+                require=req.require,
+                max_match_dt=req.max_match_dt,
+                trim=req.trim,
+                materialize=req.materialize,
+                camera_map=req.camera_map,
+                allow_invalid=req.allow_invalid,
+            )
+        finally:
+            _pp_lock.release()
 
     @app.post("/api/gripper/command")
     async def gripper_cmd(req: GripperCommandBody) -> dict[str, Any]:

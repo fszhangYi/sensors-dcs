@@ -243,7 +243,14 @@ class RecordController:
                 str(self.episode_index) + "\n", encoding="utf-8"
             )
         self._notify()
-        return {"ok": True, "manifest": manifest, **self.status()}
+        return {
+            "ok": True,
+            "manifest": manifest,
+            "finished_episode_index": ep,
+            "finished_episode_path": str(ep_dir) if ep_dir is not None else None,
+            "valid": bool(valid),
+            **self.status(),
+        }
 
     def _collect_cameras(self) -> dict[str, Any]:
         """Per-agent RealSense intrinsics captured at sensor open()."""
