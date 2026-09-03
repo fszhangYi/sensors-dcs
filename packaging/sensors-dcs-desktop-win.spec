@@ -20,6 +20,7 @@ if not SENSORS_CFG.is_dir():
 
 datas = [
     (str(ROOT / "configs"), "configs"),
+    (str(SRC / "sensors_dcs" / "static"), "sensors_dcs/static"),
 ]
 binaries: list = []
 if SENSORS_SRC.is_dir():

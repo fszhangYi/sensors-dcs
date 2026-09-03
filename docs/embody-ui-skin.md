@@ -8,6 +8,6 @@
 - 品牌标题 `--brand-title` 渐变裁剪；kicker 大写字距
 - Pill：Tab、主按钮、元数据 chip、安全退出
 - 氛围：双径向 spot + 淡网格；`prefers-reduced-motion` 关过渡
-- 字体：Google Fonts IBM Plex Sans（含 CJK fallback）
+- 字体：本地 IBM Plex Sans（`/assets/fonts/`，latin woff2；CJK 走系统 fallback）
 
 实现仍在 `viz.py` 的 `PREVIEW_HTML` / `ERROR_HTML`（非独立 React 前端）。未接 light theme / density（见 `embody-appearance-theme`）。

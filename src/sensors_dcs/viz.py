@@ -81,9 +81,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>sensors-dcs · 采集 / 后处理</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;650&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/fonts/ibm-plex-sans.css" />
   <style>
     :root {
       --bg: #0b1018;
@@ -2125,6 +2123,15 @@ def create_viz_app(
 
     init_auth()
     app = FastAPI(title="sensors-dcs viz", version="0.1.0")
+
+    from pathlib import Path
+
+    from fastapi.staticfiles import StaticFiles
+    from sensors_dcs.static_assets import static_root
+
+    _static = static_root()
+    if _static.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_static)), name="assets")
 
     @app.middleware("http")
     async def _auth_gate(request: Request, call_next):  # type: ignore[no-untyped-def]
