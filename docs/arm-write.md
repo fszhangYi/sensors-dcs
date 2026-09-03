@@ -63,7 +63,7 @@
 - [x] 不做笛卡尔 / 大范围 `move_joint` PTP
 - [x] 不把 gripper 偏移写进 arm writer
 - [x] 不在 desktop 启动时自动 servo_on
-- [x] 不做 gello→arm 自动同步
+- [x] 不做启动即自动 gello→arm 同步（对齐需显式「同步」；见 gello-arm-sync.md）
 
 ---
 
