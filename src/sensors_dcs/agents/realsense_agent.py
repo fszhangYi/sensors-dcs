@@ -39,8 +39,21 @@ def _jpeg_b64(
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
+def _depth_png_b64(depth: np.ndarray) -> str:
+    """Encode uint16 (or convertible) depth map to PNG base64."""
+    import cv2
+
+    arr = np.asarray(depth)
+    if arr.dtype != np.uint16:
+        arr = np.clip(arr, 0, 65535).astype(np.uint16)
+    ok, buf = cv2.imencode(".png", arr)
+    if not ok:
+        raise RuntimeError("depth png encode failed")
+    return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
 class RealSenseAgent(BaseAgent):
-    """Agent for hik-sensors ``kind=realsense`` — color preview via JPEG."""
+    """Agent for hik-sensors ``kind=realsense`` — color (+ optional depth) via JPEG/PNG."""
 
     kind = "realsense"
 
@@ -97,7 +110,9 @@ class RealSenseAgent(BaseAgent):
 
         jpeg_b64 = None
         jpeg_b64_preview = None
+        depth_png_b64 = None
         shape = None
+        depth_shape = None
         if color is not None:
             arr = np.asarray(color)
             shape = list(arr.shape)
@@ -114,6 +129,21 @@ class RealSenseAgent(BaseAgent):
                 max_width=self.viz_max_width,
             )
 
+        depth = sample.get("depth")
+        enable_depth = bool(
+            sample.get("enable_depth")
+            if sample.get("enable_depth") is not None
+            else getattr(self.sensor, "enable_depth", False)
+        )
+        if enable_depth and depth is not None and not dry:
+            try:
+                darr = np.asarray(depth)
+                depth_shape = list(darr.shape)
+                depth_png_b64 = _depth_png_b64(darr)
+            except Exception:  # noqa: BLE001
+                depth_png_b64 = None
+                depth_shape = None
+
         payload: dict[str, Any] = {
             "serial": sample.get("serial") or getattr(self.sensor, "serial", None),
             "role": sample.get("role") or getattr(self.sensor, "role", None),
@@ -123,6 +153,9 @@ class RealSenseAgent(BaseAgent):
             "color_shape": shape,
             "jpeg_b64": jpeg_b64,
             "jpeg_b64_preview": jpeg_b64_preview,
+            "enable_depth": enable_depth,
+            "depth_shape": depth_shape,
+            "depth_png_b64": depth_png_b64,
             "dry_run": dry,
             "synth": bool(sample.get("synth")),
         }

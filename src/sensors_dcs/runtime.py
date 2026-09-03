@@ -209,6 +209,7 @@ class Orchestrator:
         payload.pop("jpeg_b64_preview", None)
         if preview is not None:
             payload["jpeg_b64_preview"] = preview
+        payload.pop("depth_png_b64", None)
         data["payload"] = payload
         return data
 
