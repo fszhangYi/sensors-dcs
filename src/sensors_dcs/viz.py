@@ -406,6 +406,49 @@ PREVIEW_HTML = """<!DOCTYPE html>
       border-color: rgba(61, 214, 198, 0.45);
       box-shadow: inset 0 0 0 1px rgba(61, 214, 198, 0.12);
     }
+    .tabs button.tab.tab-locked,
+    .tabs button.tab:disabled {
+      opacity: 0.42;
+      cursor: not-allowed;
+      color: var(--muted);
+    }
+    .tabs button.tab.tab-locked:hover,
+    .tabs button.tab:disabled:hover {
+      color: var(--muted);
+      border-color: var(--border);
+    }
+    .boot-banner {
+      flex-shrink: 0;
+      margin: 0.55rem 1.25rem 0;
+      padding: 0.65rem 0.9rem;
+      border-radius: 12px;
+      border: 1px solid rgba(248, 113, 113, 0.45);
+      background: rgba(64, 26, 26, 0.55);
+      color: #f0c4be;
+      font-size: 0.82rem;
+      line-height: 1.45;
+      display: none;
+      gap: 0.35rem;
+      flex-direction: column;
+    }
+    .boot-banner.visible { display: flex; }
+    .boot-banner strong { color: var(--danger); font-weight: 600; }
+    .boot-banner .boot-path {
+      color: var(--accent);
+      font-family: ui-monospace, Consolas, monospace;
+      word-break: break-all;
+      font-size: 0.78rem;
+    }
+    .boot-banner pre {
+      margin: 0.25rem 0 0;
+      max-height: 7rem;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 0.72rem;
+      color: #f0c4be;
+      font-family: ui-monospace, Consolas, monospace;
+    }
     .tab-panel { display: none; }
     .tab-panel.active {
       display: flex;
@@ -684,11 +727,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
     </div>
   </header>
   <nav class="tabs" role="tablist">
-    <button type="button" class="tab active" id="tabBtnCollect" data-tab="collect" role="tab" aria-selected="true" data-i18n="tab.collect">数据采集</button>
-    <button type="button" class="tab" id="tabBtnPost" data-tab="post" role="tab" aria-selected="false" data-i18n="tab.post">数据后处理</button>
+    <button type="button" class="tab" id="tabBtnCollect" data-tab="collect" role="tab" aria-selected="false" data-i18n="tab.collect">数据采集</button>
+    <button type="button" class="tab active" id="tabBtnPost" data-tab="post" role="tab" aria-selected="true" data-i18n="tab.post">数据后处理</button>
   </nav>
+  <div class="boot-banner" id="bootBanner" role="alert" hidden>
+    <strong data-i18n="boot.banner_title">配置错误 — 仅后处理可用</strong>
+    <span id="bootBannerHint" data-i18n="boot.collect_locked">YAML 配置无效，无法进入数据采集。请修正配置后重新启动。</span>
+    <div class="boot-path" id="bootBannerPath"></div>
+    <pre id="bootBannerErr"></pre>
+  </div>
   <main>
-    <div class="tab-panel active" id="tab-collect" role="tabpanel">
+    <div class="tab-panel" id="tab-collect" role="tabpanel">
     <div class="actions">
       <button type="button" class="primary" id="btnStart" data-i18n="btn.start">开始</button>
       <button type="button" id="btnStop" disabled data-i18n="btn.stop">结束</button>
@@ -722,7 +771,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     <pre id="raw">{}</pre>
     </div>
 
-    <div class="tab-panel" id="tab-post" role="tabpanel">
+    <div class="tab-panel active" id="tab-post" role="tabpanel">
       <div class="pp-grid">
         <section class="pp-card">
           <h2 data-i18n="pp.episode">Episode</h2>
@@ -1057,6 +1106,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const tabBtnPost = document.getElementById('tabBtnPost');
     const tabCollect = document.getElementById('tab-collect');
     const tabPost = document.getElementById('tab-post');
+    const bootBanner = document.getElementById('bootBanner');
+    const bootBannerPath = document.getElementById('bootBannerPath');
+    const bootBannerErr = document.getElementById('bootBannerErr');
     const ppEpisode = document.getElementById('ppEpisode');
     const ppEpisodeSelect = document.getElementById('ppEpisodeSelect');
     const ppAlign = document.getElementById('ppAlign');
@@ -1071,8 +1123,33 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const ppHint = document.getElementById('ppHint');
     const ppLog = document.getElementById('ppLog');
     let ppBusy = false;
+    let collectOk = true;
+
+    function applyCollectGate(ok, info) {
+      collectOk = !!ok;
+      tabBtnCollect.classList.toggle('tab-locked', !collectOk);
+      tabBtnCollect.disabled = !collectOk;
+      tabBtnCollect.setAttribute('aria-disabled', collectOk ? 'false' : 'true');
+      tabBtnCollect.title = collectOk ? '' : t('boot.collect_title');
+      if (!collectOk) {
+        if (bootBanner) {
+          bootBanner.hidden = false;
+          bootBanner.classList.add('visible');
+          if (bootBannerPath) bootBannerPath.textContent = (info && info.config_path) || '';
+          if (bootBannerErr) bootBannerErr.textContent = (info && info.error) || '';
+        }
+        switchTab('post');
+      } else if (bootBanner) {
+        bootBanner.hidden = true;
+        bootBanner.classList.remove('visible');
+      }
+    }
 
     function switchTab(name) {
+      if (name === 'collect' && !collectOk) {
+        if (runHint) runHint.textContent = t('boot.collect_locked');
+        return;
+      }
       const isCollect = name === 'collect';
       tabBtnCollect.classList.toggle('active', isCollect);
       tabBtnPost.classList.toggle('active', !isCollect);
@@ -1086,6 +1163,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
       switchTab('post');
       refreshEpisodeList();
     });
+    // Default landing tab after login: postprocess
+    switchTab('post');
+
+    fetch('/api/status', { credentials: 'same-origin' }).then((r) => r.json()).then((j) => {
+      const ok = j.collect_ok !== false && !j.boot_error;
+      applyCollectGate(ok, j);
+    }).catch(() => {});
 
     function readPpForm() {
       const hz = parseFloat(ppMasterHz.value);
@@ -2017,6 +2101,9 @@ def create_viz_app(
     gello_arm_teleop: Callable[..., dict[str, Any]] | None = None,
     gello_arm_teleop_status: Callable[[], dict[str, Any]] | None = None,
     shutdown: Callable[[], dict[str, Any]] | None = None,
+    boot_error: str | None = None,
+    config_path: str | None = None,
+    postprocess_save_dir: str | None = None,
 ) -> FastAPI:
     from sensors_dcs.auth_session import (
         auth_enabled,
@@ -2076,7 +2163,12 @@ def create_viz_app(
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
-        return {"ok": True, "authRequired": auth_enabled()}
+        return {
+            "ok": boot_error is None,
+            "authRequired": auth_enabled(),
+            "boot_error": boot_error is not None,
+            "collect_ok": boot_error is None,
+        }
 
     @app.get("/api/auth/status")
     async def auth_status() -> dict[str, Any]:
@@ -2127,22 +2219,48 @@ def create_viz_app(
 
     @app.get("/api/status")
     async def status() -> dict[str, Any]:
-        return status_fn()
+        try:
+            payload = dict(status_fn() or {})
+        except Exception as exc:  # noqa: BLE001
+            payload = {"ok": False, "error": str(exc)}
+        if boot_error is not None:
+            payload.setdefault("ok", False)
+            payload["boot_error"] = True
+            payload["collect_ok"] = False
+            payload["error"] = boot_error
+            if config_path is not None:
+                payload["config_path"] = config_path
+        else:
+            payload.setdefault("boot_error", False)
+            payload.setdefault("collect_ok", True)
+        return payload
 
     @app.get("/api/record/status")
     async def record_status() -> dict[str, Any]:
+        if boot_error is not None:
+            return {
+                "ok": False,
+                "error": "collect unavailable (boot error)",
+                "state": "idle",
+                "boot_error": True,
+                "collect_ok": False,
+            }
         if recorder is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
         return {"ok": True, **recorder.status()}
 
     @app.post("/api/record/start")
     async def record_start() -> dict[str, Any]:
+        if boot_error is not None:
+            return {"ok": False, "error": "collect unavailable (boot error)", "state": "idle"}
         if recorder is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
         return recorder.start()
 
     @app.post("/api/record/stop")
     async def record_stop(request: Request) -> dict[str, Any]:
+        if boot_error is not None:
+            return {"ok": False, "error": "collect unavailable (boot error)", "state": "idle"}
         if recorder is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
         # Accept JSON ``{"valid": true|false}``; empty / legacy POST → valid=true.
@@ -2161,6 +2279,8 @@ def create_viz_app(
 
     @app.post("/api/record/save_dir")
     async def record_save_dir(req: SaveDirBody) -> dict[str, Any]:
+        if boot_error is not None:
+            return {"ok": False, "error": "collect unavailable (boot error)", "state": "idle"}
         if recorder is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
         return recorder.set_save_dir(req.save_dir)
@@ -2171,12 +2291,12 @@ def create_viz_app(
     async def postprocess_defaults() -> dict[str, Any]:
         from sensors_dcs.postprocess_service import postprocess_defaults as _defaults
 
-        save_dir = None
-        if recorder is not None:
+        save_dir = postprocess_save_dir
+        if recorder is not None and boot_error is None:
             try:
-                save_dir = recorder.status().get("save_dir")
+                save_dir = recorder.status().get("save_dir") or save_dir
             except Exception:  # noqa: BLE001
-                save_dir = None
+                pass
         return {"ok": True, **_defaults(save_dir=save_dir)}
 
     @app.post("/api/postprocess/run")
@@ -2312,202 +2432,85 @@ def create_viz_app(
     return app
 
 
+def _guess_postprocess_save_dir(config_path: str | None) -> str | None:
+    """Best-effort save_dir for postprocess when agents failed to boot."""
+    from pathlib import Path
+
+    from sensors_dcs.paths import user_data_dir
+
+    fallback = str((user_data_dir() / "data").resolve())
+    if not config_path:
+        return fallback
+    root = Path(config_path)
+    if not root.is_file():
+        return fallback
+    try:
+        import yaml
+
+        from sensors_dcs.config import resolve_save_dir
+
+        data = yaml.safe_load(root.read_text(encoding="utf-8")) or {}
+        if not isinstance(data, dict):
+            return fallback
+        raw = (data.get("record") or {}).get("save_dir") if isinstance(data.get("record"), dict) else None
+        if not raw:
+            raw = data.get("save_dir")
+        if raw:
+            return str(resolve_save_dir(raw, config_file=root))
+    except Exception:  # noqa: BLE001
+        pass
+    return fallback
+
+
+def create_error_app(
+    *,
+    error: str,
+    config_path: str | None = None,
+    shutdown: Callable[[], dict[str, Any]] | None = None,
+) -> FastAPI:
+    """Full login + postprocess UI when YAML / boot fails — Collect tab locked.
+
+    Replaces the old minimal ERROR_HTML shell so config errors still open a
+    usable page (login → 数据后处理) instead of a blank / dead window.
+    """
+    hub = VizHub()
+    cfg = config_path
+    err = error
+
+    def status_fn() -> dict[str, Any]:
+        return {
+            "ok": False,
+            "boot_error": True,
+            "collect_ok": False,
+            "error": err,
+            "config_path": cfg,
+            "agents": [],
+        }
+
+    def _shutdown() -> dict[str, Any]:
+        if shutdown is not None:
+            return shutdown()
+        return {"ok": True, "note": "no shutdown hook"}
+
+    return create_viz_app(
+        hub,
+        status_fn,
+        boot_error=error,
+        config_path=config_path,
+        postprocess_save_dir=_guess_postprocess_save_dir(config_path),
+        shutdown=_shutdown,
+    )
+
+
+# Kept for reference / docs screenshots; runtime boot errors use create_error_app → PREVIEW_HTML.
 ERROR_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>sensors-dcs · 配置错误</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;650&display=swap" rel="stylesheet" />
-  <style>
-    :root {
-      --bg: #0b1018;
-      --panel: rgba(18, 26, 38, 0.9);
-      --border: rgba(58, 77, 102, 0.75);
-      --text: #e7ecf3;
-      --muted: #8b9bb4;
-      --accent: #3dd6c6;
-      --spark: #f0b429;
-      --danger: #f87171;
-      --input-bg: rgba(8, 12, 20, 0.85);
-      --bg-spot-2: rgba(64, 26, 26, 0.55);
-      --brand-title: linear-gradient(120deg, #e7ecf3 25%, #3dd6c6 70%, #f0b429 100%);
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: 'IBM Plex Sans', 'Segoe UI', 'PingFang SC', 'Noto Sans SC', sans-serif;
-      background:
-        radial-gradient(900px 480px at 12% -8%, var(--bg-spot-2), transparent 55%),
-        var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-    }
-    header {
-      padding: 1.25rem 1.5rem 0.75rem;
-      border-bottom: 1px solid var(--border);
-      background: linear-gradient(180deg, #0d131c 0%, #0b1018 100%);
-    }
-    header .kicker {
-      margin: 0 0 0.25rem;
-      font-size: 0.68rem;
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
-      color: var(--danger);
-      font-weight: 600;
-    }
-    header h1 {
-      margin: 0;
-      font-size: 1.35rem;
-      font-weight: 650;
-      background: var(--brand-title);
-      -webkit-background-clip: text;
-      background-clip: text;
-      color: transparent;
-    }
-    header p { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.9rem; }
-    main { padding: 1rem 1.5rem 2rem; display: grid; gap: 1rem; max-width: 920px; }
-    .card {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 1rem 1.1rem;
-      backdrop-filter: blur(10px);
-    }
-    .card h2 { margin: 0 0 0.5rem; font-size: 1rem; }
-    .path { color: var(--accent); font-size: 0.9rem; word-break: break-all; font-family: ui-monospace, Consolas, monospace; }
-    pre {
-      margin: 0; padding: 1rem; overflow: auto; white-space: pre-wrap; word-break: break-word;
-      background: var(--input-bg); border: 1px solid var(--border); border-radius: 12px;
-      font-size: 0.82rem; line-height: 1.45; color: #f0c4be;
-      font-family: ui-monospace, Consolas, monospace;
-    }
-    .hint { color: var(--muted); font-size: 0.85rem; line-height: 1.5; }
-    code { color: var(--accent); }
-  </style>
 </head>
-<body class="dcs-error-page">
-  <header>
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;">
-      <div>
-        <p class="kicker" data-i18n="err.kicker">Boot failure</p>
-        <h1 data-i18n="err.h1">配置错误</h1>
-        <p data-i18n="err.sub">程序未退出；请修正 YAML 后重新启动。Agent 未启动。</p>
-      </div>
-      <div class="lang-switch" data-i18n-title="lang.title" title="界面语言 / Language" style="display:inline-flex;gap:0.25rem;padding:0.15rem;border-radius:999px;border:1px solid var(--border);background:rgba(26,35,50,.88);">
-        <button type="button" class="lang-btn active" data-locale="zh" data-i18n="lang.zh" style="appearance:none;border:1px solid transparent;background:transparent;color:var(--muted);font:inherit;font-size:0.72rem;font-weight:600;padding:0.22rem 0.65rem;border-radius:999px;cursor:pointer;">中文</button>
-        <button type="button" class="lang-btn" data-locale="en" data-i18n="lang.en" style="appearance:none;border:1px solid transparent;background:transparent;color:var(--muted);font:inherit;font-size:0.72rem;font-weight:600;padding:0.22rem 0.65rem;border-radius:999px;cursor:pointer;">EN</button>
-      </div>
-    </div>
-  </header>
-  <main>
-    <div class="card">
-      <h2 data-i18n="err.cfg">配置文件</h2>
-      <div class="path" id="cfgPath">—</div>
-    </div>
-    <div class="card">
-      <h2 data-i18n="err.detail">错误详情</h2>
-      <pre id="errMsg">—</pre>
-    </div>
-    <div class="card hint" data-i18n="err.hint" data-i18n-html>
-      DCS 启动 YAML 需含 <code>sensors_config</code> 与 <code>agents</code>。
-      不要用 <code>sensors_*.yaml</code>（设备清单）直接启动。
-      桌面端可用 <code>sensors-dcs.exe -c &lt;dcs.yaml&gt;</code>
-      或环境变量 <code>SENSORS_DCS_CONFIG</code>。
-    </div>
-  </main>
-  <script>
-    const DCS_I18N = __DCS_I18N_JSON__;
-    const LS_LOCALE = 'sensors-dcs.locale';
-    let currentLocale = 'zh';
-    try {
-      const stored = localStorage.getItem(LS_LOCALE);
-      if (stored === 'zh' || stored === 'en') currentLocale = stored;
-    } catch (e) {}
-    function formatMessage(raw, vars) {
-      if (!vars) return raw;
-      return String(raw).replace(/[{](\\w+)[}]/g, (_, k) =>
-        (vars[k] == null ? '{' + k + '}' : String(vars[k])));
-    }
-    function t(path, vars) {
-      const table = DCS_I18N[currentLocale] || DCS_I18N.zh || {};
-      const fallback = DCS_I18N.zh || {};
-      const raw = (table[path] != null ? table[path] : fallback[path]);
-      return formatMessage(raw != null ? raw : path, vars);
-    }
-    function applyDomI18n() {
-      document.querySelectorAll('[data-i18n]').forEach((el) => {
-        const key = el.getAttribute('data-i18n');
-        if (!key) return;
-        const textVal = t(key);
-        if (el.hasAttribute('data-i18n-html')) {
-          // err.hint uses `code` markers → wrap as <code>
-          el.innerHTML = textVal.replace(/`([^`]+)`/g, '<code>$1</code>');
-        } else el.textContent = textVal;
-      });
-      document.querySelectorAll('[data-i18n-title]').forEach((el) => {
-        const key = el.getAttribute('data-i18n-title');
-        if (key) el.setAttribute('title', t(key));
-      });
-      document.title = t('err.title');
-    }
-    function setLocale(loc) {
-      if (loc !== 'zh' && loc !== 'en') return;
-      currentLocale = loc;
-      try { localStorage.setItem(LS_LOCALE, loc); } catch (e) {}
-      document.documentElement.lang = loc === 'zh' ? 'zh-CN' : 'en';
-      document.querySelectorAll('.lang-btn').forEach((btn) => {
-        btn.classList.toggle('active', btn.getAttribute('data-locale') === loc);
-        if (btn.classList.contains('active')) {
-          btn.style.color = 'var(--text)';
-          btn.style.background = 'linear-gradient(90deg, rgba(240,180,41,.14), rgba(61,214,198,.14))';
-        } else {
-          btn.style.color = 'var(--muted)';
-          btn.style.background = 'transparent';
-        }
-      });
-      applyDomI18n();
-    }
-    document.querySelectorAll('.lang-btn').forEach((btn) => {
-      btn.addEventListener('click', () => setLocale(btn.getAttribute('data-locale')));
-    });
-    setLocale(currentLocale);
-    fetch('/api/status').then(r => r.json()).then(j => {
-      document.getElementById('cfgPath').textContent = j.config_path || '—';
-      document.getElementById('errMsg').textContent = j.error || '—';
-    }).catch(e => {
-      document.getElementById('errMsg').textContent = String(e);
-    });
-  </script>
+<body>
+  <p>Deprecated shell — use create_error_app (login + postprocess).</p>
 </body>
 </html>
 """
-
-
-def create_error_app(*, error: str, config_path: str | None = None) -> FastAPI:
-    """Minimal UI when YAML / boot fails — keep process alive for the user."""
-    app = FastAPI(title="sensors-dcs error", version="0.1.0")
-    payload = {
-        "ok": False,
-        "boot_error": True,
-        "error": error,
-        "config_path": config_path,
-    }
-
-    @app.get("/", response_class=HTMLResponse)
-    async def index() -> str:
-        from sensors_dcs.ui_i18n import inject_i18n_json
-
-        return inject_i18n_json(ERROR_HTML)
-
-    @app.get("/api/status")
-    async def status() -> dict[str, Any]:
-        return payload
-
-    @app.get("/api/health")
-    async def health() -> dict[str, Any]:
-        return {"ok": False, "boot_error": True}
-
-    return app

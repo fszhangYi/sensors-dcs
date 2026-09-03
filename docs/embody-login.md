@@ -6,10 +6,16 @@
 
 | 路径 | 行为 |
 |------|------|
-| `/login` | Embody 风格登录页（grid/orb/scan、玻璃卡、语言 pill） |
-| `/` | 需登录时 302 → `/login?from=/` |
+| `/login` | Embody 风格登录页（grid/orb/scan、玻璃卡、语言 pill）；启动默认打开此页 |
+| `/` | 需登录时 302 → `/login?from=/`；登录后默认「数据后处理」Tab |
 | `/api/auth/*` | status / me / login / logout（公开） |
 | 其它 `/api/*`、`/ws` | 鉴权开启时需 Cookie |
+
+YAML / boot 失败时仍走同一套 UI（`create_error_app` → `create_viz_app`）：
+
+- 健康检查 `/api/health` 公开，webview/browser 可打开
+- `collect_ok=false`：锁定「数据采集」Tab，横幅展示错误
+- 「数据后处理」仍可用（离线三步）
 
 实现：
 

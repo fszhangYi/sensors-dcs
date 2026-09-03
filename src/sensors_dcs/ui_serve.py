@@ -111,15 +111,17 @@ def serve_app_blocking(
     signal.signal(signal.SIGINT, _handle_sig)
     signal.signal(signal.SIGTERM, _handle_sig)
 
-    url = _local_url(host, port, "/")
-    ready = _local_url(host, port, "/api/status")
+    # Open login first (auth gate redirects when disabled). Probe a public health
+    # path so auth-on / boot-error modes still count as ready.
+    url = _local_url(host, port, "/login")
+    ready = _local_url(host, port, "/api/health")
     bind_note = f" (bound {host}:{port})" if host not in {"127.0.0.1", "localhost"} else ""
 
     thread = threading.Thread(target=server.run, name="sensors-dcs-uvicorn", daemon=True)
     thread.start()
 
     if not wait_ready(ready):
-        print(f"[sensors-dcs] status check failed: {ready}", flush=True)
+        print(f"[sensors-dcs] health check failed: {ready}", flush=True)
         server.should_exit = True
         thread.join(timeout=2.0)
         return

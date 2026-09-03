@@ -128,18 +128,34 @@ def main(argv: list[str] | None = None) -> None:
 
     port = pick_port(preferred_port)
     open_ui = _resolve_open_ui(args)
-    url = _local_url(host, port, "/")
+    url = _local_url(host, port, "/login")
+    shutdown_box: dict[str, Any] = {"server": None}
+
+    def _error_shutdown() -> dict[str, Any]:
+        server = shutdown_box.get("server")
+        if server is not None:
+            server.should_exit = True
+        return {"ok": True}
 
     if boot_error is not None:
-        app = create_error_app(error=boot_error, config_path=str(cfg_path))
+        app = create_error_app(
+            error=boot_error,
+            config_path=str(cfg_path),
+            shutdown=_error_shutdown,
+        )
         if not open_ui:
             print(f"[sensors-dcs] boot error (headless): {boot_error.splitlines()[0]}", flush=True)
             print(f"[sensors-dcs] details at {url} — run with --ui to open automatically", flush=True)
-        serve_app_blocking(app, host=host, port=port, open_ui=open_ui)
+        serve_app_blocking(
+            app,
+            host=host,
+            port=port,
+            open_ui=open_ui,
+            attach_server=lambda s: shutdown_box.__setitem__("server", s),
+        )
         return
 
     assert orch is not None
-    shutdown_box: dict[str, Any] = {"server": None}
 
     def _shutdown() -> dict[str, Any]:
         result = orch.request_shutdown()
@@ -170,11 +186,21 @@ def main(argv: list[str] | None = None) -> None:
     except Exception as e:  # noqa: BLE001
         boot_error = f"{e}\n\n{traceback.format_exc()}"
         print(f"[sensors-dcs] start error (UI will show details):\n{e}", flush=True)
-        app = create_error_app(error=boot_error, config_path=str(cfg_path))
+        app = create_error_app(
+            error=boot_error,
+            config_path=str(cfg_path),
+            shutdown=_error_shutdown,
+        )
         if not open_ui:
             print(f"[sensors-dcs] start error (headless): {boot_error.splitlines()[0]}", flush=True)
             print(f"[sensors-dcs] details at {url} — run with --ui to open automatically", flush=True)
-        serve_app_blocking(app, host=host, port=port, open_ui=open_ui)
+        serve_app_blocking(
+            app,
+            host=host,
+            port=port,
+            open_ui=open_ui,
+            attach_server=lambda s: shutdown_box.__setitem__("server", s),
+        )
         return
 
     print(

@@ -95,3 +95,54 @@ def test_login_page_and_gate(auth_enabled_tmp: dict[str, str]) -> None:
 def test_try_login_empty(auth_enabled_tmp: dict[str, str]) -> None:
     out = try_login("", "")
     assert out["ok"] is False
+
+
+def test_boot_error_app_login_and_collect_locked(auth_enabled_tmp: dict[str, str]) -> None:
+    from sensors_dcs.viz import create_error_app
+
+    app = create_error_app(error="agents must not be empty", config_path="/tmp/bad.yaml")
+    client = TestClient(app, follow_redirects=False)
+
+    health = client.get("/api/health")
+    assert health.status_code == 200
+    assert health.json()["boot_error"] is True
+    assert health.json()["collect_ok"] is False
+
+    root = client.get("/")
+    assert root.status_code in (302, 307)
+    assert "/login" in (root.headers.get("location") or "")
+
+    login_page = client.get("/login")
+    assert login_page.status_code == 200
+    assert "login-page" in login_page.text
+
+    ok = client.post(
+        "/api/auth/login",
+        json={
+            "username": auth_enabled_tmp["username"],
+            "password": auth_enabled_tmp["password"],
+        },
+    )
+    assert ok.status_code == 200
+    client.cookies.set(COOKIE_NAME, ok.cookies[COOKIE_NAME])
+
+    home = client.get("/")
+    assert home.status_code == 200
+    assert 'id="tabBtnPost"' in home.text
+    assert "bootBanner" in home.text
+    assert "switchTab('post')" in home.text or "switchTab(\"post\")" in home.text
+
+    st = client.get("/api/status")
+    assert st.status_code == 200
+    body = st.json()
+    assert body["boot_error"] is True
+    assert body["collect_ok"] is False
+    assert "agents must not be empty" in (body.get("error") or "")
+
+    pp = client.get("/api/postprocess/defaults")
+    assert pp.status_code == 200
+    assert pp.json()["ok"] is True
+
+    rec = client.post("/api/record/start")
+    assert rec.status_code == 200
+    assert rec.json()["ok"] is False
