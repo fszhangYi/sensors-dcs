@@ -15,6 +15,7 @@ sensors-dcs/
   docs/hik-dataset-steps.md         # hik steps.json / cartesian 字段含义
   docs/gello-joint-affine.md        # Gello 关节仿射标定（offsets/signs）
   docs/arm-write.md                 # Elite arm_write 安全计划与点动 UI
+  docs/gello-arm-sync.md            # Gello→Arm 同步安全计划（未实现）
   configs/hik_camera_map.yaml       # serial→hik 相机名（export-hik-dataset）
 ```
 

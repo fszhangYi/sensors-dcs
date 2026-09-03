@@ -44,7 +44,7 @@
 - [x] `ArmWriteAgent`：默认不轮询写；响应 API；状态含 armed / last_cmd
 - [x] 两段式：**Arm → 点动**；**Disarm / Estop**
 - [x] UI：每轴 **±** + **delta 滚动条**（不做自由填绝对角首版）
-- [ ] （后续）gello→arm 同步：独立开关、默认关、限速+死人手
+- [ ] （后续）gello→arm 同步：独立开关、默认关、限速+死人手 → 见 [gello-arm-sync.md](gello-arm-sync.md)
 
 ### 3. 配置与部署
 
