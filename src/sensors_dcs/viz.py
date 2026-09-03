@@ -202,6 +202,41 @@ PREVIEW_HTML = """<!DOCTYPE html>
       color: #fff;
     }
     header #btnExit:disabled { opacity: 0.45; cursor: not-allowed; }
+    header .header-actions {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 0.45rem;
+      flex-shrink: 0;
+    }
+    .lang-switch {
+      display: inline-flex;
+      gap: 0.25rem;
+      padding: 0.15rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--chrome);
+    }
+    .lang-switch .lang-btn {
+      appearance: none;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      padding: 0.22rem 0.65rem;
+      border-radius: 999px;
+      cursor: pointer;
+    }
+    .lang-switch .lang-btn:hover { color: var(--text); }
+    .lang-switch .lang-btn.active {
+      color: var(--text);
+      background: linear-gradient(90deg, var(--spark-dim), var(--accent-dim));
+      border-color: rgba(61, 214, 198, 0.4);
+    }
+    html[lang='en'] header p { max-width: 42rem; }
     main {
       flex: 1;
       min-height: 0;
@@ -628,44 +663,50 @@ PREVIEW_HTML = """<!DOCTYPE html>
 <body class="dcs-page">
   <header>
     <div class="header-text">
-      <p class="kicker">Robotics lab console</p>
+      <p class="kicker" data-i18n="header.kicker">Robotics lab console</p>
       <h1>sensors-dcs</h1>
-      <p>「数据采集」录制写盘；「数据后处理」等价于 export-timeline → filter-timeline → export-hik-dataset。勾选「快速采集」后，结束/作废会自动跑后处理。</p>
+      <p data-i18n="header.subtitle">「数据采集」录制写盘；「数据后处理」等价于 export-timeline → filter-timeline → export-hik-dataset。勾选「快速采集」后，结束/作废会自动跑后处理。</p>
     </div>
-    <button type="button" class="danger" id="btnExit">安全退出</button>
+    <div class="header-actions">
+      <div class="lang-switch" data-i18n-title="lang.title" title="界面语言 / Language">
+        <button type="button" class="lang-btn active" data-locale="zh" data-i18n="lang.zh">中文</button>
+        <button type="button" class="lang-btn" data-locale="en" data-i18n="lang.en">EN</button>
+      </div>
+      <button type="button" class="danger" id="btnExit" data-i18n="header.exit">安全退出</button>
+    </div>
   </header>
   <nav class="tabs" role="tablist">
-    <button type="button" class="tab active" id="tabBtnCollect" data-tab="collect" role="tab" aria-selected="true">数据采集</button>
-    <button type="button" class="tab" id="tabBtnPost" data-tab="post" role="tab" aria-selected="false">数据后处理</button>
+    <button type="button" class="tab active" id="tabBtnCollect" data-tab="collect" role="tab" aria-selected="true" data-i18n="tab.collect">数据采集</button>
+    <button type="button" class="tab" id="tabBtnPost" data-tab="post" role="tab" aria-selected="false" data-i18n="tab.post">数据后处理</button>
   </nav>
   <main>
     <div class="tab-panel active" id="tab-collect" role="tabpanel">
     <div class="actions">
-      <button type="button" class="primary" id="btnStart">开始</button>
-      <button type="button" id="btnStop" disabled>结束</button>
-      <button type="button" class="discard" id="btnDiscard" disabled>作废</button>
-      <label class="quick-collect" title="结束或作废后自动执行后处理三步（参数见「数据后处理」Tab）">
+      <button type="button" class="primary" id="btnStart" data-i18n="btn.start">开始</button>
+      <button type="button" id="btnStop" disabled data-i18n="btn.stop">结束</button>
+      <button type="button" class="discard" id="btnDiscard" disabled data-i18n="btn.discard">作废</button>
+      <label class="quick-collect" data-i18n-title="quick.title" title="结束或作废后自动执行后处理三步（参数见「数据后处理」Tab）">
         <input type="checkbox" id="chkQuickCollect" />
-        快速采集
+        <span data-i18n="quick.label">快速采集</span>
       </label>
-      <span class="hint" id="runHint">空闲 — 点「开始」录制当前 episode</span>
+      <span class="hint" id="runHint" data-i18n="hint.idle">空闲 — 点「开始」录制当前 episode</span>
     </div>
     <div class="save-path">
-      <label for="saveDirInput">保存路径</label>
-      <input type="text" id="saveDirInput" placeholder="留空则沿用当前路径" />
-      <button type="button" id="btnSaveDir">应用</button>
+      <label for="saveDirInput" data-i18n="save.label">保存路径</label>
+      <input type="text" id="saveDirInput" data-i18n-placeholder="save.placeholder" placeholder="留空则沿用当前路径" />
+      <button type="button" id="btnSaveDir" data-i18n="btn.apply">应用</button>
     </div>
     <div class="meta">
-      <div>连接：<strong id="status" class="st-connecting">connecting…</strong></div>
-      <div>录制：<strong id="recState">idle</strong></div>
-      <div>保存路径：<strong id="saveDir">—</strong></div>
-      <div>episode：<strong id="episode">—</strong></div>
-      <div>前端 hz：<strong id="hzFront">—</strong></div>
-      <div>已写帧：<strong id="written">0</strong></div>
+      <div><span data-i18n="meta.conn">连接：</span><strong id="status" class="st-connecting">connecting…</strong></div>
+      <div><span data-i18n="meta.rec">录制：</span><strong id="recState">idle</strong></div>
+      <div><span data-i18n="meta.save">保存路径：</span><strong id="saveDir">—</strong></div>
+      <div><span data-i18n="meta.episode">episode：</span><strong id="episode">—</strong></div>
+      <div><span data-i18n="meta.hz">前端 hz：</span><strong id="hzFront">—</strong></div>
+      <div><span data-i18n="meta.written">已写帧：</span><strong id="written">0</strong></div>
     </div>
     <div class="content-row">
       <section class="cam-section">
-        <h2>Camera preview · 2×2</h2>
+        <h2 data-i18n="cam.title">Camera preview · 2×2</h2>
         <div id="cam-grid"></div>
       </section>
       <div id="agents"></div>
@@ -676,25 +717,25 @@ PREVIEW_HTML = """<!DOCTYPE html>
     <div class="tab-panel" id="tab-post" role="tabpanel">
       <div class="pp-grid">
         <section class="pp-card">
-          <h2>Episode</h2>
-          <p class="pp-hint">选择已落盘目录，或粘贴完整路径（如 D:\\data_new\\episode_00016）。</p>
+          <h2 data-i18n="pp.episode">Episode</h2>
+          <p class="pp-hint" data-i18n="pp.episode_hint">选择已落盘目录，或粘贴完整路径（如 D:\\data_new\\episode_00016）。</p>
           <div class="pp-row">
-            <label for="ppEpisodeSelect">列表</label>
+            <label for="ppEpisodeSelect" data-i18n="pp.list">列表</label>
             <select id="ppEpisodeSelect"></select>
-            <button type="button" id="btnPpRefresh">刷新</button>
+            <button type="button" id="btnPpRefresh" data-i18n="btn.refresh">刷新</button>
           </div>
           <div class="pp-row">
-            <label for="ppEpisode">路径</label>
+            <label for="ppEpisode" data-i18n="pp.path">路径</label>
             <input type="text" class="wide" id="ppEpisode" placeholder="D:\\data_new\\episode_00016" />
           </div>
           <div class="pp-row">
-            <label class="quick-collect"><input type="checkbox" id="ppAllowInvalid" /> allow-invalid（作废 episode 也导出）</label>
+            <label class="quick-collect"><input type="checkbox" id="ppAllowInvalid" /> <span data-i18n="pp.allow_invalid">allow-invalid（作废 episode 也导出）</span></label>
           </div>
         </section>
 
         <section class="pp-card">
-          <h2>1 · export-timeline</h2>
-          <p class="pp-hint">sensors-dcs export-timeline -e … --align asof --master cam-left --master-hz 5</p>
+          <h2 data-i18n="pp.step1">1 · export-timeline</h2>
+          <p class="pp-hint" data-i18n="pp.step1_hint">sensors-dcs export-timeline -e … --align asof --master cam-left --master-hz 5</p>
           <div class="pp-row">
             <label for="ppAlign">align</label>
             <select id="ppAlign">
@@ -709,13 +750,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <input type="number" id="ppMasterHz" value="5" step="0.1" min="0.1" />
           </div>
           <div class="pp-actions">
-            <button type="button" id="btnPpExport">运行 Step 1</button>
+            <button type="button" id="btnPpExport" data-i18n="pp.run1">运行 Step 1</button>
           </div>
         </section>
 
         <section class="pp-card">
-          <h2>2 · filter-timeline</h2>
-          <p class="pp-hint">--require arm,cam-left,cam-right,cam-middle,gripper-read --max-match-dt 0.033 --trim both --materialize</p>
+          <h2 data-i18n="pp.step2">2 · filter-timeline</h2>
+          <p class="pp-hint" data-i18n="pp.step2_hint">--require arm,cam-left,cam-right,cam-middle,gripper-read --max-match-dt 0.033 --trim both --materialize</p>
           <div class="pp-row">
             <label for="ppRequire">require</label>
             <input type="text" class="wide" id="ppRequire" value="arm,cam-left,cam-right,cam-middle,gripper-read" />
@@ -733,42 +774,101 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <label class="quick-collect"><input type="checkbox" id="ppMaterialize" checked /> materialize</label>
           </div>
           <div class="pp-actions">
-            <button type="button" id="btnPpFilter">运行 Step 2</button>
+            <button type="button" id="btnPpFilter" data-i18n="pp.run2">运行 Step 2</button>
           </div>
         </section>
 
         <section class="pp-card">
-          <h2>3 · export-hik-dataset</h2>
-          <p class="pp-hint">--camera-map …\\hik_camera_map.yaml</p>
+          <h2 data-i18n="pp.step3">3 · export-hik-dataset</h2>
+          <p class="pp-hint" data-i18n="pp.step3_hint">--camera-map …\\hik_camera_map.yaml</p>
           <div class="pp-row">
             <label for="ppCameraMap">camera-map</label>
-            <input type="text" class="wide" id="ppCameraMap" placeholder="路径到 hik_camera_map.yaml" />
+            <input type="text" class="wide" id="ppCameraMap" data-i18n-placeholder="pp.camera_map_ph" placeholder="路径到 hik_camera_map.yaml" />
           </div>
           <div class="pp-actions">
-            <button type="button" id="btnPpHik">运行 Step 3</button>
+            <button type="button" id="btnPpHik" data-i18n="pp.run3">运行 Step 3</button>
           </div>
         </section>
 
         <section class="pp-card">
-          <h2>一键三步</h2>
-          <p class="pp-hint">顺序执行上述三步；「快速采集」勾选后结束/作废也会走同一套参数。</p>
+          <h2 data-i18n="pp.run_all_title">一键三步</h2>
+          <p class="pp-hint" data-i18n="pp.run_all_hint">顺序执行上述三步；「快速采集」勾选后结束/作废也会走同一套参数。</p>
           <div class="pp-actions">
-            <button type="button" class="primary" id="btnPpRunAll">一键执行三步</button>
+            <button type="button" class="primary" id="btnPpRunAll" data-i18n="pp.run_all">一键执行三步</button>
             <span class="hint" id="ppHint"></span>
           </div>
-          <pre id="ppLog">（尚未运行）</pre>
+          <pre id="ppLog" data-i18n="pp.log_idle">（尚未运行）</pre>
         </section>
       </div>
     </div>
   </main>
   <div class="modal-backdrop" id="appModal" role="dialog" aria-modal="true">
     <div class="modal-card">
-      <h3 id="appModalTitle">提示</h3>
+      <h3 id="appModalTitle" data-i18n="modal.default_title">提示</h3>
       <p id="appModalBody"></p>
-      <button type="button" id="appModalOk">知道了</button>
+      <button type="button" id="appModalOk" data-i18n="modal.ok">知道了</button>
     </div>
   </div>
   <script>
+    const DCS_I18N = JSON.parse('__DCS_I18N_JSON__');
+    const LS_LOCALE = 'sensors-dcs.locale';
+    let currentLocale = 'zh';
+    try {
+      const stored = localStorage.getItem(LS_LOCALE);
+      if (stored === 'zh' || stored === 'en') currentLocale = stored;
+    } catch (e) {}
+    function formatMessage(raw, vars) {
+      if (!vars) return raw;
+      return String(raw).replace(/[{](\\w+)[}]/g, (_, k) =>
+        (vars[k] == null ? '{' + k + '}' : String(vars[k])));
+    }
+    function t(path, vars) {
+      const table = DCS_I18N[currentLocale] || DCS_I18N.zh || {};
+      const fallback = DCS_I18N.zh || {};
+      const raw = (table[path] != null ? table[path] : fallback[path]);
+      return formatMessage(raw != null ? raw : path, vars);
+    }
+    function applyDomI18n(root) {
+      const scope = root || document;
+      scope.querySelectorAll('[data-i18n]').forEach((el) => {
+        const key = el.getAttribute('data-i18n');
+        if (!key) return;
+        const attr = el.getAttribute('data-i18n-attr');
+        const textVal = t(key);
+        if (attr) el.setAttribute(attr, textVal);
+        else if (el.hasAttribute('data-i18n-html')) el.innerHTML = textVal;
+        else el.textContent = textVal;
+      });
+      scope.querySelectorAll('[data-i18n-title]').forEach((el) => {
+        const key = el.getAttribute('data-i18n-title');
+        if (key) el.setAttribute('title', t(key));
+      });
+      scope.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
+        const key = el.getAttribute('data-i18n-placeholder');
+        if (key) el.setAttribute('placeholder', t(key));
+      });
+      document.title = t('meta.title');
+    }
+    function setLocale(loc) {
+      if (loc !== 'zh' && loc !== 'en') return;
+      currentLocale = loc;
+      try { localStorage.setItem(LS_LOCALE, loc); } catch (e) {}
+      document.documentElement.lang = loc === 'zh' ? 'zh-CN' : 'en';
+      document.querySelectorAll('.lang-btn').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-locale') === loc);
+      });
+      applyDomI18n(document);
+      try {
+        if (typeof applyRecordUi === 'function' && window.__lastRecordStatus) {
+          applyRecordUi(window.__lastRecordStatus);
+        }
+      } catch (e) {}
+    }
+    document.querySelectorAll('.lang-btn').forEach((btn) => {
+      btn.addEventListener('click', () => setLocale(btn.getAttribute('data-locale')));
+    });
+    setLocale(currentLocale);
+
     const agentsEl = document.getElementById('agents');
     const camGridEl = document.getElementById('cam-grid');
     const statusEl = document.getElementById('status');
@@ -788,7 +888,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const appModalBody = document.getElementById('appModalBody');
     const appModalOk = document.getElementById('appModalOk');
     function showAppModal(title, body) {
-      appModalTitle.textContent = title || '提示';
+      appModalTitle.textContent = title || t('modal.default_title');
       appModalBody.textContent = body || '';
       appModal.classList.add('show');
     }
@@ -852,11 +952,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
     function applyRecordUi(rec) {
       if (!rec) return;
+      window.__lastRecordStatus = rec;
       const st = rec.state || 'idle';
       recStateEl.textContent = st;
       saveDirEl.textContent = rec.save_dir || '—';
       if (document.activeElement !== saveDirInput) {
-        saveDirInput.placeholder = rec.save_dir || '留空则沿用当前路径';
+        saveDirInput.placeholder = rec.save_dir || t('save.placeholder');
       }
       episodeEl.textContent = (rec.episode_index == null) ? '—' : String(rec.episode_index);
       writtenEl.textContent = String(rec.written == null ? 0 : rec.written);
@@ -868,17 +969,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
         btnStart.disabled = true;
         btnStop.disabled = false;
         btnDiscard.disabled = false;
-        runHint.textContent = '录制中 — 「结束」valid=true；「作废」valid=false（仍落盘）';
+        runHint.textContent = t('hint.recording');
       } else if (st === 'flushing') {
         btnStart.disabled = true;
         btnStop.disabled = true;
         btnDiscard.disabled = true;
-        runHint.textContent = '落盘中 — 完成前不可开始下一集';
+        runHint.textContent = t('hint.flushing');
       } else {
         btnStart.disabled = false;
         btnStop.disabled = true;
         btnDiscard.disabled = true;
-        runHint.textContent = '空闲 — 点「开始」录制 episode ' + episodeEl.textContent;
+        runHint.textContent = t('hint.idle_ep', { ep: episodeEl.textContent });
       }
     }
 
@@ -890,8 +991,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const isStop = path.indexOf('stop') >= 0;
       const discarding = isStop && body && body.valid === false;
       runHint.textContent = discarding
-        ? '正在作废并落盘（valid=false）…'
-        : (isStop ? '正在停止并落盘…' : '正在开始录制…');
+        ? t('hint.discarding')
+        : (isStop ? t('hint.stopping') : t('hint.starting'));
       try {
         const opts = { method: 'POST' };
         if (body !== undefined) {
@@ -904,24 +1005,24 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (!j.ok && j.error) {
           runHint.textContent = j.error;
         } else if (discarding && j.ok) {
-          runHint.textContent = '已作废 episode（manifest.valid=false），可开始下一集';
+          runHint.textContent = t('hint.discarded');
         }
         if (isStop && j.ok && chkQuickCollect.checked && j.finished_episode_path) {
           const epPath = j.finished_episode_path;
           if (ppEpisode) ppEpisode.value = epPath;
           runHint.textContent = discarding
-            ? '已作废，正在快速后处理…'
-            : '已结束，正在快速后处理…';
+            ? t('hint.qc_discard')
+            : t('hint.qc_stop');
           const pp = await runPostprocess({
             steps: ['export-timeline', 'filter-timeline', 'export-hik-dataset'],
             allow_invalid: discarding || (document.getElementById('ppAllowInvalid') || {}).checked,
           }, epPath);
           if (pp && pp.ok) {
-            runHint.textContent = '快速后处理完成 — ' + epPath;
-            showAppModal('快速后处理完成', epPath);
+            runHint.textContent = t('hint.qc_ok', { path: epPath });
+            showAppModal(t('modal.qc_ok'), epPath);
           } else if (pp) {
-            runHint.textContent = '快速后处理失败：' + (pp.error || 'unknown');
-            showAppModal('快速后处理失败', pp.error || JSON.stringify(pp));
+            runHint.textContent = t('hint.qc_fail', { error: pp.error || 'unknown' });
+            showAppModal(t('modal.qc_fail'), pp.error || JSON.stringify(pp));
             try { switchTab('post'); } catch (e) {}
           }
         }
@@ -939,7 +1040,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     btnStart.addEventListener('click', () => postRecord('/api/record/start'));
     btnStop.addEventListener('click', () => postRecord('/api/record/stop', { valid: true }));
     btnDiscard.addEventListener('click', () => {
-      if (!confirm('作废本局？数据仍会落盘，但 manifest.valid=false；导出默认跳过。')) return;
+      if (!confirm(t('confirm.discard'))) return;
       postRecord('/api/record/stop', { valid: false });
     });
 
@@ -1029,14 +1130,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
       ppEpisodeSelect.innerHTML = '';
       const opt0 = document.createElement('option');
       opt0.value = '';
-      opt0.textContent = episodes && episodes.length ? '选择 episode…' : '（无 episode，先采集或改保存路径）';
+      opt0.textContent = episodes && episodes.length ? t('pp.select_ep') : t('pp.no_ep');
       ppEpisodeSelect.appendChild(opt0);
       (episodes || []).forEach((ep) => {
         const o = document.createElement('option');
         o.value = ep.path;
         let label = ep.name;
-        if (ep.valid === false) label += ' [作废]';
-        else if (ep.valid === true) label += ' [valid]';
+        if (ep.valid === false) label += t('pp.tag_discard');
+        else if (ep.valid === true) label += t('pp.tag_valid');
         if (ep.has_hik) label += ' · hik';
         else if (ep.has_export) label += ' · export';
         o.textContent = label;
@@ -1079,11 +1180,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const body = Object.assign(readPpForm(), extra || {});
       if (episodeOverride) body.episode = episodeOverride;
       if (!body.episode) {
-        ppHint.textContent = '请填写 episode 路径';
+        ppHint.textContent = t('pp.need_episode');
         return { ok: false, error: 'missing episode' };
       }
       savePpForm();
-      setPpBusy(true, '后处理运行中…');
+      setPpBusy(true, t('pp.running'));
       ppLog.textContent = 'running…\\n' + JSON.stringify(body, null, 2);
       try {
         const r = await fetch('/api/postprocess/run', {
@@ -1093,7 +1194,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         });
         const j = await r.json();
         ppLog.textContent = (j.log || '') + '\\n\\n' + JSON.stringify(j, null, 2);
-        ppHint.textContent = j.ok ? '完成' : ('失败：' + (j.error || ''));
+        ppHint.textContent = j.ok ? t('pp.done') : t('pp.fail', { error: j.error || '' });
         return j;
       } catch (e) {
         ppHint.textContent = String(e);
@@ -1122,16 +1223,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const btnExit = document.getElementById('btnExit');
     if (btnExit) {
       btnExit.addEventListener('click', async () => {
-        if (!confirm('安全退出：停止录制、关闭传感器并结束进程？')) return;
+        if (!confirm(t('confirm.exit'))) return;
         exitRequested = true;
         btnExit.disabled = true;
-        runHint.textContent = '正在安全退出…';
+        runHint.textContent = t('hint.exiting');
         setConnStatus('shutting down…', 'st-offline');
         try {
           const r = await fetch('/api/shutdown', { method: 'POST' }).then((x) => x.json());
-          runHint.textContent = r.ok ? '已请求退出，可关闭页面' : ('退出失败：' + (r.error || JSON.stringify(r)));
+          runHint.textContent = r.ok ? t('hint.exit_ok') : t('hint.exit_fail', { error: r.error || JSON.stringify(r) });
         } catch (e) {
-          runHint.textContent = '退出请求已发送（连接可能已断开）';
+          runHint.textContent = t('hint.exit_sent');
         }
       });
     }
@@ -1139,7 +1240,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     async function applySaveDir() {
       const path = saveDirInput.value.trim();
       btnSaveDir.disabled = true;
-      runHint.textContent = path ? '正在更新保存路径…' : '正在刷新保存路径…';
+      runHint.textContent = path ? t('hint.save_updating') : t('hint.save_refresh');
       try {
         const r = await fetch('/api/record/save_dir', {
           method: 'POST',
@@ -1150,7 +1251,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         applyRecordUi(j);
         if (j.ok) {
           saveDirInput.value = '';
-          runHint.textContent = '保存路径已更新 — 点「开始」录制 episode ' + episodeEl.textContent;
+          runHint.textContent = t('hint.save_ok', { ep: episodeEl.textContent });
         } else if (j.error) {
           runHint.textContent = j.error;
         }
@@ -1325,7 +1426,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         };
         const applySyncUi = (sync) => {
           const on = !!(sync && sync.enabled);
-          syncBtn.textContent = on ? '取消同步' : '同步';
+          syncBtn.textContent = on ? t('grip.unsync') : t('grip.sync');
           syncBtn.dataset.enabled = on ? '1' : '0';
           setManualEnabled(!on);
           if (on && sync.last_norm != null && Number.isFinite(Number(sync.last_norm))) {
@@ -1353,14 +1454,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
           }
         };
         initBtn.addEventListener('click', async () => {
-          runHint.textContent = '夹爪初始化中（约数秒，夹爪会动作）…';
+          runHint.textContent = t('grip.init_busy');
           try {
             const r = await postGrip({ agent_id: frame.agent_id, initialize: true }, initBtn);
             runHint.textContent = r.ok
               ? '夹爪初始化成功，可下发 / 同步'
               : ('夹爪初始化失败：' + (r.error || JSON.stringify(r)));
           } catch (e) {
-            runHint.textContent = '夹爪初始化异常：' + e;
+            runHint.textContent = t('grip.init_err', { error: e });
           }
         });
         syncBtn.addEventListener('click', async () => {
@@ -1377,7 +1478,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
               }),
             }).then((x) => x.json());
             if (!r.ok) {
-              runHint.textContent = '同步失败：' + (r.error || JSON.stringify(r));
+              runHint.textContent = t('grip.sync_fail', { error: r.error || JSON.stringify(r) });
               return;
             }
             window.__gripGelloSync = r;
@@ -1386,7 +1487,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
               ? '已同步：服务端 gello j6(cal) → gripper（数据不经前端）'
               : '已取消同步';
           } catch (e) {
-            runHint.textContent = '同步异常：' + e;
+            runHint.textContent = t('grip.sync_err', { error: e });
           } finally {
             syncBtn.disabled = false;
           }
@@ -1394,7 +1495,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         btn.addEventListener('click', async () => {
           const v = Number(inp.value);
           if (!Number.isFinite(v)) {
-            runHint.textContent = '夹爪：请输入有效数字';
+            runHint.textContent = t('grip.bad_num');
             return;
           }
           try {
@@ -1406,7 +1507,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
               ? ('夹爪已下发 norm=' + v)
               : ('夹爪下发失败：' + (r.error || JSON.stringify(r)));
           } catch (e) {
-            runHint.textContent = '夹爪下发异常：' + e;
+            runHint.textContent = t('grip.cmd_err', { error: e });
           }
         });
       }
@@ -1505,11 +1606,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
           setJogEnabled(!!armed && hasRead && !syncing && !teleoping);
           armBtn.disabled = !hasRead || syncing || teleoping;
           syncBtn.disabled = !hasRead || teleoping;
-          syncBtn.textContent = syncing ? '取消同步' : '同步';
+          syncBtn.textContent = syncing ? t('arm.unsync') : t('arm.sync');
           syncBtn.classList.toggle('arm-sync-on', syncing);
           syncBtn.dataset.enabled = syncing ? '1' : '0';
           teleopBtn.disabled = !hasRead || syncing;
-          teleopBtn.textContent = teleoping ? '解除摇操' : '摇操';
+          teleopBtn.textContent = teleoping ? t('arm.unteelop') : t('arm.teleop');
           teleopBtn.classList.toggle('arm-teleop-on', teleoping);
           teleopBtn.dataset.enabled = teleoping ? '1' : '0';
           if (sync.phase === 'ramping' && sync.ramp_n) {
@@ -1544,31 +1645,31 @@ PREVIEW_HTML = """<!DOCTYPE html>
           }
         };
         armBtn.addEventListener('click', async () => {
-          runHint.textContent = '机械臂 Arm / TT_init…';
+          runHint.textContent = t('arm.arming');
           try {
             const r = await postArm({ arm: true });
-            runHint.textContent = r.ok ? 'Arm 成功，可用 ± 点动 / 同步 / 摇操' : ('Arm 失败：' + (r.error || JSON.stringify(r)));
+            runHint.textContent = r.ok ? t('arm.arm_ok') : t('arm.arm_fail', { error: r.error || JSON.stringify(r) });
             box._applyArmUi(!!(r.ok && r.armed));
           } catch (e) {
-            runHint.textContent = 'Arm 异常：' + e;
+            runHint.textContent = t('arm.arm_err', { error: e });
           }
         });
         disarmBtn.addEventListener('click', async () => {
           try {
             const r = await postArm({ disarm: true });
-            runHint.textContent = r.ok ? '已 Disarm' : ('Disarm 失败：' + (r.error || JSON.stringify(r)));
+            runHint.textContent = r.ok ? t('arm.disarm_ok') : t('arm.disarm_fail', { error: r.error || JSON.stringify(r) });
             box._applyArmUi(false);
           } catch (e) {
-            runHint.textContent = 'Disarm 异常：' + e;
+            runHint.textContent = t('arm.disarm_err', { error: e });
           }
         });
         estopBtn.addEventListener('click', async () => {
           try {
             const r = await postArm({ stop: true });
-            runHint.textContent = r.ok ? 'Estop/停写已发送' : ('Estop 失败：' + (r.error || JSON.stringify(r)));
+            runHint.textContent = r.ok ? t('arm.estop_ok') : t('arm.estop_fail', { error: r.error || JSON.stringify(r) });
             box._applyArmUi(false);
           } catch (e) {
-            runHint.textContent = 'Estop 异常：' + e;
+            runHint.textContent = t('arm.estop_err', { error: e });
           }
         });
         syncBtn.addEventListener('click', async () => {
@@ -1598,11 +1699,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
               ? '同步进行中：目标为命令时刻 gello（中途扳 gello 不改路径）'
               : (r.message || '已取消同步；gello 未控制机械臂');
             if (!r.enabled && r.phase === 'completed') {
-              showAppModal('同步完成', r.message || '同步完成；gello 已不再控制机械臂');
+              showAppModal(t('arm.sync_modal_ok'), r.message || t('arm.sync_done'));
             }
           } catch (e) {
             runHint.textContent = '同步异常：' + e;
-            showAppModal('同步异常', String(e));
+            showAppModal(t('arm.sync_modal_err'), String(e));
           } finally {
             syncBtn.disabled = false;
             box._applyArmUi(!!p.armed);
@@ -1636,7 +1737,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
               : (r.message || '已解除摇操；gello 未控制机械臂');
           } catch (e) {
             runHint.textContent = '摇操异常：' + e;
-            showAppModal('摇操异常', String(e));
+            showAppModal(t('arm.teleop_modal_err'), String(e));
           } finally {
             teleopBtn.disabled = false;
             box._applyArmUi(!!p.armed);
@@ -1645,7 +1746,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const jog = async (jointIndex, sign) => {
           const dDeg = Number(delta.value);
           if (!Number.isFinite(dDeg) || dDeg <= 0) {
-            runHint.textContent = 'delta 无效';
+            runHint.textContent = t('arm.bad_delta');
             return;
           }
           try {
@@ -1658,7 +1759,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
               : ('点动失败：' + (r.error || JSON.stringify(r)));
             if (r.armed === false) box._applyArmUi(false);
           } catch (e) {
-            runHint.textContent = '点动异常：' + e;
+            runHint.textContent = t('arm.jog_err', { error: e });
           }
         };
         box.querySelectorAll('.arm-minus').forEach((b) => {
@@ -1767,9 +1868,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const cur = msg.gello_arm_sync;
         window.__gelloArmSync = cur;
         if (prev.phase !== 'completed' && cur.phase === 'completed') {
-          showAppModal('同步完成', cur.message || '同步完成；gello 已不再控制机械臂');
+          showAppModal(t('arm.sync_modal_ok'), cur.message || t('arm.sync_done'));
         } else if (prev.phase !== 'error' && cur.phase === 'error' && cur.last_error) {
-          showAppModal('同步失败', cur.last_error);
+          showAppModal(t('arm.sync_modal_fail'), cur.last_error);
         }
       }
       if (msg.gello_arm_teleop) {
@@ -1777,7 +1878,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const curT = msg.gello_arm_teleop;
         window.__gelloArmTeleop = curT;
         if (prevT.phase === 'teleop' && curT.phase === 'error' && curT.last_error) {
-          showAppModal('摇操已解除', curT.last_error);
+          showAppModal(t('arm.teleop_modal_off'), curT.last_error);
         }
       }
       frames.forEach((frame) => {
@@ -1904,7 +2005,9 @@ def create_viz_app(
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
-        return PREVIEW_HTML
+        from sensors_dcs.ui_i18n import inject_i18n_json
+
+        return inject_i18n_json(PREVIEW_HTML)
 
     @app.get("/api/status")
     async def status() -> dict[str, Any]:
@@ -2166,20 +2269,28 @@ ERROR_HTML = """<!DOCTYPE html>
 </head>
 <body class="dcs-error-page">
   <header>
-    <p class="kicker">Boot failure</p>
-    <h1>配置错误</h1>
-    <p>程序未退出；请修正 YAML 后重新启动。Agent 未启动。</p>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;">
+      <div>
+        <p class="kicker" data-i18n="err.kicker">Boot failure</p>
+        <h1 data-i18n="err.h1">配置错误</h1>
+        <p data-i18n="err.sub">程序未退出；请修正 YAML 后重新启动。Agent 未启动。</p>
+      </div>
+      <div class="lang-switch" data-i18n-title="lang.title" title="界面语言 / Language" style="display:inline-flex;gap:0.25rem;padding:0.15rem;border-radius:999px;border:1px solid var(--border);background:rgba(26,35,50,.88);">
+        <button type="button" class="lang-btn active" data-locale="zh" data-i18n="lang.zh" style="appearance:none;border:1px solid transparent;background:transparent;color:var(--muted);font:inherit;font-size:0.72rem;font-weight:600;padding:0.22rem 0.65rem;border-radius:999px;cursor:pointer;">中文</button>
+        <button type="button" class="lang-btn" data-locale="en" data-i18n="lang.en" style="appearance:none;border:1px solid transparent;background:transparent;color:var(--muted);font:inherit;font-size:0.72rem;font-weight:600;padding:0.22rem 0.65rem;border-radius:999px;cursor:pointer;">EN</button>
+      </div>
+    </div>
   </header>
   <main>
     <div class="card">
-      <h2>配置文件</h2>
+      <h2 data-i18n="err.cfg">配置文件</h2>
       <div class="path" id="cfgPath">—</div>
     </div>
     <div class="card">
-      <h2>错误详情</h2>
+      <h2 data-i18n="err.detail">错误详情</h2>
       <pre id="errMsg">—</pre>
     </div>
-    <div class="card hint">
+    <div class="card hint" data-i18n="err.hint" data-i18n-html>
       DCS 启动 YAML 需含 <code>sensors_config</code> 与 <code>agents</code>。
       不要用 <code>sensors_*.yaml</code>（设备清单）直接启动。
       桌面端可用 <code>sensors-dcs.exe -c &lt;dcs.yaml&gt;</code>
@@ -2187,6 +2298,61 @@ ERROR_HTML = """<!DOCTYPE html>
     </div>
   </main>
   <script>
+    const DCS_I18N = JSON.parse('__DCS_I18N_JSON__');
+    const LS_LOCALE = 'sensors-dcs.locale';
+    let currentLocale = 'zh';
+    try {
+      const stored = localStorage.getItem(LS_LOCALE);
+      if (stored === 'zh' || stored === 'en') currentLocale = stored;
+    } catch (e) {}
+    function formatMessage(raw, vars) {
+      if (!vars) return raw;
+      return String(raw).replace(/[{](\\w+)[}]/g, (_, k) =>
+        (vars[k] == null ? '{' + k + '}' : String(vars[k])));
+    }
+    function t(path, vars) {
+      const table = DCS_I18N[currentLocale] || DCS_I18N.zh || {};
+      const fallback = DCS_I18N.zh || {};
+      const raw = (table[path] != null ? table[path] : fallback[path]);
+      return formatMessage(raw != null ? raw : path, vars);
+    }
+    function applyDomI18n() {
+      document.querySelectorAll('[data-i18n]').forEach((el) => {
+        const key = el.getAttribute('data-i18n');
+        if (!key) return;
+        const textVal = t(key);
+        if (el.hasAttribute('data-i18n-html')) {
+          // err.hint uses `code` markers → wrap as <code>
+          el.innerHTML = textVal.replace(/`([^`]+)`/g, '<code>$1</code>');
+        } else el.textContent = textVal;
+      });
+      document.querySelectorAll('[data-i18n-title]').forEach((el) => {
+        const key = el.getAttribute('data-i18n-title');
+        if (key) el.setAttribute('title', t(key));
+      });
+      document.title = t('err.title');
+    }
+    function setLocale(loc) {
+      if (loc !== 'zh' && loc !== 'en') return;
+      currentLocale = loc;
+      try { localStorage.setItem(LS_LOCALE, loc); } catch (e) {}
+      document.documentElement.lang = loc === 'zh' ? 'zh-CN' : 'en';
+      document.querySelectorAll('.lang-btn').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-locale') === loc);
+        if (btn.classList.contains('active')) {
+          btn.style.color = 'var(--text)';
+          btn.style.background = 'linear-gradient(90deg, rgba(240,180,41,.14), rgba(61,214,198,.14))';
+        } else {
+          btn.style.color = 'var(--muted)';
+          btn.style.background = 'transparent';
+        }
+      });
+      applyDomI18n();
+    }
+    document.querySelectorAll('.lang-btn').forEach((btn) => {
+      btn.addEventListener('click', () => setLocale(btn.getAttribute('data-locale')));
+    });
+    setLocale(currentLocale);
     fetch('/api/status').then(r => r.json()).then(j => {
       document.getElementById('cfgPath').textContent = j.config_path || '—';
       document.getElementById('errMsg').textContent = j.error || '—';
@@ -2211,7 +2377,9 @@ def create_error_app(*, error: str, config_path: str | None = None) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
-        return ERROR_HTML
+        from sensors_dcs.ui_i18n import inject_i18n_json
+
+        return inject_i18n_json(ERROR_HTML)
 
     @app.get("/api/status")
     async def status() -> dict[str, Any]:
