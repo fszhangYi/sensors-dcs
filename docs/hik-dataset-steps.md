@@ -1,7 +1,7 @@
 # hik 训练集 `steps.json` 字段说明
 
 > **全链路详细版**（目录、metadata、图像、与 hik_gello / action_state 对照）：见 [hik-dataset.md](hik-dataset.md)。  
-> **`actions` 怎么算、能否采集**：见 [hik-dataset-actions.md](hik-dataset-actions.md)。  
+> **`actions` 怎么算、能否采集**（含通俗版「臂永远对 / gello 只是遥控」）：见 [hik-dataset-actions.md](hik-dataset-actions.md)。  
 > 本文仅展开 **`steps.json` 各字段含义**。
 
 `export-hik-dataset`（或 `filter-timeline --hik-dataset`）写出的目录与 `hik_gello/data_postprocess.py` 对齐：

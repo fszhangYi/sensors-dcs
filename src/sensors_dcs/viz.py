@@ -68,6 +68,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       --text: #e7ecf3;
       --muted: #8b9bb4;
       --accent: #3d9a8b;
+      --danger: #e07070;
       --line: #2a3a4f;
     }
     * { box-sizing: border-box; }
@@ -105,8 +106,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     header #btnExit {
       flex-shrink: 0;
       appearance: none;
-      border: 1px solid #a33;
-      background: color-mix(in srgb, #c44 32%, #0b1017);
+      border: 1px solid var(--danger);
+      background: color-mix(in srgb, var(--danger) 28%, var(--panel));
       color: var(--text);
       font: inherit;
       font-size: 0.9rem;
@@ -115,7 +116,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
       cursor: pointer;
       margin-top: 0.1rem;
     }
-    header #btnExit:hover { border-color: #e07070; }
+    header #btnExit:hover {
+      border-color: #f0a0a0;
+      background: color-mix(in srgb, var(--danger) 40%, var(--panel));
+      color: #fff;
+    }
     header #btnExit:disabled {
       opacity: 0.45;
       cursor: not-allowed;
@@ -204,7 +209,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
     #status.st-error { color: #e07070; }
     #status.st-offline { color: #e07070; }
     button.danger {
-      background: color-mix(in srgb, #c44 32%, #0b1017); border-color: #a33;
+      background: color-mix(in srgb, var(--danger) 28%, var(--panel));
+      border-color: var(--danger);
+      color: var(--text);
     }
     .agent-vals {
       display: flex; flex-wrap: wrap; gap: 0.35rem 0.55rem;

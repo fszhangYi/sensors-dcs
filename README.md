@@ -496,7 +496,7 @@ episode → export-timeline --align asof --master …
 ### 转成 hik 训练集（export-hik-dataset）
 
 将 `export/filtered/` 转成与 `hik_gello/data_postprocess.py` 相同结构：`metadata.json`、`steps.json`、`rgb_<name>_<i>.jpg`。  
-**完整来源说明**见 [docs/hik-dataset.md](docs/hik-dataset.md)；仅 steps 字段见 [docs/hik-dataset-steps.md](docs/hik-dataset-steps.md)。
+**完整来源说明**见 [docs/hik-dataset.md](docs/hik-dataset.md)；仅 steps 字段见 [docs/hik-dataset-steps.md](docs/hik-dataset-steps.md)；**actions 推演与可采集性**见 [docs/hik-dataset-actions.md](docs/hik-dataset-actions.md)。
 
 **相机命名不写死在代码里**，由 YAML 配置（serial → hik 名），filter / 导出时指定：
 
