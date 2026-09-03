@@ -81,6 +81,12 @@ def main(argv: list[str] | None = None) -> int:
         default="parquet",
         dest="export_format",
     )
+    p_export.add_argument(
+        "--allow-invalid",
+        action="store_true",
+        default=False,
+        help="export even when episode manifest.valid=false (作废)",
+    )
 
     p_filter = sub.add_parser(
         "filter-timeline",
@@ -146,6 +152,12 @@ def main(argv: list[str] | None = None) -> int:
         help="YAML serial→hik camera name map (required with --hik-dataset; "
         "copied to export/filtered/camera_map.yaml)",
     )
+    p_filter.add_argument(
+        "--allow-invalid",
+        action="store_true",
+        default=False,
+        help="filter even when episode manifest.valid=false (作废)",
+    )
 
     p_hik = sub.add_parser(
         "export-hik-dataset",
@@ -188,6 +200,12 @@ def main(argv: list[str] | None = None) -> int:
         "--no-grid-video",
         action="store_true",
         help="skip writing episode_grid.mp4 (camera grid + sensor panel)",
+    )
+    p_hik.add_argument(
+        "--allow-invalid",
+        action="store_true",
+        default=False,
+        help="export even when episode manifest.valid=false (作废)",
     )
 
     args = parser.parse_args(argv)
@@ -239,6 +257,7 @@ def main(argv: list[str] | None = None) -> int:
                 hz=args.hz,
                 master_hz=args.master_hz,
                 fmt=args.export_format,
+                allow_invalid=bool(getattr(args, "allow_invalid", False)),
             )
         except Exception as e:  # noqa: BLE001
             print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False, indent=2))
@@ -270,6 +289,7 @@ def main(argv: list[str] | None = None) -> int:
                 materialize=args.materialize or do_hik,
                 dedupe=args.dedupe,
                 fmt=args.filter_format,
+                allow_invalid=bool(getattr(args, "allow_invalid", False)),
             )
             if do_hik:
                 from sensors_dcs.export.hik_dataset import export_hik_dataset
@@ -280,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
                     camera_map_yaml=args.camera_map,
                     robot_name="elite",
                     tcp_z=0.18,
+                    allow_invalid=bool(getattr(args, "allow_invalid", False)),
                 )
                 meta["hik_dataset"] = hik_meta
         except Exception as e:  # noqa: BLE001
@@ -305,6 +326,7 @@ def main(argv: list[str] | None = None) -> int:
                 tcp_z=args.tcp_z,
                 calibration_json=args.calibration_json,
                 write_grid_video=not args.no_grid_video,
+                allow_invalid=bool(getattr(args, "allow_invalid", False)),
             )
         except Exception as e:  # noqa: BLE001
             print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False, indent=2))

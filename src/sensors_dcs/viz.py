@@ -5,10 +5,9 @@ import json
 import threading
 from typing import Any, Callable
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
-
 from pydantic import BaseModel
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
 
 
 class SaveDirBody(BaseModel):
@@ -211,6 +210,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
     button.danger {
       background: color-mix(in srgb, var(--danger) 28%, var(--panel));
       border-color: var(--danger);
+      color: var(--text);
+    }
+    button.discard {
+      background: color-mix(in srgb, #c90 26%, var(--panel));
+      border-color: #a70;
       color: var(--text);
     }
     .agent-vals {
@@ -420,7 +424,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
   <header>
     <div class="header-text">
       <h1>sensors-dcs · Agents</h1>
-      <p>低频整帧预览。连接 <code>/ws</code>。「开始/结束」控制录制流水线写盘。相机固定四宫格；状态卡不含相机预览。</p>
+      <p>低频整帧预览。连接 <code>/ws</code>。「开始 / 结束 / 作废」控制录制写盘（作废仍落盘但 manifest.valid=false）。相机固定四宫格；状态卡不含相机预览。</p>
     </div>
     <button type="button" class="danger" id="btnExit">安全退出</button>
   </header>
@@ -428,6 +432,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     <div class="actions">
       <button type="button" class="primary" id="btnStart">开始</button>
       <button type="button" id="btnStop" disabled>结束</button>
+      <button type="button" class="discard" id="btnDiscard" disabled>作废</button>
       <span class="hint" id="runHint">空闲 — 点「开始」录制当前 episode</span>
     </div>
     <div class="save-path">
@@ -495,6 +500,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const rawEl = document.getElementById('raw');
     const btnStart = document.getElementById('btnStart');
     const btnStop = document.getElementById('btnStop');
+    const btnDiscard = document.getElementById('btnDiscard');
     const btnSaveDir = document.getElementById('btnSaveDir');
     const saveDirInput = document.getElementById('saveDirInput');
     const runHint = document.getElementById('runHint');
@@ -546,28 +552,45 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (st === 'recording') {
         btnStart.disabled = true;
         btnStop.disabled = false;
-        runHint.textContent = '录制中 — 点「结束」停止流入并落盘';
+        btnDiscard.disabled = false;
+        runHint.textContent = '录制中 — 「结束」valid=true；「作废」valid=false（仍落盘）';
       } else if (st === 'flushing') {
         btnStart.disabled = true;
         btnStop.disabled = true;
+        btnDiscard.disabled = true;
         runHint.textContent = '落盘中 — 完成前不可开始下一集';
       } else {
         btnStart.disabled = false;
         btnStop.disabled = true;
+        btnDiscard.disabled = true;
         runHint.textContent = '空闲 — 点「开始」录制 episode ' + episodeEl.textContent;
       }
     }
 
-    async function postRecord(path) {
+    async function postRecord(path, body) {
       busy = true;
       btnStart.disabled = true;
       btnStop.disabled = true;
-      runHint.textContent = path.indexOf('stop') >= 0 ? '正在停止并落盘…' : '正在开始录制…';
+      btnDiscard.disabled = true;
+      const isStop = path.indexOf('stop') >= 0;
+      const discarding = isStop && body && body.valid === false;
+      runHint.textContent = discarding
+        ? '正在作废并落盘（valid=false）…'
+        : (isStop ? '正在停止并落盘…' : '正在开始录制…');
       try {
-        const r = await fetch(path, { method: 'POST' });
+        const opts = { method: 'POST' };
+        if (body !== undefined) {
+          opts.headers = { 'Content-Type': 'application/json' };
+          opts.body = JSON.stringify(body);
+        }
+        const r = await fetch(path, opts);
         const j = await r.json();
         applyRecordUi(j);
-        if (!j.ok && j.error) runHint.textContent = j.error;
+        if (!j.ok && j.error) {
+          runHint.textContent = j.error;
+        } else if (discarding && j.ok) {
+          runHint.textContent = '已作废 episode（manifest.valid=false），可开始下一集';
+        }
       } catch (e) {
         runHint.textContent = String(e);
       } finally {
@@ -581,7 +604,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
 
     btnStart.addEventListener('click', () => postRecord('/api/record/start'));
-    btnStop.addEventListener('click', () => postRecord('/api/record/stop'));
+    btnStop.addEventListener('click', () => postRecord('/api/record/stop', { valid: true }));
+    btnDiscard.addEventListener('click', () => {
+      if (!confirm('作废本局？数据仍会落盘，但 manifest.valid=false；导出默认跳过。')) return;
+      postRecord('/api/record/stop', { valid: false });
+    });
     const btnExit = document.getElementById('btnExit');
     if (btnExit) {
       btnExit.addEventListener('click', async () => {
@@ -1386,11 +1413,22 @@ def create_viz_app(
         return recorder.start()
 
     @app.post("/api/record/stop")
-    async def record_stop() -> dict[str, Any]:
+    async def record_stop(request: Request) -> dict[str, Any]:
         if recorder is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
-        # Block until disk flush completes so UI can keep Start disabled.
-        return await asyncio.to_thread(recorder.stop)
+        # Accept JSON ``{"valid": true|false}``; empty / legacy POST → valid=true.
+        valid = True
+        try:
+            ctype = (request.headers.get("content-type") or "").lower()
+            if "application/json" in ctype:
+                raw = await request.body()
+                if raw and raw.strip():
+                    data = json.loads(raw)
+                    if isinstance(data, dict) and "valid" in data:
+                        valid = bool(data["valid"])
+        except Exception:  # noqa: BLE001
+            valid = True
+        return await asyncio.to_thread(recorder.stop, valid=valid)
 
     @app.post("/api/record/save_dir")
     async def record_save_dir(req: SaveDirBody) -> dict[str, Any]:

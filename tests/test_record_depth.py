@@ -55,6 +55,10 @@ def test_record_writes_depth_png(tmp_path: Path) -> None:
             "depth_shape": [4, 4],
             "serial": "s1",
             "role": "middle",
+            "color_timestamp": 12345.6,
+            "depth_timestamp": 12346.0,
+            "color_timestamp_domain": "timestamp_domain.hardware_clock",
+            "depth_timestamp_domain": "timestamp_domain.hardware_clock",
         },
     )
 
@@ -84,3 +88,7 @@ def test_record_writes_depth_png(tmp_path: Path) -> None:
     assert idx["file"] == "00000007.jpg"
     assert idx["depth_file"] == "00000007_depth.png"
     assert idx["enable_depth"] is True
+    assert idx["color_timestamp"] == 12345.6
+    assert idx["depth_timestamp"] == 12346.0
+    assert idx["color_timestamp_domain"] == "timestamp_domain.hardware_clock"
+    assert idx["depth_timestamp_domain"] == "timestamp_domain.hardware_clock"

@@ -158,6 +158,11 @@ class RealSenseAgent(BaseAgent):
             "depth_png_b64": depth_png_b64,
             "dry_run": dry,
             "synth": bool(sample.get("synth")),
+            # Persisted for audit / future align; timeline still keys on t_wall.
+            "color_timestamp": sample.get("color_timestamp"),
+            "depth_timestamp": sample.get("depth_timestamp"),
+            "color_timestamp_domain": sample.get("color_timestamp_domain"),
+            "depth_timestamp_domain": sample.get("depth_timestamp_domain"),
         }
         return Frame(
             sensor_id=self.sensor_id,

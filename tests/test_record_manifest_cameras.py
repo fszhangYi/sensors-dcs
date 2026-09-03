@@ -59,3 +59,36 @@ def test_write_manifest_includes_cameras(tmp_path: Path) -> None:
     assert man2["written"] == 10
     assert man2["cameras"]["cam-left"]["intrinsic_matrix"][1][1] == 3.0
     assert "provisional" not in man2
+
+    man3 = rc._write_manifest(
+        ep_dir,
+        ep=0,
+        t_start=1.0,
+        t_end=2.5,
+        written=10,
+        dropped=1,
+        provisional=False,
+        valid=False,
+    )
+    assert man3["valid"] is False
+    assert "作废" in (man3.get("note") or "") or man3.get("valid") is False
+    assert json.loads((ep_dir / "manifest.json").read_text(encoding="utf-8"))["valid"] is False
+
+
+def test_provisional_manifest_valid_false(tmp_path: Path) -> None:
+    cfg = RecordConfig(save_dir=str(tmp_path), episode_index=0, queue_maxsize=8)
+    rc = RecordController(cfg, agents={}, site="lab")
+    ep_dir = tmp_path / "episode_00000"
+    ep_dir.mkdir()
+    man = rc._write_manifest(
+        ep_dir,
+        ep=0,
+        t_start=1.0,
+        t_end=None,
+        written=0,
+        dropped=0,
+        provisional=True,
+        valid=True,  # ignored while provisional
+    )
+    assert man["valid"] is False
+    assert man["provisional"] is True

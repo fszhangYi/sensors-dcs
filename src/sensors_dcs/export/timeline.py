@@ -37,6 +37,28 @@ def resolve_episode_dir(path: str | Path) -> Path:
     return p
 
 
+def ensure_episode_exportable(
+    manifest: dict[str, Any],
+    *,
+    allow_invalid: bool = False,
+    episode_label: str | None = None,
+) -> None:
+    """Refuse discarded episodes (``manifest.valid is False``) unless overridden.
+
+    Start-time provisional manifests also have ``valid=false``; export should only
+    run after a finished stop. Pass ``allow_invalid=True`` / CLI ``--allow-invalid``
+    to force export of 作废 episodes.
+    """
+    if allow_invalid:
+        return
+    if manifest.get("valid") is False:
+        label = episode_label or str(manifest.get("episode_index", "?"))
+        raise ValueError(
+            f"episode {label} has manifest.valid=false (作废/provisional); "
+            "refusing export. Pass allow_invalid=True / --allow-invalid to override."
+        )
+
+
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as f:
@@ -496,10 +518,14 @@ def export_episode_timeline(
     hz: float | None = None,
     master_hz: float | None = None,
     fmt: ExportFormat = "parquet",
+    allow_invalid: bool = False,
 ) -> dict[str, Any]:
     """Export long and optional aligned timeline tables for one episode."""
     root = resolve_episode_dir(ep_dir)
     manifest, samples = load_episode(root)
+    ensure_episode_exportable(
+        manifest, allow_invalid=allow_invalid, episode_label=root.name
+    )
     out_dir = Path(output_dir).expanduser().resolve() if output_dir else root / "export"
     out_dir.mkdir(parents=True, exist_ok=True)
 

@@ -154,9 +154,10 @@ Realsense 多路 get_camera_frame
 ### 【错误 E1】相机时间戳丢失硬件源 — 对齐保真度低于基线
 
 - **基线**：每帧存 `color_timestamp` / `depth_timestamp`（`pyrealsense2`），postprocess 以主相机 **HW color ts** 为采样轴，其它相机用 `systems_timestamp` 近邻。  
-- **DCS**：`sensors/.../realsense.py` 的 `ts = time.time()`（在 `wait_for_frames` 之前/旁路墙钟），**未**调用 `color_frame.get_timestamp()`；record 只持久化 `t_wall`。  
-- **影响**：多相机同步、与臂状态对齐的可复现性弱于基线；无法事后用 HW 时钟重对齐。  
-- **建议**：驱动 `read()` 增加 `color_timestamp` / `depth_timestamp`（及可选 `backend_timestamp`），record index.jsonl 原样写出；timeline 对齐优先 HW ts，回退 `t_wall`。
+- **DCS（修复前）**：驱动 `read()` 已取 HW ts，但 agent/record **未**写入 `index.jsonl`。  
+- **DCS（2026-09-03）**：`index.jsonl` 已持久化 HW 字段；**对齐仍用 `t_wall`**（只存不用）。见 [e1-e4-hw-ts-and-discard.md](e1-e4-hw-ts-and-discard.md)。  
+- **仍差于基线**：filter/timeline 未切到 HW 时钟轴。  
+- **影响（残留）**：多相机同步保真度仍弱于基线，但已可事后重对齐。
 
 ### 【错误 E2】写通道失败帧被 sampler 丢弃
 
@@ -186,12 +187,10 @@ Realsense 多路 get_camera_frame
 - **影响**：manifest 的 `written` 虚高，监控/验收失真。  
 - **建议**：`_write_frame` 返回是否真正写入，或无 jpeg 时抛/计 `dropped`。
 
-### 【错误 E4】无「本局作废」等价路径
+### 【错误 E4】无「本局作废」等价路径 — **已修**
 
 - 基线：`collection_flag == 2` → `data['valid']=0` 仍 pickle。  
-- DCS：成功 `stop` → `valid=true`；无法在 UI/API 标记废片。  
-- **影响**：误操作数据与好数据混在同一套 `valid` 语义里。  
-- **建议**：`POST /api/record/stop?valid=0` 或 discard 接口，写入 `manifest.valid`。
+- **DCS（2026-09-03）**：UI「作废」/ `POST /api/record/stop` + `{"valid":false}` → 完整落盘且 `manifest.valid=false`；导出默认跳过（`--allow-invalid` 可覆盖）。见 [e1-e4-hw-ts-and-discard.md](e1-e4-hw-ts-and-discard.md)。
 
 ### 【错误 E5】深度导出与基线 postprocess 不等价（若声称「兼容 hik_dataset 含深度」）
 
@@ -225,10 +224,10 @@ Realsense 多路 get_camera_frame
 
 | ID | 项 | 严重度 | 是否阻塞训练导出 |
 |----|----|--------|------------------|
-| E1 | 无 RS 硬件时间戳 | 高（多相机/对齐） | 不阻塞，但质量风险 |
+| E1 | HW ts：已落盘，对齐仍用墙钟 | 中（对齐未切 HW） | 不阻塞 |
 | E2 | 写失败帧不落盘 | 中高（审计/排障） | 不阻塞 steps |
 | E3 | `written` 虚高 | 低 | 否 |
-| E4 | 无 valid=0 | 中（数据治理） | 否 |
+| E4 | valid=0 作废 — **已修** | — | 否 |
 | E5 | 深度图与历史 pipeline 不等价 | 高（若要深度兼容） | 无深度时常不触发 |
 | E6 | 缺稳定 command 审计轨 | 中 | 否（与基线训练一致） |
 

@@ -650,6 +650,7 @@ def export_hik_dataset(
     clear_out: bool = True,
     bundle_map: bool = True,
     write_grid_video: bool = True,
+    allow_invalid: bool = False,
 ) -> dict[str, Any]:
     """Convert ``export/filtered`` into hik_gello postprocess layout.
 
@@ -657,9 +658,21 @@ def export_hik_dataset(
     bundled ``export/filtered/camera_map.yaml``.
     By default also writes ``episode_grid.mp4`` (camera grid + sensor panel).
     """
+    from sensors_dcs.export.timeline import ensure_episode_exportable
+
     ep = Path(episode)
     if not ep.is_dir():
         raise FileNotFoundError(f"episode not found: {ep}")
+
+    src_manifest_path = ep / "manifest.json"
+    if src_manifest_path.is_file():
+        try:
+            src_man = json.loads(src_manifest_path.read_text(encoding="utf-8"))
+            ensure_episode_exportable(
+                src_man, allow_invalid=allow_invalid, episode_label=ep.name
+            )
+        except json.JSONDecodeError:
+            pass
 
     if filtered_dir:
         filtered_root = Path(filtered_dir)

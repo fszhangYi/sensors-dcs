@@ -162,14 +162,19 @@ class RecordController:
                     written=0,
                     dropped=0,
                     provisional=True,
+                    valid=False,
                 )
             except Exception as e:  # noqa: BLE001
                 self._last_error = f"initial manifest: {e}"
         self._notify()
         return {"ok": True, **self.status()}
 
-    def stop(self, *, timeout: float = 120.0) -> dict[str, Any]:
-        """Stop accepting new frames, drain queue to disk, then bump episode."""
+    def stop(self, *, timeout: float = 120.0, valid: bool = True) -> dict[str, Any]:
+        """Stop accepting new frames, drain queue to disk, then bump episode.
+
+        ``valid=True`` (正常结束) / ``valid=False`` (作废) 写入最终 ``manifest.valid``。
+        两种路径都完整落盘；作废不删除目录。
+        """
         with self._lock:
             if self.state != "recording":
                 return {
@@ -217,6 +222,7 @@ class RecordController:
                     written=self._written,
                     dropped=self._dropped,
                     provisional=False,
+                    valid=bool(valid),
                 )
             except Exception as e:  # noqa: BLE001
                 self._last_error = f"final manifest: {e}"
@@ -263,6 +269,7 @@ class RecordController:
         written: int,
         dropped: int,
         provisional: bool,
+        valid: bool = True,
     ) -> dict[str, Any]:
         cameras = self._collect_cameras()
         # Preserve open-time intrinsics if agents already closed / infos cleared.
@@ -291,6 +298,9 @@ class RecordController:
         if t_start is not None and t_end is not None:
             duration = float(t_end) - float(t_start)
 
+        # Provisional start snapshot is never "valid training data".
+        manifest_valid = False if provisional else bool(valid)
+
         manifest: dict[str, Any] = {
             "site": self.site,
             "episode_index": ep,
@@ -301,7 +311,7 @@ class RecordController:
             "dropped": dropped,
             "agents": agents_meta,
             "cameras": cameras,
-            "valid": not provisional,
+            "valid": manifest_valid,
             "format": "dcs_episode_v1",
         }
         if provisional:
@@ -309,6 +319,8 @@ class RecordController:
             manifest["note"] = (
                 "Written at record start; cameras.* intrinsics from RealSense open()."
             )
+        elif not manifest_valid:
+            manifest["note"] = "Stopped via discard (作废); data kept on disk with valid=false."
 
         prev_path.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
@@ -416,6 +428,7 @@ class RecordController:
             if depth_b64 and (fr.payload or {}).get("enable_depth"):
                 depth_name = f"{fr.seq:08d}_depth.png"
                 (cam_dir / depth_name).write_bytes(base64.b64decode(depth_b64))
+            pl = fr.payload or {}
             rec = {
                 "agent_id": fr.agent_id,
                 "sensor_id": fr.sensor_id,
@@ -425,14 +438,19 @@ class RecordController:
                 "t_mono": fr.t_mono,
                 "file": name,
                 "depth_file": depth_name,
-                "serial": (fr.payload or {}).get("serial"),
-                "role": (fr.payload or {}).get("role"),
-                "dry_run": (fr.payload or {}).get("dry_run"),
-                "width": (fr.payload or {}).get("width"),
-                "height": (fr.payload or {}).get("height"),
-                "color_shape": (fr.payload or {}).get("color_shape"),
-                "depth_shape": (fr.payload or {}).get("depth_shape"),
-                "enable_depth": (fr.payload or {}).get("enable_depth"),
+                "serial": pl.get("serial"),
+                "role": pl.get("role"),
+                "dry_run": pl.get("dry_run"),
+                "width": pl.get("width"),
+                "height": pl.get("height"),
+                "color_shape": pl.get("color_shape"),
+                "depth_shape": pl.get("depth_shape"),
+                "enable_depth": pl.get("enable_depth"),
+                # RealSense HW timestamps (not used by export-timeline alignment).
+                "color_timestamp": pl.get("color_timestamp"),
+                "depth_timestamp": pl.get("depth_timestamp"),
+                "color_timestamp_domain": pl.get("color_timestamp_domain"),
+                "depth_timestamp_domain": pl.get("depth_timestamp_domain"),
             }
             idx_fp.write(json.dumps(rec, ensure_ascii=False) + "\n")
             idx_fp.flush()

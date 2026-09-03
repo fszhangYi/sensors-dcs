@@ -5,7 +5,11 @@ import shutil
 from pathlib import Path
 from typing import Any, Literal
 
-from sensors_dcs.export.timeline import load_episode, resolve_episode_dir
+from sensors_dcs.export.timeline import (
+    ensure_episode_exportable,
+    load_episode,
+    resolve_episode_dir,
+)
 
 from sensors_dcs.export.parquet_io import read_parquet, require_pandas, write_parquet
 
@@ -619,7 +623,8 @@ def materialize_filtered_episode(
         "dropped": 0,
         "agents": agents_meta,
         "cameras": cameras,
-        "valid": True,
+        # Preserve source discard flag; default True for legacy episodes without the field.
+        "valid": bool((source_manifest or {}).get("valid", True)),
         "format": "dcs_episode_v1",
         "derived_from": ep_dir.name,
         "align_master": master,
@@ -678,6 +683,7 @@ def filter_episode_timeline(
     materialize: bool = False,
     dedupe: str | None = None,
     fmt: FilterFormat = "parquet",
+    allow_invalid: bool = False,
 ) -> dict[str, Any]:
     """Filter aligned wide table; assign step 0..N-1."""
     root = resolve_episode_dir(ep_dir)
@@ -688,6 +694,10 @@ def filter_episode_timeline(
         source_manifest, _ = load_episode(root)
     except Exception:  # noqa: BLE001
         pass
+    if source_manifest is not None:
+        ensure_episode_exportable(
+            source_manifest, allow_invalid=allow_invalid, episode_label=root.name
+        )
     kind_hint = _kind_hints_from_manifest(source_manifest)
     df = _load_frame(in_path)
     if df.empty:
