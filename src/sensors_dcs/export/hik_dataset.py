@@ -6,6 +6,7 @@ Output (under ``out_dir``) mirrors ``hww/hik_gello/data_postprocess.py``:
 - ``steps.json``  (observations / actions: joint, cartesian, gripper)
 - ``rgb_<cam_name>_<i>.jpg``
 - optional ``d_<cam_name>_<i>.png`` when depth frames exist under filtered cameras
+- ``episode_grid.mp4`` (cameras in a grid + last cell for other sensors; optional)
 
 Camera naming is **not** hardcoded: pass ``--camera-map`` YAML (serial → hik name)
 at filter / export-hik-dataset time (same idea as hik_gello ``camera_name_refator``).
@@ -507,8 +508,9 @@ def write_hik_dataset(
     calibration: Mapping[str, Any] | None = None,
     episode_cameras: Mapping[str, Any] | None = None,
     cartesian_fk_error: str | None = None,
+    write_grid_video: bool = True,
 ) -> dict[str, Any]:
-    """Write metadata.json, steps.json, and rgb (optional depth) images."""
+    """Write metadata.json, steps.json, rgb (optional depth), and grid preview video."""
     filtered_root = Path(filtered_root)
     out_dir = Path(out_dir)
     if clear_out and out_dir.exists():
@@ -591,7 +593,7 @@ def write_hik_dataset(
         json.dumps(steps, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    return {
+    info: dict[str, Any] = {
         "out_dir": str(out_dir),
         "steps": len(aligned),
         "cameras": hik_names,
@@ -599,6 +601,18 @@ def write_hik_dataset(
         "cartesian_source": metadata["cartesian_source"],
         "rgb_files": len(aligned) * len(hik_names),
     }
+    if write_grid_video and aligned:
+        from sensors_dcs.export.hik_grid_video import write_episode_grid_video
+
+        video_path = write_episode_grid_video(
+            out_dir,
+            camera_names=hik_names,
+            steps=steps,
+            n_steps=len(aligned),
+            t_walls=[s.t_wall for s in aligned],
+        )
+        info["grid_video"] = str(video_path)
+    return info
 
 
 def bundle_camera_map(filtered_root: Path, camera_map: Mapping[str, str], *, source_yaml: str | Path | None = None) -> Path:
@@ -635,11 +649,13 @@ def export_hik_dataset(
     fk: FkFn | None = None,
     clear_out: bool = True,
     bundle_map: bool = True,
+    write_grid_video: bool = True,
 ) -> dict[str, Any]:
     """Convert ``export/filtered`` into hik_gello postprocess layout.
 
     Camera naming requires a serial→name YAML (``--camera-map``), or a previously
     bundled ``export/filtered/camera_map.yaml``.
+    By default also writes ``episode_grid.mp4`` (camera grid + sensor panel).
     """
     ep = Path(episode)
     if not ep.is_dir():
@@ -723,6 +739,7 @@ def export_hik_dataset(
         calibration=calibration,
         episode_cameras=episode_cameras or None,
         cartesian_fk_error=cartesian_fk_error,
+        write_grid_video=write_grid_video,
     )
     # also keep a copy beside hik output
     if bundle_map:

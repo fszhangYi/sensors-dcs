@@ -190,12 +190,15 @@ def test_export_hik_dataset_uses_yaml_map(tmp_path: Path) -> None:
     _write_filtered(ep, n=3)
     cmap = _write_map(tmp_path / "hik_camera_map.yaml")
 
-    meta = export_hik_dataset(ep, camera_map_yaml=cmap, robot_name="elite")
+    meta = export_hik_dataset(
+        ep, camera_map_yaml=cmap, robot_name="elite", write_grid_video=False
+    )
     out = Path(meta["out_dir"])
     assert (out / "rgb_rear_left_1_0.jpg").is_file()
     assert (out / "rgb_top_2.jpg").is_file()
     assert (out / "camera_map.yaml").is_file()
     assert (ep / "export" / "filtered" / "camera_map.yaml").is_file()
+    assert "grid_video" not in meta
 
     md = json.loads((out / "metadata.json").read_text(encoding="utf-8"))
     assert "rgb_top" in md["sensor_list"]
@@ -222,7 +225,7 @@ def test_export_intrinsics_from_source_manifest(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     cmap = _write_map(tmp_path / "hik_camera_map.yaml")
-    meta = export_hik_dataset(ep, camera_map_yaml=cmap)
+    meta = export_hik_dataset(ep, camera_map_yaml=cmap, write_grid_video=False)
     md = json.loads(Path(meta["out_dir"], "metadata.json").read_text(encoding="utf-8"))
     assert md["intrinsic_matrix"]["rgb_top"][0][0] == 610.0
 
@@ -232,10 +235,45 @@ def test_export_reuses_bundled_map(tmp_path: Path) -> None:
     ep.mkdir()
     _write_filtered(ep, n=2)
     cmap = _write_map(tmp_path / "hik_camera_map.yaml")
-    export_hik_dataset(ep, camera_map_yaml=cmap)
+    export_hik_dataset(ep, camera_map_yaml=cmap, write_grid_video=False)
     # second call without --camera-map uses filtered/camera_map.yaml
-    meta = export_hik_dataset(ep, output_dir="export/hik_dataset2")
+    meta = export_hik_dataset(
+        ep, output_dir="export/hik_dataset2", write_grid_video=False
+    )
     assert Path(meta["out_dir"]).is_dir()
+
+
+def test_export_writes_grid_video(tmp_path: Path) -> None:
+    import cv2
+
+    ep = tmp_path / "episode_00000"
+    ep.mkdir()
+    filtered = _write_filtered(ep, n=3)
+    # replace fake JPEG bytes with real encodable images
+    for aid in ("cam-left", "cam-middle"):
+        for i in range(3):
+            path = filtered / "cameras" / aid / f"{i:08d}.jpg"
+            arr = np.zeros((48, 64, 3), dtype=np.uint8)
+            arr[:, :, 0] = 40 + i * 20
+            arr[:, :, 1] = 80
+            arr[:, :, 2] = 120
+            ok, buf = cv2.imencode(".jpg", arr)
+            assert ok
+            path.write_bytes(buf.tobytes())
+    cmap = _write_map(tmp_path / "hik_camera_map.yaml")
+    meta = export_hik_dataset(ep, camera_map_yaml=cmap, write_grid_video=True)
+    video = Path(meta["grid_video"])
+    assert video.is_file()
+    assert video.name == "episode_grid.mp4"
+    assert video.stat().st_size > 0
+    cap = cv2.VideoCapture(str(video))
+    assert cap.isOpened()
+    ok, frame = cap.read()
+    cap.release()
+    assert ok and frame is not None
+    # 2 cams + sensor panel → 2x2 grid of 480x360 → 960x720
+    assert frame.shape[0] == 720
+    assert frame.shape[1] == 960
 
 
 def test_serial_fallback_from_source_episode(tmp_path: Path) -> None:

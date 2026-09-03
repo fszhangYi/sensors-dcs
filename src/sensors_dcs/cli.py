@@ -184,6 +184,11 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="optional JSON with intrinsic_matrix / extrinsic_matrix for metadata",
     )
+    p_hik.add_argument(
+        "--no-grid-video",
+        action="store_true",
+        help="skip writing episode_grid.mp4 (camera grid + sensor panel)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -299,6 +304,7 @@ def main(argv: list[str] | None = None) -> int:
                 natural_language=args.natural_language,
                 tcp_z=args.tcp_z,
                 calibration_json=args.calibration_json,
+                write_grid_video=not args.no_grid_video,
             )
         except Exception as e:  # noqa: BLE001
             print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False, indent=2))

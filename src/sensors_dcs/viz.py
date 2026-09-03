@@ -431,9 +431,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const agentsEl = document.getElementById('agents');
     const camGridEl = document.getElementById('cam-grid');
     const statusEl = document.getElementById('status');
+    let exitRequested = false;
     function setConnStatus(text, cls) {
       statusEl.textContent = text;
       statusEl.className = cls || '';
+      // After「安全退出」, WS reconnect shows connecting — force a full page reload.
+      if (exitRequested && cls === 'st-connecting') {
+        try {
+          location.reload();
+        } catch (e) {}
+      }
     }
     const appModal = document.getElementById('appModal');
     const appModalTitle = document.getElementById('appModalTitle');
@@ -547,6 +554,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     if (btnExit) {
       btnExit.addEventListener('click', async () => {
         if (!confirm('安全退出：停止录制、关闭传感器并结束进程？')) return;
+        exitRequested = true;
         btnExit.disabled = true;
         runHint.textContent = '正在安全退出…';
         setConnStatus('shutting down…', 'st-offline');
