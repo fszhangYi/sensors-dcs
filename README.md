@@ -15,7 +15,7 @@ sensors-dcs/
   docs/hik-dataset-steps.md         # hik steps.json / cartesian 字段含义
   docs/gello-joint-affine.md        # Gello 关节仿射标定（offsets/signs）
   docs/arm-write.md                 # Elite arm_write 安全计划与点动 UI
-  docs/gello-arm-sync.md            # Gello→Arm 同步安全计划（未实现）
+  docs/gello-arm-sync.md            # Gello→Arm 一次性对齐同步（非遥操作）
   configs/hik_camera_map.yaml       # serial→hik 相机名（export-hik-dataset）
 ```
 
@@ -86,6 +86,14 @@ sensors-dcs run -c configs/robot_write.yaml --no-dry-run
 ```
 
 配套：`configs/robot_write.yaml` + `configs/sensors_robot_write.yaml`。
+
+### Gello → Arm 一次性对齐（`gello_arm_sync`）
+
+见 [docs/gello-arm-sync.md](docs/gello-arm-sync.md)。命令时刻冻结 gello 前 6 轴，20s @ 5Hz 插值对齐；**完成后 gello 不再控臂**（非遥操作）。
+
+```bash
+sensors-dcs run -c configs/gello_arm_sync.yaml
+```
 
 浏览器打开：`http://127.0.0.1:7011/`（CLI `run` 会尝试打开浏览器）  
 页面显示保存路径与 episode；「开始/结束」控制流水线写盘（传感器常开）。  
@@ -529,6 +537,8 @@ sensors-dcs filter-timeline -e episode_00000 \
 | `configs/sensors_robot.yaml` | `kind: arm_read` 设备清单（填 `robot_ip`） |
 | `configs/robot_write.yaml` | Elite 机械臂 **写/点动** Agent（默认 dry_run） |
 | `configs/sensors_robot_write.yaml` | `kind: arm_write`（`max_delta_deg` 等） |
+| `configs/gello_arm_sync.yaml` | Gello→Arm **一次性对齐**（默认 dry_run） |
+| `configs/sensors_gello_arm_sync.yaml` | gello + arm_write 设备 |
 | `configs/hik_camera_map.yaml` | filter/`export-hik-dataset`：序列号→hik 相机名（按工位改） |
 | `sensors/configs/*.yaml` | 软链接指向的 hik-sensors 设备清单 |
 

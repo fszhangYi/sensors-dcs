@@ -2,7 +2,7 @@
 
 > 参考旧项目：`autodl-tmp/hww/hik_gello`（启动前对齐 + 斜坡）  
 > 对照 DCS：`arm_write` 点动（`docs/arm-write.md`）、gello→gripper sync  
-> 状态：**规划中**；默认关闭。  
+> 状态：**已实现首版**（Runtime + API/UI + `configs/gello_arm_sync.yaml`）；默认关闭。  
 > **范围声明：本功能只做「把臂对齐到下发命令时刻的 gello 姿态」的一次性同步，不是遥操作。**
 
 ---
@@ -212,17 +212,17 @@ UI 建议：
 
 ### Runtime
 
-- [ ] `set_gello_arm_sync(enabled)`：开 → gate → ramping 线程；关 → 停写
-- [ ] Ramping：命令时刻冻结 \(q_a,q_g^{\star}\)，生成 100 点，5 Hz 下发（环内不读 gello 改目标）
-- [ ] 结束后校验；失败重试至 `max_ramp_rounds`；成功则 **enabled=false** 并清线程
-- [ ] 任何退出路径保证：无 gello→arm 后台写
-- [ ] status：`phase=idle|ramping|verifying|completed|error`，`ramp_index`，`delta_max`，`rounds`
+- [x] `set_gello_arm_sync(enabled)`：开 → gate → ramping 线程；关 → 停写
+- [x] Ramping：命令时刻冻结 \(q_a,q_g^{\star}\)，生成 100 点，5 Hz 下发（环内不读 gello 改目标）
+- [x] 结束后校验；失败重试至 `max_ramp_rounds`；成功则 **enabled=false** 并清线程
+- [x] 任何退出路径保证：无 gello→arm 后台写
+- [x] status：`phase=idle|ramping|verifying|completed|error`，`ramp_index`，`delta_max`，`rounds`
 
 ### API / UI
 
-- [ ] `POST/GET /api/arm/gello-sync`
-- [ ] 弹窗（gate / 重试耗尽 / 完成）
-- [ ] 进度条；完成态文案强调 gello 无控制
+- [x] `POST/GET /api/arm/gello-sync`
+- [x] 弹窗（gate / 重试耗尽 / 完成）
+- [x] 进度条；完成态文案强调 gello 无控制
 
 ### 配置（建议）
 
@@ -237,6 +237,7 @@ gello_arm_sync:
 
 ### 验证阶梯
 
+- [x] dry_run / 单测：路径插值与步数
 - [ ] dry_run：gate 失败弹窗文案；成功则 100 步计数约 20s；完成后无继续写
 - [ ] dry_run：校验失败触发第二轮 ramping
 - [ ] dry_run：中途取消 → 写计数停止

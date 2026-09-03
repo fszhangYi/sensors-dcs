@@ -41,6 +41,13 @@ class ArmCommandBody(BaseModel):
     delta_deg: float | None = None
 
 
+class GelloArmSyncBody(BaseModel):
+    enabled: bool
+    gello_agent_id: str | None = None
+    arm_agent_id: str | None = None
+    arm_write_agent_id: str | None = None
+
+
 PREVIEW_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -269,6 +276,28 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .arm-cmd .arm-jog-row button { min-width: 2.2rem; }
     .arm-cmd .cmd-hint { color: var(--muted); font-size: 0.75rem; }
+    .arm-cmd .arm-sync-prog {
+      color: var(--muted); font-size: 0.78rem; min-height: 1.1em;
+    }
+    .arm-cmd button.arm-sync-on {
+      background: color-mix(in srgb, #c90 32%, #0b1017); border-color: #a70;
+    }
+    .modal-backdrop {
+      display: none; position: fixed; inset: 0; z-index: 50;
+      background: rgba(0,0,0,0.55); align-items: center; justify-content: center;
+    }
+    .modal-backdrop.show { display: flex; }
+    .modal-card {
+      max-width: 28rem; margin: 1rem; padding: 1rem 1.15rem; border-radius: 12px;
+      background: var(--panel); border: 1px solid var(--line); color: var(--text);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+    }
+    .modal-card h3 { margin: 0 0 0.5rem; font-size: 1rem; }
+    .modal-card p { margin: 0 0 0.85rem; color: var(--muted); font-size: 0.88rem; line-height: 1.45; white-space: pre-wrap; }
+    .modal-card button {
+      padding: 0.35rem 0.85rem; border-radius: 8px; border: 1px solid var(--line);
+      background: color-mix(in srgb, var(--accent) 28%, #0b1017); color: var(--text); cursor: pointer;
+    }
     .cam-section {
       min-width: 0;
       min-height: 0;
@@ -378,6 +407,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
     </div>
     <pre id="raw">{}</pre>
   </main>
+  <div class="modal-backdrop" id="appModal" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <h3 id="appModalTitle">提示</h3>
+      <p id="appModalBody"></p>
+      <button type="button" id="appModalOk">知道了</button>
+    </div>
+  </div>
   <script>
     const agentsEl = document.getElementById('agents');
     const camGridEl = document.getElementById('cam-grid');
@@ -386,6 +422,19 @@ PREVIEW_HTML = """<!DOCTYPE html>
       statusEl.textContent = text;
       statusEl.className = cls || '';
     }
+    const appModal = document.getElementById('appModal');
+    const appModalTitle = document.getElementById('appModalTitle');
+    const appModalBody = document.getElementById('appModalBody');
+    const appModalOk = document.getElementById('appModalOk');
+    function showAppModal(title, body) {
+      appModalTitle.textContent = title || '提示';
+      appModalBody.textContent = body || '';
+      appModal.classList.add('show');
+    }
+    appModalOk.addEventListener('click', () => appModal.classList.remove('show'));
+    appModal.addEventListener('click', (e) => {
+      if (e.target === appModal) appModal.classList.remove('show');
+    });
     const recStateEl = document.getElementById('recState');
     const saveDirEl = document.getElementById('saveDir');
     const episodeEl = document.getElementById('episode');
@@ -819,13 +868,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
             '<button type="button" class="arm-arm">Arm</button>' +
             '<button type="button" class="arm-disarm">Disarm</button>' +
             '<button type="button" class="arm-estop">Estop</button>' +
+            '<button type="button" class="arm-gello-sync">同步</button>' +
             '<label>delta°</label>' +
             '<input type="range" class="arm-delta" min="0.1" max="5" step="0.1" value="1.0" />' +
             '<span class="arm-delta-val">1.0°</span>' +
             '<span class="arm-armed-tag">idle</span>' +
           '</div>' +
+          '<div class="arm-sync-prog">gello→arm：空闲（完成后 gello 不控臂）</div>' +
           jogHtml +
-          '<span class="cmd-hint">须先有 robot·Read 当前角；Arm 后 ± 相对读数点动（|Δq|≤max_delta）</span>';
+          '<span class="cmd-hint">须先有 robot·Read；Arm 后可 ± 点动，或「同步」一次对齐到命令时刻 gello 姿态（20s/5Hz，非遥操作）</span>';
         card.appendChild(box);
         const delta = box.querySelector('.arm-delta');
         const deltaVal = box.querySelector('.arm-delta-val');
@@ -833,6 +884,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const armBtn = box.querySelector('.arm-arm');
         const disarmBtn = box.querySelector('.arm-disarm');
         const estopBtn = box.querySelector('.arm-estop');
+        const syncBtn = box.querySelector('.arm-gello-sync');
+        const syncProg = box.querySelector('.arm-sync-prog');
         const updateDeltaLabel = () => {
           deltaVal.textContent = Number(delta.value).toFixed(1) + '°';
         };
@@ -850,15 +903,38 @@ PREVIEW_HTML = """<!DOCTYPE html>
         };
         box._applyArmUi = (armed) => {
           const hasRead = Array.isArray(window.__armReadJoints) && window.__armReadJoints.length > 0;
+          const sync = window.__gelloArmSync || {};
+          const syncing = !!sync.enabled;
           armedTag.textContent = !hasRead ? 'need read' : (armed ? 'armed' : 'idle');
-          setJogEnabled(!!armed && hasRead);
-          armBtn.disabled = !hasRead;
+          setJogEnabled(!!armed && hasRead && !syncing);
+          armBtn.disabled = !hasRead || syncing;
+          syncBtn.disabled = !hasRead;
+          syncBtn.textContent = syncing ? '取消同步' : '同步';
+          syncBtn.classList.toggle('arm-sync-on', syncing);
+          syncBtn.dataset.enabled = syncing ? '1' : '0';
+          if (sync.phase === 'ramping' && sync.ramp_n) {
+            const left = Math.max(0, (Number(sync.ramp_n) - Number(sync.ramp_index || 0)) / 5);
+            syncProg.textContent =
+              'ramping ' + (sync.ramp_index || 0) + '/' + sync.ramp_n +
+              ' · round ' + (sync.round || 1) +
+              ' · ~' + left.toFixed(1) + 's · 目标已冻结';
+          } else if (sync.phase === 'verifying') {
+            syncProg.textContent = '校验中（不写臂）…';
+          } else if (sync.phase === 'completed') {
+            syncProg.textContent = '同步完成；gello 未控制机械臂';
+          } else if (sync.phase === 'error' && sync.last_error) {
+            syncProg.textContent = '失败：' + sync.last_error;
+          } else if (sync.message) {
+            syncProg.textContent = String(sync.message);
+          } else {
+            syncProg.textContent = 'gello→arm：空闲（完成后 gello 不控臂）';
+          }
         };
         armBtn.addEventListener('click', async () => {
           runHint.textContent = '机械臂 Arm / TT_init…';
           try {
             const r = await postArm({ arm: true });
-            runHint.textContent = r.ok ? 'Arm 成功，可用 ± 点动' : ('Arm 失败：' + (r.error || JSON.stringify(r)));
+            runHint.textContent = r.ok ? 'Arm 成功，可用 ± 点动 / 同步' : ('Arm 失败：' + (r.error || JSON.stringify(r)));
             box._applyArmUi(!!(r.ok && r.armed));
           } catch (e) {
             runHint.textContent = 'Arm 异常：' + e;
@@ -880,6 +956,43 @@ PREVIEW_HTML = """<!DOCTYPE html>
             box._applyArmUi(false);
           } catch (e) {
             runHint.textContent = 'Estop 异常：' + e;
+          }
+        });
+        syncBtn.addEventListener('click', async () => {
+          const want = syncBtn.dataset.enabled !== '1';
+          syncBtn.disabled = true;
+          try {
+            const r = await fetch('/api/arm/gello-sync', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                enabled: want,
+                arm_write_agent_id: frame.agent_id,
+              }),
+            }).then((x) => x.json());
+            window.__gelloArmSync = r;
+            if (!r.ok) {
+              showAppModal(
+                r.gate_failed ? '无法进入同步' : '同步失败',
+                r.error || JSON.stringify(r),
+              );
+              runHint.textContent = '同步失败：' + (r.error || JSON.stringify(r));
+              box._applyArmUi(!!p.armed);
+              return;
+            }
+            box._applyArmUi(!!p.armed);
+            runHint.textContent = r.enabled
+              ? '同步进行中：目标为命令时刻 gello（中途扳 gello 不改路径）'
+              : (r.message || '已取消同步；gello 未控制机械臂');
+            if (!r.enabled && r.phase === 'completed') {
+              showAppModal('同步完成', r.message || '同步完成；gello 已不再控制机械臂');
+            }
+          } catch (e) {
+            runHint.textContent = '同步异常：' + e;
+            showAppModal('同步异常', String(e));
+          } finally {
+            syncBtn.disabled = false;
+            box._applyArmUi(!!(window.__gelloArmSync && window.__gelloArmSync.enabled) ? !!p.armed : !!p.armed);
           }
         });
         const jog = async (jointIndex, sign) => {
@@ -1002,6 +1115,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (msg.gripper_gello_sync) {
         window.__gripGelloSync = msg.gripper_gello_sync;
       }
+      if (msg.gello_arm_sync) {
+        const prev = window.__gelloArmSync || {};
+        const cur = msg.gello_arm_sync;
+        window.__gelloArmSync = cur;
+        if (prev.phase !== 'completed' && cur.phase === 'completed') {
+          showAppModal('同步完成', cur.message || '同步完成；gello 已不再控制机械臂');
+        } else if (prev.phase !== 'error' && cur.phase === 'error' && cur.last_error) {
+          showAppModal('同步失败', cur.last_error);
+        }
+      }
       frames.forEach((frame) => {
         const ar = agentRates[frame.agent_id] || {};
         const hzText = updateBackHz(
@@ -1112,6 +1235,8 @@ def create_viz_app(
     gripper_gello_sync: Callable[..., dict[str, Any]] | None = None,
     gripper_gello_sync_status: Callable[[], dict[str, Any]] | None = None,
     arm_command: Callable[..., dict[str, Any]] | None = None,
+    gello_arm_sync: Callable[..., dict[str, Any]] | None = None,
+    gello_arm_sync_status: Callable[[], dict[str, Any]] | None = None,
     shutdown: Callable[[], dict[str, Any]] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="sensors-dcs viz", version="0.1.0")
@@ -1198,6 +1323,24 @@ def create_viz_app(
             jog_joint=req.jog_joint,
             delta_rad=req.delta_rad,
             delta_deg=req.delta_deg,
+        )
+
+    @app.get("/api/arm/gello-sync")
+    async def arm_gello_sync_get() -> dict[str, Any]:
+        if gello_arm_sync_status is None:
+            return {"ok": False, "error": "gello arm sync unavailable", "enabled": False}
+        return {"ok": True, **gello_arm_sync_status()}
+
+    @app.post("/api/arm/gello-sync")
+    async def arm_gello_sync_set(req: GelloArmSyncBody) -> dict[str, Any]:
+        if gello_arm_sync is None:
+            return {"ok": False, "error": "gello arm sync unavailable", "enabled": False}
+        return await asyncio.to_thread(
+            gello_arm_sync,
+            enabled=bool(req.enabled),
+            gello_agent_id=req.gello_agent_id,
+            arm_agent_id=req.arm_agent_id,
+            arm_write_agent_id=req.arm_write_agent_id,
         )
 
     @app.post("/api/shutdown")

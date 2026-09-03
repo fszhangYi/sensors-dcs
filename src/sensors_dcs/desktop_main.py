@@ -158,6 +158,8 @@ def main(argv: list[str] | None = None) -> None:
         gripper_gello_sync=orch.set_gripper_gello_sync,
         gripper_gello_sync_status=orch.gripper_gello_sync_status,
         arm_command=orch.arm_command,
+        gello_arm_sync=orch.set_gello_arm_sync,
+        gello_arm_sync_status=orch.gello_arm_sync_status,
         shutdown=_shutdown,
     )
     orch.cfg.runtime.viz_port = port

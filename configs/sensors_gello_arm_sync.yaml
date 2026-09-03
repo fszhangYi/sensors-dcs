@@ -1,0 +1,54 @@
+# Gello leader + Elite arm_write (shared read/write) for one-shot alignment sync.
+version: 1
+site: dcs-gello-arm-sync
+dry_run: true
+
+defaults:
+  gello:
+    baudrate: 57600
+    max_delta_rad: 0.8
+    joint_ids: [1, 2, 3, 4, 5, 6, 7]
+    joint_offsets:
+      - 1.5707963267948966
+      - 6.283185307179586
+      - 6.283185307179586
+      - 6.283185307179586
+      - 4.71238898038469
+      - 3.141592653589793
+      - 1.78
+    joint_signs: [1, 1, -1, 1, 1, 1, -1]
+  arm_write:
+    num_joints: 6
+    robot_tcp_port: 54321
+    monitor_wait_s: 10
+    max_delta_deg: 2.0
+    enforce_soft_limits: true
+    tt_t: 2
+    tt_response_enable: 0
+
+devices:
+  - id: gello-leader
+    kind: gello
+    name: "Gello · Leader"
+    endpoint: "COM3"
+    params:
+      port_substr: ""
+      gripper_config: null
+      joint_offsets:
+        - 1.5707963267948966
+        - 6.283185307179586
+        - 6.283185307179586
+        - 6.283185307179586
+        - 4.71238898038469
+        - 3.141592653589793
+        - 1.78
+      joint_signs: [1, 1, -1, 1, 1, 1, -1]
+  - id: arm-elite
+    kind: arm_write
+    name: "Elite · Arm (read+write gated)"
+    endpoint: "10.111.34.200"
+    params:
+      robot_ip: "10.111.34.200"
+      num_joints: 6
+      max_delta_deg: 2.0
+      enforce_soft_limits: true

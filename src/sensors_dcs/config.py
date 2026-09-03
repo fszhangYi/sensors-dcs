@@ -33,6 +33,16 @@ class RuntimeConfig(BaseModel):
     console_hz: float = 5.0
 
 
+class GelloArmSyncConfig(BaseModel):
+    """One-shot gello→arm alignment (see docs/gello-arm-sync.md). Not teleop."""
+
+    align_max_rad: float = 0.8
+    ramp_duration_s: float = 20.0
+    ramp_hz: float = 5.0
+    sync_done_eps_rad: float = 0.03
+    max_ramp_rounds: int = 3
+
+
 class RecordConfig(BaseModel):
     save_dir: str | None = "./data"
     episode_index: int = 0
@@ -46,6 +56,7 @@ class DcsConfig(BaseModel):
     dry_run: bool | None = None
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     record: RecordConfig = Field(default_factory=RecordConfig)
+    gello_arm_sync: GelloArmSyncConfig = Field(default_factory=GelloArmSyncConfig)
     agents: list[AgentConfig] = Field(default_factory=list)
 
     @field_validator("agents")
@@ -130,5 +141,6 @@ def config_summary(cfg: DcsConfig) -> dict[str, Any]:
         "sensors_config": cfg.sensors_config,
         "runtime": cfg.runtime.model_dump(),
         "record": cfg.record.model_dump(),
+        "gello_arm_sync": cfg.gello_arm_sync.model_dump(),
         "agents": [a.model_dump() for a in cfg.agents],
     }

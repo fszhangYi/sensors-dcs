@@ -65,6 +65,26 @@ class Orchestrator:
         self._sync_last_error: str | None = None
         self._sync_last_t_wall: float | None = None
         self._sync_write_count = 0
+        # One-shot gello→arm alignment (docs/gello-arm-sync.md); not teleop.
+        self._arm_sync_lock = threading.Lock()
+        self._arm_sync_stop = threading.Event()
+        self._arm_sync_thread: threading.Thread | None = None
+        self._arm_sync_enabled = False
+        self._arm_sync_gello_id: str | None = None
+        self._arm_sync_arm_id: str | None = None
+        self._arm_sync_writer_id: str | None = None
+        self._arm_sync_phase = "idle"
+        self._arm_sync_ramp_index = 0
+        self._arm_sync_ramp_n = 0
+        self._arm_sync_round = 0
+        self._arm_sync_delta_max: float | None = None
+        self._arm_sync_worst_joint: int | None = None
+        self._arm_sync_last_ok: bool | None = None
+        self._arm_sync_last_error: str | None = None
+        self._arm_sync_last_message: str | None = None
+        self._arm_sync_write_count = 0
+        self._arm_sync_last_t_wall: float | None = None
+        self._arm_sync_target_joints: list[float] | None = None
 
     def status(self) -> dict[str, Any]:
         return {
@@ -74,6 +94,7 @@ class Orchestrator:
             "sensors_dry_run": self.manager.ctx.dry_run,
             "record": self.recorder.status(),
             "gripper_gello_sync": self.gripper_gello_sync_status(),
+            "gello_arm_sync": self.gello_arm_sync_status(),
         }
 
     def start(self) -> None:
@@ -88,6 +109,7 @@ class Orchestrator:
         self._console_thread.start()
 
     def stop(self) -> None:
+        self.set_gello_arm_sync(enabled=False)
         self.set_gripper_gello_sync(enabled=False)
         self._stop.set()
         # Finish any open episode before tearing down agents
@@ -153,6 +175,7 @@ class Orchestrator:
             "frames": frames,
             "record": self.recorder.status(),
             "gripper_gello_sync": self.gripper_gello_sync_status(),
+            "gello_arm_sync": self.gello_arm_sync_status(),
         }
 
     @staticmethod
@@ -363,6 +386,431 @@ class Orchestrator:
         with self._sync_lock:
             self._sync_enabled = False
 
+    def gello_arm_sync_status(self) -> dict[str, Any]:
+        with self._arm_sync_lock:
+            return {
+                "enabled": self._arm_sync_enabled,
+                "phase": self._arm_sync_phase,
+                "gello_agent_id": self._arm_sync_gello_id,
+                "arm_agent_id": self._arm_sync_arm_id,
+                "arm_write_agent_id": self._arm_sync_writer_id,
+                "ramp_index": self._arm_sync_ramp_index,
+                "ramp_n": self._arm_sync_ramp_n,
+                "round": self._arm_sync_round,
+                "delta_max": self._arm_sync_delta_max,
+                "worst_joint": self._arm_sync_worst_joint,
+                "last_ok": self._arm_sync_last_ok,
+                "last_error": self._arm_sync_last_error,
+                "message": self._arm_sync_last_message,
+                "write_count": self._arm_sync_write_count,
+                "last_t_wall": self._arm_sync_last_t_wall,
+                "target_joints_rad": (
+                    list(self._arm_sync_target_joints)
+                    if self._arm_sync_target_joints is not None
+                    else None
+                ),
+                "params": self.cfg.gello_arm_sync.model_dump(),
+            }
+
+    @staticmethod
+    def _joints6_from_ring(agent: BaseAgent, *, prefer_key: str = "joints_rad") -> list[float] | None:
+        fr = agent.ring.latest.get()
+        if fr is None:
+            return None
+        raw = fr.payload.get(prefer_key)
+        if not isinstance(raw, list) or len(raw) < 6:
+            # arm_write feedback fallback
+            raw = fr.payload.get("feedback_joints_rad") or fr.payload.get("joints_rad")
+        if not isinstance(raw, list) or len(raw) < 6:
+            return None
+        try:
+            return [float(raw[i]) for i in range(6)]
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _delta_max_joint(qa: list[float], qg: list[float]) -> tuple[float, int]:
+        best_i = 0
+        best_d = 0.0
+        for i in range(6):
+            d = abs(float(qg[i]) - float(qa[i]))
+            if d > best_d:
+                best_d = d
+                best_i = i
+        return best_d, best_i
+
+    @staticmethod
+    def _interp_path(qa: list[float], qg: list[float], n: int) -> list[list[float]]:
+        """Linear path q_a → q_g with N points (k=1..N); last == q_g."""
+        n = max(1, int(n))
+        out: list[list[float]] = []
+        for k in range(1, n + 1):
+            a = k / n
+            out.append([float(qa[i]) + a * (float(qg[i]) - float(qa[i])) for i in range(6)])
+        return out
+
+    def _resolve_gello_arm_agents(
+        self,
+        *,
+        gello_agent_id: str | None = None,
+        arm_agent_id: str | None = None,
+        arm_write_agent_id: str | None = None,
+    ) -> tuple[Any, Any, Any] | dict[str, Any]:
+        from sensors_dcs.agents.arm_agent import ArmAgent
+        from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
+        from sensors_dcs.agents.gello_agent import GelloAgent
+
+        gellos = [a for a in self.agents.values() if isinstance(a, GelloAgent)]
+        readers = [a for a in self.agents.values() if isinstance(a, ArmAgent)]
+        writers = [a for a in self.agents.values() if isinstance(a, ArmWriteAgent)]
+        if not gellos:
+            return {"ok": False, "error": "no gello agent in config", "gate_failed": True}
+        if not readers:
+            return {"ok": False, "error": "no arm (read) agent in config", "gate_failed": True}
+        if not writers:
+            return {"ok": False, "error": "no arm_write agent in config", "gate_failed": True}
+
+        if gello_agent_id:
+            gello = self.agents.get(gello_agent_id)
+            if not isinstance(gello, GelloAgent):
+                return {"ok": False, "error": f"agent {gello_agent_id!r} is not gello", "gate_failed": True}
+        else:
+            gello = gellos[0]
+
+        if arm_write_agent_id:
+            writer = self.agents.get(arm_write_agent_id)
+            if not isinstance(writer, ArmWriteAgent):
+                return {
+                    "ok": False,
+                    "error": f"agent {arm_write_agent_id!r} is not arm_write",
+                    "gate_failed": True,
+                }
+        else:
+            writer = writers[0]
+
+        if arm_agent_id:
+            reader = self.agents.get(arm_agent_id)
+            if not isinstance(reader, ArmAgent):
+                return {"ok": False, "error": f"agent {arm_agent_id!r} is not arm", "gate_failed": True}
+        else:
+            reader = readers[0]
+            for cand in readers:
+                if cand.sensor_id == writer.sensor_id:
+                    reader = cand
+                    break
+        return gello, reader, writer
+
+    def _gello_arm_gate(
+        self,
+        gello: BaseAgent,
+        reader: BaseAgent,
+        writer: BaseAgent,
+    ) -> dict[str, Any]:
+        params = self.cfg.gello_arm_sync
+        armed = bool(getattr(writer.sensor, "armed", False))
+        if not armed:
+            fr = writer.ring.latest.get()
+            if fr is not None:
+                armed = bool(fr.payload.get("armed"))
+        if not armed:
+            return {
+                "ok": False,
+                "gate_failed": True,
+                "error": "arm_write not armed; click Arm before sync",
+            }
+        qg = self._joints6_from_ring(gello)
+        qa = self._joints6_from_ring(reader)
+        if qg is None:
+            return {
+                "ok": False,
+                "gate_failed": True,
+                "error": "no live gello joints_rad[0:6]; wait for gello read",
+            }
+        if qa is None:
+            return {
+                "ok": False,
+                "gate_failed": True,
+                "error": "no live arm read joints; wait for robot · Read",
+            }
+        dmax, ji = self._delta_max_joint(qa, qg)
+        if dmax > float(params.align_max_rad) + 1e-12:
+            return {
+                "ok": False,
+                "gate_failed": True,
+                "error": (
+                    f"max |Δq|={dmax:.4f} rad (joint {ji}) exceeds align_max_rad="
+                    f"{params.align_max_rad}. Please manually move the arm (or gello) "
+                    f"closer, then retry sync."
+                ),
+                "delta_max": dmax,
+                "worst_joint": ji,
+                "q_gello": qg,
+                "q_arm": qa,
+            }
+        # Ensure each ramp step stays under driver max_delta when possible.
+        n = max(1, int(round(float(params.ramp_duration_s) * float(params.ramp_hz))))
+        step = dmax / n
+        max_delta = float(getattr(writer.sensor, "max_delta_rad", 0.0) or 0.0)
+        if max_delta > 0 and step > max_delta + 1e-12:
+            return {
+                "ok": False,
+                "gate_failed": True,
+                "error": (
+                    f"ramp step ≈{step:.4f} rad exceeds driver max_delta={max_delta:.4f} rad; "
+                    f"reduce align gap or increase ramp duration/hz"
+                ),
+                "delta_max": dmax,
+                "worst_joint": ji,
+            }
+        return {"ok": True, "q_gello": qg, "q_arm": qa, "delta_max": dmax, "worst_joint": ji, "ramp_n": n}
+
+    def set_gello_arm_sync(
+        self,
+        *,
+        enabled: bool,
+        gello_agent_id: str | None = None,
+        arm_agent_id: str | None = None,
+        arm_write_agent_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Start/stop one-shot gello→arm alignment. After finish, gello does not command arm."""
+        if not enabled:
+            self._arm_sync_stop.set()
+            th = self._arm_sync_thread
+            if th is not None and th.is_alive():
+                th.join(timeout=3.0)
+            with self._arm_sync_lock:
+                self._arm_sync_enabled = False
+                self._arm_sync_thread = None
+                if self._arm_sync_phase in {"ramping", "verifying"}:
+                    self._arm_sync_phase = "idle"
+                    self._arm_sync_last_message = "同步已取消；gello 未控制机械臂"
+                    self._arm_sync_last_ok = True
+                    self._arm_sync_last_error = None
+            return {"ok": True, **self.gello_arm_sync_status()}
+
+        resolved = self._resolve_gello_arm_agents(
+            gello_agent_id=gello_agent_id,
+            arm_agent_id=arm_agent_id,
+            arm_write_agent_id=arm_write_agent_id,
+        )
+        if isinstance(resolved, dict):
+            return {**resolved, **self.gello_arm_sync_status()}
+        gello, reader, writer = resolved
+
+        gate = self._gello_arm_gate(gello, reader, writer)
+        if not gate.get("ok"):
+            with self._arm_sync_lock:
+                self._arm_sync_phase = "error"
+                self._arm_sync_last_ok = False
+                self._arm_sync_last_error = gate.get("error")
+                self._arm_sync_last_message = gate.get("error")
+                self._arm_sync_delta_max = gate.get("delta_max")
+                self._arm_sync_worst_joint = gate.get("worst_joint")
+                self._arm_sync_last_t_wall = time.time()
+            return {**gate, **self.gello_arm_sync_status()}
+
+        # Restart cleanly if a previous run is still marked.
+        self._arm_sync_stop.set()
+        th_old = self._arm_sync_thread
+        if th_old is not None and th_old.is_alive():
+            th_old.join(timeout=3.0)
+
+        params = self.cfg.gello_arm_sync
+        n = int(gate["ramp_n"])
+        with self._arm_sync_lock:
+            self._arm_sync_enabled = True
+            self._arm_sync_gello_id = gello.agent_id
+            self._arm_sync_arm_id = reader.agent_id
+            self._arm_sync_writer_id = writer.agent_id
+            self._arm_sync_phase = "ramping"
+            self._arm_sync_ramp_index = 0
+            self._arm_sync_ramp_n = n
+            self._arm_sync_round = 0
+            self._arm_sync_delta_max = gate.get("delta_max")
+            self._arm_sync_worst_joint = gate.get("worst_joint")
+            self._arm_sync_last_ok = None
+            self._arm_sync_last_error = None
+            self._arm_sync_last_message = (
+                f"同步开始：目标为命令时刻 gello 姿态（一次性）；{params.ramp_duration_s:g}s @ "
+                f"{params.ramp_hz:g}Hz × {n} 点"
+            )
+            self._arm_sync_write_count = 0
+            self._arm_sync_last_t_wall = time.time()
+            self._arm_sync_target_joints = list(gate["q_gello"])
+
+        self._arm_sync_stop.clear()
+        self._arm_sync_thread = threading.Thread(
+            target=self._gello_arm_sync_loop,
+            name="gello-arm-sync",
+            daemon=True,
+            args=(
+                gello.agent_id,
+                reader.agent_id,
+                writer.agent_id,
+                list(gate["q_gello"]),
+                list(gate["q_arm"]),
+                int(gate["ramp_n"]),
+                float(gate["delta_max"]),
+                int(gate["worst_joint"]),
+            ),
+        )
+        self._arm_sync_thread.start()
+        return {"ok": True, **self.gello_arm_sync_status()}
+
+    def _gello_arm_sync_loop(
+        self,
+        gello_id: str,
+        arm_id: str,
+        writer_id: str,
+        first_qg: list[float],
+        first_qa: list[float],
+        first_n: int,
+        first_dmax: float,
+        first_ji: int,
+    ) -> None:
+        """Frozen-target ramp @ ramp_hz; verify; retry rounds; then force-disable (no teleop)."""
+        from sensors_dcs.agents.arm_agent import ArmAgent
+        from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
+        from sensors_dcs.agents.gello_agent import GelloAgent
+
+        params = self.cfg.gello_arm_sync
+        period = 1.0 / max(0.1, float(params.ramp_hz))
+        max_rounds = max(1, int(params.max_ramp_rounds))
+        eps = float(params.sync_done_eps_rad)
+        completed = False
+        final_error: str | None = None
+        final_message: str | None = None
+
+        try:
+            for round_i in range(1, max_rounds + 1):
+                if self._arm_sync_stop.is_set() or self._stop.is_set():
+                    final_message = "同步已取消；gello 未控制机械臂"
+                    break
+
+                gello = self.agents.get(gello_id)
+                reader = self.agents.get(arm_id)
+                writer = self.agents.get(writer_id)
+                if not isinstance(gello, GelloAgent) or not isinstance(reader, ArmAgent):
+                    final_error = "sync agents missing"
+                    break
+                if not isinstance(writer, ArmWriteAgent):
+                    final_error = "arm_write agent missing"
+                    break
+
+                if round_i == 1:
+                    # Command-time snapshot from set_gello_arm_sync (do not re-read gello).
+                    qg_star = list(first_qg)
+                    qa0 = list(first_qa)
+                    n = max(1, int(first_n))
+                    dmax0 = float(first_dmax)
+                    ji0 = int(first_ji)
+                else:
+                    # New round = new command-time sample (once per round).
+                    gate = self._gello_arm_gate(gello, reader, writer)
+                    if not gate.get("ok"):
+                        final_error = str(gate.get("error") or "gate failed")
+                        with self._arm_sync_lock:
+                            self._arm_sync_delta_max = gate.get("delta_max")
+                            self._arm_sync_worst_joint = gate.get("worst_joint")
+                        break
+                    qg_star = list(gate["q_gello"])
+                    qa0 = list(gate["q_arm"])
+                    n = int(gate["ramp_n"])
+                    dmax0 = float(gate["delta_max"])
+                    ji0 = int(gate["worst_joint"])
+
+                path = self._interp_path(qa0, qg_star, n)
+                with self._arm_sync_lock:
+                    self._arm_sync_round = round_i
+                    self._arm_sync_phase = "ramping"
+                    self._arm_sync_ramp_n = n
+                    self._arm_sync_ramp_index = 0
+                    self._arm_sync_delta_max = dmax0
+                    self._arm_sync_worst_joint = ji0
+                    self._arm_sync_target_joints = list(qg_star)
+                    self._arm_sync_last_message = (
+                        f"ramping round {round_i}/{max_rounds}: frozen gello target; "
+                        f"gello motion during ramp is ignored"
+                    )
+                    self._arm_sync_last_t_wall = time.time()
+
+                aborted = False
+                for k, qk in enumerate(path, start=1):
+                    if self._arm_sync_stop.is_set() or self._stop.is_set():
+                        aborted = True
+                        break
+                    ref = self._joints6_from_ring(reader) or (
+                        path[k - 2] if k >= 2 else qa0
+                    )
+                    result = writer.command(joints_rad=list(qk), reference_joints_rad=list(ref))
+                    with self._arm_sync_lock:
+                        self._arm_sync_ramp_index = k
+                        self._arm_sync_write_count += 1
+                        self._arm_sync_last_ok = bool(result.get("ok"))
+                        self._arm_sync_last_error = result.get("error")
+                        self._arm_sync_last_t_wall = time.time()
+                        if not result.get("ok"):
+                            self._arm_sync_last_message = (
+                                f"ramp write failed at {k}/{n}: {result.get('error')}"
+                            )
+                    if not result.get("ok"):
+                        final_error = str(result.get("error") or "ramp write failed")
+                        aborted = True
+                        break
+                    self._arm_sync_stop.wait(period)
+
+                if aborted:
+                    if self._arm_sync_stop.is_set() or self._stop.is_set():
+                        final_message = "同步已取消；gello 未控制机械臂"
+                    break
+
+                with self._arm_sync_lock:
+                    self._arm_sync_phase = "verifying"
+                    self._arm_sync_last_message = "校验中（不写臂）…"
+                    self._arm_sync_last_t_wall = time.time()
+
+                qg_now = self._joints6_from_ring(gello)
+                qa_now = self._joints6_from_ring(reader)
+                if qg_now is None or qa_now is None:
+                    final_error = "verify failed: missing live joints"
+                    break
+                dmax, ji = self._delta_max_joint(qa_now, qg_now)
+                with self._arm_sync_lock:
+                    self._arm_sync_delta_max = dmax
+                    self._arm_sync_worst_joint = ji
+                    self._arm_sync_last_t_wall = time.time()
+
+                if dmax <= eps + 1e-12:
+                    completed = True
+                    final_message = "同步完成；gello 已不再控制机械臂"
+                    break
+
+                if round_i >= max_rounds:
+                    final_error = (
+                        f"after {max_rounds} ramp rounds still |Δq|={dmax:.4f} rad "
+                        f"(joint {ji}) > eps={eps}; move closer manually and retry"
+                    )
+                    break
+        finally:
+            with self._arm_sync_lock:
+                self._arm_sync_enabled = False
+                self._arm_sync_thread = None
+                if completed:
+                    self._arm_sync_phase = "completed"
+                    self._arm_sync_last_ok = True
+                    self._arm_sync_last_error = None
+                    self._arm_sync_last_message = final_message
+                elif final_error:
+                    self._arm_sync_phase = "error"
+                    self._arm_sync_last_ok = False
+                    self._arm_sync_last_error = final_error
+                    self._arm_sync_last_message = final_error
+                else:
+                    self._arm_sync_phase = "idle"
+                    self._arm_sync_last_ok = True if final_message else self._arm_sync_last_ok
+                    self._arm_sync_last_message = final_message or self._arm_sync_last_message
+                self._arm_sync_last_t_wall = time.time()
+
     def gripper_command(
         self,
         *,
@@ -464,7 +912,16 @@ class Orchestrator:
             return agent.command(arm=True)
 
         if disarm or stop:
+            # Always kill alignment write loop before disarm/estop.
+            self.set_gello_arm_sync(enabled=False)
             return agent.command(disarm=bool(disarm or stop), stop=True)
+
+        if self._arm_sync_enabled:
+            return {
+                "ok": False,
+                "error": "gello→arm sync active; cancel sync before jog",
+                **self.gello_arm_sync_status(),
+            }
 
         if jog_joint is not None:
             base = _read_joints()
@@ -509,6 +966,8 @@ class Orchestrator:
             gripper_gello_sync=self.set_gripper_gello_sync,
             gripper_gello_sync_status=self.gripper_gello_sync_status,
             arm_command=self.arm_command,
+            gello_arm_sync=self.set_gello_arm_sync,
+            gello_arm_sync_status=self.gello_arm_sync_status,
             shutdown=self.request_shutdown,
         )
         self._server = uvicorn.Server(

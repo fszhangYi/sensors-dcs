@@ -144,6 +144,8 @@ def ensure_runtime_env(*, desktop: bool = False) -> Path:
         "sensors_robot.yaml",
         "robot_write.yaml",
         "sensors_robot_write.yaml",
+        "gello_arm_sync.yaml",
+        "sensors_gello_arm_sync.yaml",
     ):
         _seed_file(root / "configs" / name, data / "configs" / name)
 
@@ -164,6 +166,7 @@ def ensure_runtime_env(*, desktop: bool = False) -> Path:
         ("full_cell.yaml", "sensors_full_cell.yaml"),
         ("robot_only.yaml", "sensors_robot.yaml"),
         ("robot_write.yaml", "sensors_robot_write.yaml"),
+        ("gello_arm_sync.yaml", "sensors_gello_arm_sync.yaml"),
     ):
         seeded = data / "configs" / dcs_name
         sensors_local = data / "configs" / sensors_name
