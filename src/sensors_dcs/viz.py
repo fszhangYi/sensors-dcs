@@ -89,7 +89,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
       flex-shrink: 0;
       padding: 0.85rem 1.25rem 0.45rem;
       border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
     }
+    header .header-text { flex: 1; min-width: 0; }
     header h1 {
       margin: 0;
       font-size: 1.35rem;
@@ -97,6 +102,24 @@ PREVIEW_HTML = """<!DOCTYPE html>
       font-weight: 600;
     }
     header p { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.85rem; }
+    header #btnExit {
+      flex-shrink: 0;
+      appearance: none;
+      border: 1px solid #a33;
+      background: color-mix(in srgb, #c44 32%, #0b1017);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.9rem;
+      padding: 0.45rem 1.1rem;
+      border-radius: 8px;
+      cursor: pointer;
+      margin-top: 0.1rem;
+    }
+    header #btnExit:hover { border-color: #e07070; }
+    header #btnExit:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
     main {
       flex: 1;
       min-height: 0;
@@ -388,14 +411,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
 </head>
 <body>
   <header>
-    <h1>sensors-dcs · Agents</h1>
-    <p>低频整帧预览。连接 <code>/ws</code>。「开始/结束」控制录制流水线写盘。相机固定四宫格；状态卡不含相机预览。</p>
+    <div class="header-text">
+      <h1>sensors-dcs · Agents</h1>
+      <p>低频整帧预览。连接 <code>/ws</code>。「开始/结束」控制录制流水线写盘。相机固定四宫格；状态卡不含相机预览。</p>
+    </div>
+    <button type="button" class="danger" id="btnExit">安全退出</button>
   </header>
   <main>
     <div class="actions">
       <button type="button" class="primary" id="btnStart">开始</button>
       <button type="button" id="btnStop" disabled>结束</button>
-      <button type="button" class="danger" id="btnExit">安全退出</button>
       <span class="hint" id="runHint">空闲 — 点「开始」录制当前 episode</span>
     </div>
     <div class="save-path">
