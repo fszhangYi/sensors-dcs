@@ -28,8 +28,18 @@ class Orchestrator:
         dry = cfg.dry_run
         self.manager = SensorManager.from_yaml(cfg.sensors_config, dry_run=dry)
         self.agents: dict[str, BaseAgent] = {}
+        known = self.manager.ids()
         for acfg in cfg.agents:
-            sensor = self.manager.get(acfg.sensor_id)
+            try:
+                sensor = self.manager.get(acfg.sensor_id)
+            except KeyError as e:
+                raise KeyError(
+                    f"agent {acfg.id!r} sensor_id={acfg.sensor_id!r} not in "
+                    f"sensors_config={cfg.sensors_config!r}; known devices: {known}. "
+                    f"For robot_write, both YAMLs must use id arm-elite "
+                    f"(old seeds used arm-elite-write — re-copy "
+                    f"configs/robot_write.yaml + sensors_robot_write.yaml)."
+                ) from e
             self.agents[acfg.id] = build_agent(acfg, sensor)
         self.hub = VizHub()
         self.recorder = RecordController(

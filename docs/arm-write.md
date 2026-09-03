@@ -91,8 +91,8 @@
 ## 5. 配置示例
 
 ```bash
-sensors-dcs run -c configs/robot_write.yaml          # dry_run 默认 true
+sensors-dcs run -c configs/robot_write.yaml          # dry_run 默认 true；含 arm read + arm_write
 sensors-dcs run -c configs/robot_write.yaml --no-dry-run  # 真机（需确认清单）
 ```
 
-详见同目录配置文件与 `README.md` 索引。
+配置要求：**同一 `sensor_id` 上同时挂 `type: arm` 与 `type: arm_write`**。无 read 时拒绝 Arm/点动。
