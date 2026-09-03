@@ -63,6 +63,19 @@ def _flatten_state_row(row: dict[str, Any]) -> Sample:
             fields["joint_offsets"] = list(payload["joint_offsets"])
         if payload.get("joint_signs") is not None:
             fields["joint_signs"] = list(payload["joint_signs"])
+    elif kind == "arm_write":
+        # Command joints are the write-agent primary track (distinct agent_id from arm_read).
+        joints = payload.get("command_joints_rad")
+        if joints is None:
+            joints = payload.get("joints_rad")
+        if joints is not None:
+            fields["joints_rad"] = list(joints)
+        fb = payload.get("feedback_joints_rad")
+        if fb is not None:
+            fields["feedback_joints_rad"] = list(fb)
+        fields["armed"] = payload.get("armed")
+        fields["last_ok"] = payload.get("last_ok")
+        fields["last_error"] = payload.get("last_error")
     elif kind == "gripper_read":
         fields["position_norm"] = payload.get("position_norm")
         raw = payload.get("raw_value")
@@ -70,6 +83,12 @@ def _flatten_state_row(row: dict[str, Any]) -> Sample:
             raw = payload.get("position_raw")
         fields["position_raw"] = raw
         fields["raw_value"] = raw
+    elif kind == "gripper_write":
+        fields["command_position_norm"] = payload.get("command_position_norm")
+        fields["command_position_raw"] = payload.get("command_position_raw")
+        fields["last_ok"] = payload.get("last_ok")
+        fields["last_error"] = payload.get("last_error")
+        fields["initialized"] = payload.get("initialized")
     else:
         fields.update(payload)
     return Sample(
@@ -109,6 +128,17 @@ def _load_cameras(ep_dir: Path) -> list[Sample]:
             file_name = str(row.get("file") or "")
             rel = f"cameras/{agent_id}/{file_name}" if file_name else None
             missing = bool(rel and not (ep_dir / rel).is_file())
+            depth_name = row.get("depth_file")
+            depth_name = str(depth_name) if depth_name else None
+            if depth_name:
+                drel = f"cameras/{agent_id}/{depth_name}"
+                if not (ep_dir / drel).is_file():
+                    # Keep depth_file name but mark color missing semantics separately;
+                    # depth absence does not fail color export.
+                    pass
+            fields: dict[str, Any] = {"file": file_name}
+            if depth_name:
+                fields["depth_file"] = depth_name
             out.append(
                 Sample(
                     t_wall=float(row["t_wall"]),
@@ -117,7 +147,7 @@ def _load_cameras(ep_dir: Path) -> list[Sample]:
                     sensor_id=str(row.get("sensor_id") or ""),
                     kind=str(row.get("kind") or "realsense"),
                     seq=int(row.get("seq") or 0),
-                    fields={"file": file_name},
+                    fields=fields,
                     image_relpath=rel,
                     role=row.get("role"),
                     serial=str(row["serial"]) if row.get("serial") else None,
@@ -210,18 +240,29 @@ def _sample_event_row(sample: Sample, t_start: float) -> dict[str, Any]:
         "dry_run": sample.dry_run,
         "file_missing": sample.file_missing,
     }
-    if sample.kind in {"gello", "arm_read"}:
+    if sample.kind in {"gello", "arm_read", "arm_write"}:
         for i, val in enumerate(sample.fields.get("joints_rad") or []):
             row[f"j{i}"] = float(val)
         # Raw (pre-affine) joints — gello only; arm_read usually has no separate raw
         for i, val in enumerate(sample.fields.get("joints_rad_raw") or []):
             row[f"j_raw{i}"] = float(val)
+        if sample.kind == "arm_write":
+            for i, val in enumerate(sample.fields.get("feedback_joints_rad") or []):
+                row[f"feedback_j{i}"] = float(val)
+            row["armed"] = sample.fields.get("armed")
+            row["last_ok"] = sample.fields.get("last_ok")
     elif sample.kind == "gripper_read":
         row["position_norm"] = sample.fields.get("position_norm")
         row["position_raw"] = sample.fields.get("position_raw")
         row["raw_value"] = sample.fields.get("raw_value")
+    elif sample.kind == "gripper_write":
+        row["command_position_norm"] = sample.fields.get("command_position_norm")
+        row["command_position_raw"] = sample.fields.get("command_position_raw")
+        row["last_ok"] = sample.fields.get("last_ok")
     elif sample.image_relpath:
         row["file"] = sample.fields.get("file")
+        if sample.fields.get("depth_file"):
+            row["depth_file"] = sample.fields.get("depth_file")
     return row
 
 
@@ -251,21 +292,32 @@ def build_events_frame(manifest: dict[str, Any], samples: list[Sample]):
 
 def _agent_value_columns(agent_id: str, sample: Sample) -> dict[str, Any]:
     cols: dict[str, Any] = {f"{agent_id}.seq": sample.seq, f"{agent_id}.t_wall_src": sample.t_wall}
-    if sample.kind in {"gello", "arm_read"}:
+    if sample.kind in {"gello", "arm_read", "arm_write"}:
         for i, val in enumerate(sample.fields.get("joints_rad") or []):
             cols[f"{agent_id}.j{i}"] = float(val)
         for i, val in enumerate(sample.fields.get("joints_rad_raw") or []):
             cols[f"{agent_id}.j_raw{i}"] = float(val)
+        if sample.kind == "arm_write":
+            for i, val in enumerate(sample.fields.get("feedback_joints_rad") or []):
+                cols[f"{agent_id}.feedback_j{i}"] = float(val)
+            cols[f"{agent_id}.armed"] = sample.fields.get("armed")
+            cols[f"{agent_id}.last_ok"] = sample.fields.get("last_ok")
     elif sample.kind == "gripper_read":
         cols[f"{agent_id}.position_norm"] = sample.fields.get("position_norm")
         cols[f"{agent_id}.position_raw"] = sample.fields.get("position_raw")
         cols[f"{agent_id}.raw_value"] = sample.fields.get("raw_value")
+    elif sample.kind == "gripper_write":
+        cols[f"{agent_id}.command_position_norm"] = sample.fields.get("command_position_norm")
+        cols[f"{agent_id}.command_position_raw"] = sample.fields.get("command_position_raw")
+        cols[f"{agent_id}.last_ok"] = sample.fields.get("last_ok")
     else:
         cols[f"{agent_id}.file"] = sample.fields.get("file")
         cols[f"{agent_id}.image_relpath"] = sample.image_relpath
         cols[f"{agent_id}.role"] = sample.role
         cols[f"{agent_id}.serial"] = sample.serial
         cols[f"{agent_id}.file_missing"] = sample.file_missing
+        if sample.fields.get("depth_file"):
+            cols[f"{agent_id}.depth_file"] = sample.fields.get("depth_file")
     return cols
 
 

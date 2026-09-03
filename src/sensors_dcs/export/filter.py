@@ -80,14 +80,18 @@ def _agent_kind(
         return str(kind_hint[agent_id])
     if f"{agent_id}.image_relpath" in df_columns or f"{agent_id}.file" in df_columns:
         return "realsense"
+    if f"{agent_id}.command_position_norm" in df_columns:
+        return "gripper_write"
     if f"{agent_id}.position_norm" in df_columns:
         return "gripper_read"
     if any(
-        c.startswith(f"{agent_id}.j") and c[len(agent_id) + 1 :].isdigit()
+        c.startswith(f"{agent_id}.j") and c[len(f"{agent_id}.j") :].isdigit()
         for c in df_columns
     ):
-        # Joint-like columns: prefer arm_read when agent_id looks like robot/arm.
         aid = agent_id.lower()
+        if "write" in aid:
+            return "arm_write"
+        # Joint-like columns: prefer arm_read when agent_id looks like robot/arm.
         if "arm" in aid or "robot" in aid or "elite" in aid:
             return "arm_read"
         return "gello"
@@ -117,9 +121,20 @@ def _agents_in_frame(columns: list[str]) -> list[str]:
 
 
 def _joints_from_row(row: Any, agent_id: str, columns: list[str]) -> list[float] | None:
-    """Calibrated joints from ``{agent}.j0`` … (ignores ``j_raw*``)."""
+    """Calibrated / command joints from ``{agent}.j0`` … (ignores ``j_raw*``)."""
+    return _joints_from_row_prefix(row, agent_id, columns, prefix_key="j")
+
+
+def _joints_from_row_prefix(
+    row: Any,
+    agent_id: str,
+    columns: list[str],
+    *,
+    prefix_key: str,
+) -> list[float] | None:
+    """Collect ``{agent}.{prefix_key}{i}`` into a list sorted by joint index."""
     joints: list[tuple[int, float]] = []
-    prefix = f"{agent_id}.j"
+    prefix = f"{agent_id}.{prefix_key}"
     for col in columns:
         if not col.startswith(prefix):
             continue
@@ -190,7 +205,7 @@ def row_passes(
         miss_col = f"{prefix}file_missing"
         if miss_col in columns and row.get(miss_col) is True:
             return False, "file_missing"
-    elif kind in {"gello", "arm_read"}:
+    elif kind in {"gello", "arm_read", "arm_write"}:
         j0 = f"{prefix}j0"
         if j0 in columns and not _value_present(row.get(j0)):
             return False, "missing_joints"
@@ -202,6 +217,10 @@ def row_passes(
         col = f"{prefix}position_norm"
         if col in columns and not _value_present(row.get(col)):
             return False, "missing_gripper"
+    elif kind == "gripper_write":
+        col = f"{prefix}command_position_norm"
+        if col in columns and not _value_present(row.get(col)):
+            return False, "missing_gripper_cmd"
     else:
         any_col = any(c.startswith(prefix) for c in columns if c != f"{prefix}match_dt")
         if not any_col:
@@ -399,6 +418,7 @@ def materialize_filtered_episode(
                 if kind == "realsense":
                     path_col = f"{aid}.image_relpath"
                     file_col = f"{aid}.file"
+                    depth_col = f"{aid}.depth_file"
                     rel = row.get(path_col) if path_col in columns else None
                     if not _value_present(rel) and file_col in columns:
                         fname = row.get(file_col)
@@ -417,6 +437,17 @@ def materialize_filtered_episode(
                     shutil.copy2(src, dst)
                     filtered_file_cols[aid].append(f"filtered/{dest_rel}")
 
+                    depth_name = None
+                    depth_src_name = row.get(depth_col) if depth_col in columns else None
+                    if _value_present(depth_src_name):
+                        dsrc = ep_dir / "cameras" / aid / str(depth_src_name)
+                        depth_name = f"{step:08d}_depth.png"
+                        ddst = filtered_root / "cameras" / aid / depth_name
+                        if dsrc.is_file():
+                            shutil.copy2(dsrc, ddst)
+                        else:
+                            depth_name = None
+
                     rec = {
                         "agent_id": aid,
                         "sensor_id": aid,
@@ -425,6 +456,7 @@ def materialize_filtered_episode(
                         "t_wall": t_wall,
                         "t_mono": 0.0,
                         "file": name,
+                        "depth_file": depth_name,
                         "role": row.get(f"{aid}.role") if f"{aid}.role" in columns else None,
                         "serial": row.get(f"{aid}.serial") if f"{aid}.serial" in columns else None,
                         "dry_run": None,
@@ -436,29 +468,41 @@ def materialize_filtered_episode(
                     written += 1
                     continue
 
-                if kind in {"gello", "arm_read"}:
+                if kind in {"gello", "arm_read", "arm_write"}:
                     joints = _joints_from_row(row, aid, columns)
                     if joints is None:
                         continue
-                    payload: dict[str, Any] = {"joints_rad": joints, "dry_run": None}
-                    joints_raw = _joints_raw_from_row(row, aid, columns)
-                    if joints_raw is not None:
-                        payload["joints_rad_raw"] = joints_raw
-                    cal = None
-                    if gello_calib and aid in gello_calib:
-                        cal = gello_calib[aid]
-                    elif source_manifest and kind == "gello":
-                        for src in source_manifest.get("agents") or []:
-                            if src.get("agent_id") == aid and isinstance(
-                                src.get("gello_calib"), dict
-                            ):
-                                cal = src["gello_calib"]
-                                break
-                    if isinstance(cal, dict):
-                        if cal.get("joint_offsets") is not None:
-                            payload["joint_offsets"] = list(cal["joint_offsets"])
-                        if cal.get("joint_signs") is not None:
-                            payload["joint_signs"] = list(cal["joint_signs"])
+                    payload: dict[str, Any] = {"dry_run": None}
+                    if kind == "arm_write":
+                        payload["command_joints_rad"] = joints
+                        payload["joints_rad"] = joints
+                        if f"{aid}.armed" in columns:
+                            payload["armed"] = row.get(f"{aid}.armed")
+                        if f"{aid}.last_ok" in columns:
+                            payload["last_ok"] = row.get(f"{aid}.last_ok")
+                        fb = _joints_from_row_prefix(row, aid, columns, prefix_key="feedback_j")
+                        if fb is not None:
+                            payload["feedback_joints_rad"] = fb
+                    else:
+                        payload["joints_rad"] = joints
+                        joints_raw = _joints_raw_from_row(row, aid, columns)
+                        if joints_raw is not None:
+                            payload["joints_rad_raw"] = joints_raw
+                        cal = None
+                        if gello_calib and aid in gello_calib:
+                            cal = gello_calib[aid]
+                        elif source_manifest and kind == "gello":
+                            for src in source_manifest.get("agents") or []:
+                                if src.get("agent_id") == aid and isinstance(
+                                    src.get("gello_calib"), dict
+                                ):
+                                    cal = src["gello_calib"]
+                                    break
+                        if isinstance(cal, dict):
+                            if cal.get("joint_offsets") is not None:
+                                payload["joint_offsets"] = list(cal["joint_offsets"])
+                            if cal.get("joint_signs") is not None:
+                                payload["joint_signs"] = list(cal["joint_signs"])
                 elif kind == "gripper_read":
                     pos = (
                         row.get(f"{aid}.position_norm")
@@ -478,6 +522,25 @@ def materialize_filtered_episode(
                         "position_norm": float(pos),
                         "raw_value": int(raw) if _value_present(raw) else None,
                         "position_raw": float(raw) if _value_present(raw) else None,
+                        "dry_run": None,
+                    }
+                elif kind == "gripper_write":
+                    pos = (
+                        row.get(f"{aid}.command_position_norm")
+                        if f"{aid}.command_position_norm" in columns
+                        else None
+                    )
+                    if not _value_present(pos):
+                        continue
+                    raw = (
+                        row.get(f"{aid}.command_position_raw")
+                        if f"{aid}.command_position_raw" in columns
+                        else None
+                    )
+                    payload = {
+                        "command_position_norm": float(pos),
+                        "command_position_raw": int(raw) if _value_present(raw) else None,
+                        "last_ok": row.get(f"{aid}.last_ok") if f"{aid}.last_ok" in columns else None,
                         "dry_run": None,
                     }
                 else:

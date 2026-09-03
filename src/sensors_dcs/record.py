@@ -335,8 +335,6 @@ class RecordController:
                 fr = agent.ring.latest.get()
                 if fr is None or fr.error:
                     continue
-                if fr.kind == "gripper_write" or fr.kind == "arm_write":
-                    continue
                 prev = last_seq.get(aid)
                 if prev is not None and fr.seq <= prev:
                     continue
@@ -413,6 +411,11 @@ class RecordController:
             name = f"{fr.seq:08d}.jpg"
             path = cam_dir / name
             path.write_bytes(base64.b64decode(jpeg_b64))
+            depth_name = None
+            depth_b64 = (fr.payload or {}).get("depth_png_b64")
+            if depth_b64 and (fr.payload or {}).get("enable_depth"):
+                depth_name = f"{fr.seq:08d}_depth.png"
+                (cam_dir / depth_name).write_bytes(base64.b64decode(depth_b64))
             rec = {
                 "agent_id": fr.agent_id,
                 "sensor_id": fr.sensor_id,
@@ -421,22 +424,35 @@ class RecordController:
                 "t_wall": fr.t_wall,
                 "t_mono": fr.t_mono,
                 "file": name,
+                "depth_file": depth_name,
                 "serial": (fr.payload or {}).get("serial"),
                 "role": (fr.payload or {}).get("role"),
                 "dry_run": (fr.payload or {}).get("dry_run"),
                 "width": (fr.payload or {}).get("width"),
                 "height": (fr.payload or {}).get("height"),
                 "color_shape": (fr.payload or {}).get("color_shape"),
+                "depth_shape": (fr.payload or {}).get("depth_shape"),
+                "enable_depth": (fr.payload or {}).get("enable_depth"),
             }
             idx_fp.write(json.dumps(rec, ensure_ascii=False) + "\n")
             idx_fp.flush()
             return
 
-        # gello / gripper_read / other state
+        # gello / arm_read / arm_write / gripper_* / other state
         payload = dict(fr.payload or {})
-        # strip heavy fields if any
+        # strip heavy / non-serializable fields
         payload.pop("jpeg_b64", None)
         payload.pop("jpeg_b64_preview", None)
+        payload.pop("depth_png_b64", None)
+        # last_result can be large nested dicts from drivers — keep a compact summary
+        if isinstance(payload.get("last_result"), dict):
+            lr = dict(payload["last_result"])
+            # drop nested echoes that duplicate top-level fields
+            payload["last_result"] = {
+                k: lr[k]
+                for k in ("ok", "error", "armed", "initialized", "joints_rad", "position_norm", "position_raw")
+                if k in lr
+            }
         rec = {
             "agent_id": fr.agent_id,
             "sensor_id": fr.sensor_id,
