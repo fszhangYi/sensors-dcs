@@ -6,6 +6,7 @@
 相关短文：
 
 - 仅 `steps.json` 字段：[hik-dataset-steps.md](hik-dataset-steps.md)
+- **`actions` 来源 / 可采集性评估**：[hik-dataset-actions.md](hik-dataset-actions.md)
 - 过滤与 CLI：[filter-timeline.md](filter-timeline.md)
 - Gello 关节标定：[gello-joint-affine.md](gello-joint-affine.md)
 

@@ -1,6 +1,7 @@
 # hik 训练集 `steps.json` 字段说明
 
 > **全链路详细版**（目录、metadata、图像、与 hik_gello / action_state 对照）：见 [hik-dataset.md](hik-dataset.md)。  
+> **`actions` 怎么算、能否采集**：见 [hik-dataset-actions.md](hik-dataset-actions.md)。  
 > 本文仅展开 **`steps.json` 各字段含义**。
 
 `export-hik-dataset`（或 `filter-timeline --hik-dataset`）写出的目录与 `hik_gello/data_postprocess.py` 对齐：
@@ -158,4 +159,5 @@ export/hik_dataset/
 - **hik_dataset 全解（推荐）**：[hik-dataset.md](hik-dataset.md)
 - 过滤与导出入口：[filter-timeline.md](filter-timeline.md)
 - Gello 关节标定（进入 `joint_position` 的值）：[gello-joint-affine.md](gello-joint-affine.md)
+- **actions 来源与可采集性**：[hik-dataset-actions.md](hik-dataset-actions.md)
 - 上游参考：`hww/hik_gello/data_postprocess.py` → `parse_pickle_data` 中构造 `steps` 的段落

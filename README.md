@@ -13,6 +13,7 @@ sensors-dcs/
   docs/filter-timeline.md           # 宽表过滤 + hik 训练集导出
   docs/hik-dataset.md               # hik_dataset 产物全解（详细）
   docs/hik-dataset-steps.md         # hik steps.json / cartesian 字段含义
+  docs/hik-dataset-actions.md       # steps.actions 怎么算 / 能否采集
   docs/gello-joint-affine.md        # Gello 关节仿射标定（offsets/signs）
   docs/arm-write.md                 # Elite arm_write 安全计划与点动 UI
   docs/gello-arm-sync.md            # Gello→Arm 一次性对齐同步（非遥操作）
