@@ -10,6 +10,9 @@ from pathlib import Path
 APP_ID = "sensors-dcs"
 APP_TITLE = "sensors-dcs"
 
+# Process launch directory (frozen before desktop ``chdir`` into user-data/run).
+_LAUNCH_CWD: Path | None = None
+
 
 def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"))
@@ -19,6 +22,27 @@ def meipass() -> Path | None:
     if is_frozen():
         return Path(getattr(sys, "_MEIPASS"))
     return None
+
+
+def capture_launch_cwd(cwd: str | Path | None = None) -> Path:
+    """Freeze the process launch directory once (call before any ``chdir``)."""
+    global _LAUNCH_CWD
+    if _LAUNCH_CWD is None:
+        _LAUNCH_CWD = Path(cwd if cwd is not None else Path.cwd()).expanduser().resolve()
+    return _LAUNCH_CWD
+
+
+def launch_cwd() -> Path:
+    """Directory the process was started from (pwd at first capture)."""
+    return capture_launch_cwd()
+
+
+def resolve_config_path(path: str | Path) -> Path:
+    """Resolve a config path; relative paths are against launch ``pwd``, not post-chdir cwd."""
+    p = Path(path).expanduser()
+    if not p.is_absolute():
+        p = launch_cwd() / p
+    return p.resolve()
 
 
 def project_root() -> Path:
@@ -86,9 +110,15 @@ def user_data_dir() -> Path:
 
 
 def default_dcs_config() -> Path:
+    """Resolve the DCS YAML used when ``-c`` / env is omitted.
+
+    Relative paths (env or ``configs/default.yaml``) are anchored at **launch
+    pwd**, not the post-``chdir`` desktop workdir under user-data/run.
+    """
+    capture_launch_cwd()
     env = (os.environ.get("SENSORS_DCS_CONFIG") or "").strip()
     if env:
-        return Path(env).expanduser().resolve()
+        return resolve_config_path(env)
     # UI-selected config (Settings → 配置文件) survives restart.
     try:
         from sensors_dcs.reexec import read_active_config_path
@@ -98,6 +128,14 @@ def default_dcs_config() -> Path:
             return active
     except Exception:  # noqa: BLE001
         pass
+    # Prefer configs next to the process launch directory (repo checkout, etc.).
+    cwd = launch_cwd()
+    for cand in (
+        cwd / "configs" / "default.yaml",
+        cwd / "default.yaml",
+    ):
+        if cand.is_file():
+            return cand.resolve()
     data = user_data_dir() / "configs" / "default.yaml"
     if data.is_file():
         return data
@@ -133,6 +171,8 @@ def _seed_tree(src: Path, dst: Path) -> None:
 
 def ensure_runtime_env(*, desktop: bool = False) -> Path:
     """Prepare writable user data + sys.path for desktop / frozen runs."""
+    # Freeze launch pwd before any chdir — relative -c / default.yaml use this.
+    capture_launch_cwd()
     data = user_data_dir()
     data.mkdir(parents=True, exist_ok=True)
     (data / "configs").mkdir(parents=True, exist_ok=True)
@@ -200,7 +240,9 @@ def ensure_runtime_env(*, desktop: bool = False) -> Path:
 
     frontend = resolve_frontend_dist()
     os.environ.setdefault("FRONTEND_DIST", str(frontend.resolve()))
-    os.environ.setdefault("SENSORS_DCS_CONFIG", str(default_dcs_config()))
+    # Always store an absolute path so later chdir cannot break resolution.
+    cfg = default_dcs_config()
+    os.environ["SENSORS_DCS_CONFIG"] = str(cfg)
     os.environ.setdefault("SENSORS_DCS_USER_DATA", str(data.resolve()))
 
     ensure_sensors_import()

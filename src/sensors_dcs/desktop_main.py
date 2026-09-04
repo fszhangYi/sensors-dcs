@@ -84,7 +84,10 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(2) from exc
 
     if args.config:
-        os.environ["SENSORS_DCS_CONFIG"] = str(args.config)
+        from sensors_dcs.paths import resolve_config_path
+
+        # Absolute before ensure_runtime_env chdirs into user-data/run.
+        os.environ["SENSORS_DCS_CONFIG"] = str(resolve_config_path(args.config))
 
     from sensors_dcs.paths import default_dcs_config, ensure_runtime_env
     from sensors_dcs.ui_serve import _local_url, pick_port, serve_app_blocking

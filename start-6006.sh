@@ -16,9 +16,11 @@ export SENSORS_DCS_VIZ_HOST="${SENSORS_DCS_VIZ_HOST:-127.0.0.1}"
 
 CFG="${1:-configs/default.yaml}"
 if [[ ! -f "$CFG" ]]; then
-  echo "[start] config not found: $CFG" >&2
+  echo "[start] config not found: $CFG (cwd=$(pwd))" >&2
   exit 1
 fi
+# Absolute path so desktop chdir into user-data/run cannot break -c.
+CFG="$(cd "$(dirname "$CFG")" && pwd)/$(basename "$CFG")"
 
 echo "[start] config=$CFG"
 echo "[start] open http://${SENSORS_DCS_VIZ_HOST}:${SENSORS_DCS_PORT}/login"
