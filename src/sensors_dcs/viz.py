@@ -780,6 +780,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
       display: grid; grid-template-columns: 2.8rem auto auto 1fr; gap: 0.4rem; align-items: center;
     }
     .arm-cmd .arm-jog-row button { min-width: 2.2rem; padding-left: 0.55rem; padding-right: 0.55rem; }
+    .arm-cmd .arm-abs-row {
+      display: flex; flex-wrap: wrap; gap: 0.4rem 0.55rem; align-items: center;
+      margin-top: 0.35rem;
+    }
+    .arm-cmd .arm-abs-row input[type="text"] {
+      flex: 1 1 16rem; min-width: 12rem;
+      font-family: ui-monospace, Consolas, monospace; font-size: 0.78rem;
+    }
+    .arm-cmd .arm-abs-limit { color: var(--muted); font-size: 0.72rem; }
     .arm-cmd .cmd-hint { color: var(--muted); font-size: 0.75rem; }
     .arm-cmd .arm-sync-prog,
     .arm-cmd .arm-teleop-prog {
@@ -3585,8 +3594,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
           '<div class="arm-sync-prog">gello→arm：空闲（完成后 gello 不控臂）</div>' +
           '<div class="arm-teleop-prog">摇操：空闲（gello 不控臂）</div>' +
           jogHtml +
+          '<div class="arm-abs-row">' +
+            '<label data-i18n="arm.abs_label">joints</label>' +
+            '<input type="text" class="arm-abs-input" data-i18n-placeholder="arm.abs_ph" placeholder="0.00,0.00,0.00,0.00,0.00,0.00" autocomplete="off" spellcheck="false" />' +
+            '<button type="button" class="arm-abs-send" data-i18n="arm.abs_send">下发</button>' +
+            '<span class="arm-abs-limit" data-i18n="arm.abs_limit">|Δ| ≤ —°</span>' +
+          '</div>' +
           '<span class="cmd-hint">须先有 robot·Read；Arm →「同步」对齐 →「摇操」跟随；解除后 gello 不再控臂</span>';
         card.appendChild(box);
+        applyDomI18n(box);
         const delta = box.querySelector('.arm-delta');
         const deltaVal = box.querySelector('.arm-delta-val');
         const armedTag = box.querySelector('.arm-armed-tag');
@@ -3597,10 +3613,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const teleopBtn = box.querySelector('.arm-gello-teleop');
         const syncProg = box.querySelector('.arm-sync-prog');
         const teleopProg = box.querySelector('.arm-teleop-prog');
+        const absInput = box.querySelector('.arm-abs-input');
+        const absSend = box.querySelector('.arm-abs-send');
+        const absLimit = box.querySelector('.arm-abs-limit');
+        box._maxDeltaDeg = 15;
         const updateDeltaLabel = () => {
           deltaVal.textContent = Number(delta.value).toFixed(1) + '°';
         };
+        const updateAbsLimitLabel = () => {
+          if (absLimit) {
+            absLimit.textContent = t('arm.abs_limit', { deg: Number(box._maxDeltaDeg).toFixed(1) });
+          }
+        };
         delta.addEventListener('input', updateDeltaLabel);
+        updateAbsLimitLabel();
         const postArm = async (body) => {
           const r = await fetch('/api/arm/command', {
             method: 'POST',
@@ -3611,6 +3637,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
         };
         const setJogEnabled = (on) => {
           box.querySelectorAll('.arm-minus, .arm-plus').forEach((b) => { b.disabled = !on; });
+          if (absInput) absInput.disabled = !on;
+          if (absSend) absSend.disabled = !on;
         };
         box._applyArmUi = (armed) => {
           const hasRead = Array.isArray(window.__armReadJoints) && window.__armReadJoints.length > 0;
@@ -3784,9 +3812,61 @@ PREVIEW_HTML = """<!DOCTYPE html>
         box.querySelectorAll('.arm-plus').forEach((b) => {
           b.addEventListener('click', () => jog(Number(b.dataset.j), +1));
         });
+        if (absSend) {
+          absSend.addEventListener('click', async () => {
+            const raw = ((absInput && absInput.value) || '').trim();
+            const parts = raw.split(/[,\\s;]+/).filter(Boolean);
+            if (parts.length !== 6) {
+              runHint.textContent = t('arm.abs_need6');
+              return;
+            }
+            const joints = parts.map((x) => Number(x));
+            if (joints.some((v) => !Number.isFinite(v))) {
+              runHint.textContent = t('arm.abs_bad');
+              return;
+            }
+            const ref = window.__armReadJoints;
+            if (!Array.isArray(ref) || ref.length < 6) {
+              runHint.textContent = t('arm.need_read');
+              return;
+            }
+            const maxDeg = Number(box._maxDeltaDeg);
+            const maxRad = (Number.isFinite(maxDeg) && maxDeg > 0 ? maxDeg : 15) * Math.PI / 180;
+            let worst = 0;
+            let worstI = 0;
+            for (let i = 0; i < 6; i++) {
+              const d = Math.abs(joints[i] - Number(ref[i]));
+              if (d > worst) { worst = d; worstI = i; }
+            }
+            if (worst > maxRad + 1e-9) {
+              runHint.textContent = t('arm.abs_delta', {
+                joint: worstI,
+                deg: (worst * 180 / Math.PI).toFixed(2),
+                max: (maxRad * 180 / Math.PI).toFixed(1),
+              });
+              return;
+            }
+            try {
+              const r = await postArm({ joints_rad: joints });
+              runHint.textContent = r.ok
+                ? t('arm.abs_ok')
+                : t('arm.abs_fail', { error: r.error || JSON.stringify(r) });
+              if (r.armed === false) box._applyArmUi(false);
+            } catch (e) {
+              runHint.textContent = t('arm.abs_err', { error: e });
+            }
+          });
+        }
         box._applyArmUi(false);
       }
       if (box && box._applyArmUi) {
+        if (p.max_delta_deg != null && Number.isFinite(Number(p.max_delta_deg))) {
+          box._maxDeltaDeg = Number(p.max_delta_deg);
+        }
+        const absLimitLive = box.querySelector('.arm-abs-limit');
+        if (absLimitLive) {
+          absLimitLive.textContent = t('arm.abs_limit', { deg: Number(box._maxDeltaDeg || 15).toFixed(1) });
+        }
         box._applyArmUi(!!p.armed);
         const rows = box.querySelectorAll('.arm-jog-row');
         rows.forEach((row) => {
