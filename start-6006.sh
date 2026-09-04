@@ -16,10 +16,10 @@ export SENSORS_DCS_VIZ_HOST="${SENSORS_DCS_VIZ_HOST:-127.0.0.1}"
 
 CFG="${1:-configs/gello_only.yaml}"
 if [[ ! -f "$CFG" ]]; then
-  echo "[start-6006] config not found: $CFG" >&2
+  echo "[start] config not found: $CFG" >&2
   exit 1
 fi
 
-echo "[start-6006] config=$CFG"
-echo "[start-6006] open http://${SENSORS_DCS_VIZ_HOST}:${SENSORS_DCS_PORT}/login"
+echo "[start] config=$CFG"
+echo "[start] open http://${SENSORS_DCS_VIZ_HOST}:${SENSORS_DCS_PORT}/login"
 exec python3 -m sensors_dcs.desktop_main -c "$CFG"
