@@ -86,11 +86,33 @@ class DcsConfig(BaseModel):
     site: str = "default"
     sensors_config: str
     dry_run: bool | None = None
+    # Absolute home joints for Collect/Infer Home button (rad). Optional.
+    home_joints_rad: list[float] | None = None
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     record: RecordConfig = Field(default_factory=RecordConfig)
     gello_arm_sync: GelloArmSyncConfig = Field(default_factory=GelloArmSyncConfig)
     gello_arm_teleop: GelloArmTeleopConfig = Field(default_factory=GelloArmTeleopConfig)
     agents: list[AgentConfig] = Field(default_factory=list)
+
+    @field_validator("home_joints_rad", mode="before")
+    @classmethod
+    def _home_joints(cls, v: Any) -> list[float] | None:
+        if v is None or v == "":
+            return None
+        if not isinstance(v, (list, tuple)):
+            raise ValueError("home_joints_rad must be a list of 6 floats (rad)")
+        if len(v) != 6:
+            raise ValueError("home_joints_rad must have exactly 6 values")
+        out: list[float] = []
+        for i, x in enumerate(v):
+            try:
+                f = float(x)
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"home_joints_rad[{i}] is not a float") from e
+            if f != f:  # NaN
+                raise ValueError(f"home_joints_rad[{i}] is not finite")
+            out.append(f)
+        return out
 
     @field_validator("agents")
     @classmethod
@@ -171,6 +193,7 @@ def config_summary(cfg: DcsConfig) -> dict[str, Any]:
         "site": cfg.site,
         "version": cfg.version,
         "dry_run": cfg.dry_run,
+        "home_joints_rad": list(cfg.home_joints_rad) if cfg.home_joints_rad else None,
         "sensors_config": cfg.sensors_config,
         "runtime": cfg.runtime.model_dump(),
         "record": cfg.record.model_dump(),
@@ -178,3 +201,48 @@ def config_summary(cfg: DcsConfig) -> dict[str, Any]:
         "gello_arm_teleop": cfg.gello_arm_teleop.model_dump(),
         "agents": [a.model_dump() for a in cfg.agents],
     }
+
+
+def parse_home_joints(raw: Any) -> tuple[list[float] | None, str | None]:
+    """Validate home joints for UI/API. Returns ``(joints, error)``."""
+    if raw is None or raw == "":
+        return None, "home_joints_rad 未配置"
+    if isinstance(raw, str):
+        parts = [p for p in raw.replace(";", ",").split(",") if p.strip()]
+        raw = parts
+    if not isinstance(raw, (list, tuple)):
+        return None, "home_joints_rad 格式错误：需要 6 个浮点数"
+    if len(raw) != 6:
+        return None, f"home_joints_rad 需要恰好 6 个数，当前 {len(raw)}"
+    out: list[float] = []
+    for i, x in enumerate(raw):
+        try:
+            f = float(x)
+        except (TypeError, ValueError):
+            return None, f"home_joints_rad[{i}] 不是有效数字"
+        if f != f or f in (float("inf"), float("-inf")):
+            return None, f"home_joints_rad[{i}] 不是有限数"
+        out.append(f)
+    return out, None
+
+
+def upsert_home_joints_yaml(path: str | Path, joints: list[float]) -> Path:
+    """Insert or replace top-level ``home_joints_rad`` in a DCS YAML (preserves most text)."""
+    import re
+
+    root = Path(path).resolve()
+    if not root.is_file():
+        raise FileNotFoundError(f"config not found: {root}")
+    joints6, err = parse_home_joints(joints)
+    if joints6 is None:
+        raise ValueError(err or "invalid home_joints_rad")
+    line = "home_joints_rad: [" + ", ".join(f"{x:.6g}" for x in joints6) + "]"
+    text = root.read_text(encoding="utf-8")
+    if re.search(r"^home_joints_rad\s*:", text, flags=re.M):
+        text = re.sub(r"^home_joints_rad\s*:.*$", line, text, count=1, flags=re.M)
+    elif re.search(r"^agents\s*:", text, flags=re.M):
+        text = re.sub(r"^(agents\s*:)", line + "\n\n\\1", text, count=1, flags=re.M)
+    else:
+        text = text.rstrip() + "\n\n" + line + "\n"
+    root.write_text(text, encoding="utf-8")
+    return root

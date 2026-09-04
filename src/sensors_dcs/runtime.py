@@ -15,7 +15,7 @@ from sensors import SensorManager  # noqa: E402
 from sensors_dcs.agents import build_agent
 from sensors_dcs.agents.base import BaseAgent
 from sensors_dcs.agents.pi05_agent import Pi05ClientAgent
-from sensors_dcs.config import DcsConfig, config_summary
+from sensors_dcs.config import DcsConfig, config_summary, parse_home_joints, upsert_home_joints_yaml
 from sensors_dcs.frame import Frame
 from sensors_dcs.record import RecordController
 from sensors_dcs.viz import VizHub, create_viz_app
@@ -128,6 +128,11 @@ class Orchestrator:
         self._abs_ramp_write_count = 0
         self._abs_ramp_last_t_wall: float | None = None
         self._abs_ramp_target_joints: list[float] | None = None
+        # Home pose (rad); seeded from YAML, updatable at runtime / via settings save.
+        self._home_lock = threading.Lock()
+        hj, _herr = parse_home_joints(getattr(cfg, "home_joints_rad", None))
+        self._home_joints_rad: list[float] | None = hj
+        self._home_source: str = "yaml" if hj is not None else "unset"
 
     def status(self) -> dict[str, Any]:
         return {
@@ -140,8 +145,98 @@ class Orchestrator:
             "gello_arm_sync": self.gello_arm_sync_status(),
             "gello_arm_teleop": self.gello_arm_teleop_status(),
             "arm_abs_ramp": self.arm_abs_ramp_status(),
+            "arm_home": self.arm_home_status(),
             "pi05": self.pi05_status(),
         }
+
+    def arm_home_status(self) -> dict[str, Any]:
+        with self._home_lock:
+            joints = list(self._home_joints_rad) if self._home_joints_rad is not None else None
+            source = self._home_source
+        ok_joints, err = parse_home_joints(joints)
+        return {
+            "ok": err is None,
+            "home_joints_rad": ok_joints,
+            "source": source,
+            "error": err,
+            "configured": ok_joints is not None,
+        }
+
+    def set_arm_home(
+        self,
+        *,
+        joints_rad: list[float] | None = None,
+        from_live: bool = False,
+    ) -> dict[str, Any]:
+        """Update in-memory home (from explicit joints or live arm read)."""
+        if from_live:
+            from sensors_dcs.agents.arm_agent import ArmAgent
+
+            readers = [a for a in self.agents.values() if isinstance(a, ArmAgent)]
+            if not readers:
+                return {"ok": False, "error": "no arm_read agent", **self.arm_home_status()}
+            live = self._joints6_from_ring(readers[0])
+            if live is None:
+                return {
+                    "ok": False,
+                    "error": "no live arm joints; wait for robot · Read",
+                    **self.arm_home_status(),
+                }
+            joints_rad = live
+        parsed, err = parse_home_joints(joints_rad)
+        if parsed is None:
+            return {"ok": False, "error": err or "invalid home_joints_rad", **self.arm_home_status()}
+        with self._home_lock:
+            self._home_joints_rad = list(parsed)
+            self._home_source = "live" if from_live else "set"
+        self.cfg = self.cfg.model_copy(update={"home_joints_rad": list(parsed)})
+        return {"ok": True, **self.arm_home_status()}
+
+    def save_arm_home_to_yaml(self, *, path: str | None = None) -> dict[str, Any]:
+        """Persist current in-memory home into the selected/active DCS YAML."""
+        from sensors_dcs.paths import default_dcs_config
+        from sensors_dcs.reexec import validate_dcs_config_file
+
+        st = self.arm_home_status()
+        if not st.get("configured"):
+            return {"ok": False, "error": st.get("error") or "home 未配置", **st}
+        try:
+            target = validate_dcs_config_file(path or str(default_dcs_config()))
+            upsert_home_joints_yaml(target, list(st["home_joints_rad"]))
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": str(e), **self.arm_home_status()}
+        with self._home_lock:
+            self._home_source = "yaml"
+        return {
+            "ok": True,
+            "path": str(target),
+            "message": f"已写入 {target}",
+            **self.arm_home_status(),
+        }
+
+    def go_arm_home(
+        self,
+        *,
+        duration_s: float | None = None,
+        agent_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Validate home joints then absolute-ramp via the same arm_command path."""
+        st = self.arm_home_status()
+        if not st.get("configured"):
+            return {
+                "ok": False,
+                "error": st.get("error") or "home_joints_rad 未配置或格式错误",
+                **st,
+            }
+        dur = 10.0 if duration_s is None else float(duration_s)
+        out = self.arm_command(
+            agent_id=agent_id,
+            joints_rad=list(st["home_joints_rad"]),
+            duration_s=dur,
+        )
+        out = dict(out)
+        out["home"] = self.arm_home_status()
+        return out
 
     def _pi05_agent(self, agent_id: str | None = None) -> Pi05ClientAgent | None:
         if agent_id:
@@ -413,6 +508,7 @@ class Orchestrator:
             "gello_arm_sync": self.gello_arm_sync_status(),
             "gello_arm_teleop": self.gello_arm_teleop_status(),
             "arm_abs_ramp": self.arm_abs_ramp_status(),
+            "arm_home": self.arm_home_status(),
         }
 
     @staticmethod
@@ -1812,6 +1908,10 @@ class Orchestrator:
             pi05_status=self.pi05_status,
             pi05_set_prompt=self.pi05_set_prompt,
             pi05_step=self.pi05_step,
+            arm_home_status=self.arm_home_status,
+            arm_home_set=self.set_arm_home,
+            arm_home_save=self.save_arm_home_to_yaml,
+            arm_home_go=self.go_arm_home,
             shutdown=self.request_shutdown,
             boot_box=boot_box,
             postprocess_save_dir=str(self.recorder.save_dir),

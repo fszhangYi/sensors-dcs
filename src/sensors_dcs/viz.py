@@ -83,6 +83,20 @@ class ApplyConfigBody(BaseModel):
     path: str = ""
 
 
+class ArmHomeSetBody(BaseModel):
+    joints_rad: list[float] | None = None
+    from_live: bool = False
+
+
+class ArmHomeSaveBody(BaseModel):
+    path: str | None = None
+
+
+class ArmHomeGoBody(BaseModel):
+    agent_id: str | None = None
+    duration_s: float | None = None
+
+
 class GelloArmSyncBody(BaseModel):
     enabled: bool
     gello_agent_id: str | None = None
@@ -892,6 +906,22 @@ PREVIEW_HTML = """<!DOCTYPE html>
       font-size: var(--inf-fs);
       color: var(--muted);
     }
+    .inf-auto-home {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      height: var(--inf-ctrl-h);
+      color: var(--muted);
+      font-size: var(--inf-fs);
+      user-select: none;
+      cursor: pointer;
+    }
+    .inf-auto-home input { width: auto; height: auto; margin: 0; }
+    .arm-home-set-row {
+      display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center;
+      margin-top: 0.35rem;
+    }
+    .arm-home-set-row button { font-size: 0.78rem; height: 1.7rem; padding: 0 0.55rem; }
     #infPi05Out { display: none; }
     .inf-pi05-raw-modal .modal-card {
       max-width: min(44rem, calc(100vw - 2rem));
@@ -1443,6 +1473,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <div class="inf-pi05-row">
         <button type="button" class="primary" id="infPi05Step" data-i18n="infer.step" disabled>单步调试</button>
         <button type="button" id="infPi05Loop" data-i18n="infer.loop" disabled>LOOP</button>
+        <label class="inf-auto-home" title="terminate 后自动回 Home">
+          <input type="checkbox" id="infAutoHome" />
+          <span data-i18n="infer.auto_home">自动复位</span>
+        </label>
+        <button type="button" id="infArmHome" data-i18n="arm.home">Home</button>
         <label for="infArmJoints" class="arm-abs-label" data-i18n="arm.abs_label" data-i18n-title="infer.joints_tip" title="单步后 IK(next_state→joints) 回填；下发为 joints_rad">joints</label>
         <input type="text" id="infArmJoints" class="inf-arm-joints" data-i18n-placeholder="arm.abs_ph" placeholder="0.00,0.00,0.00,0.00,0.00,0.00" autocomplete="off" spellcheck="false" />
         <button type="button" id="infArmSend" data-i18n="arm.abs_send">下发</button>
@@ -1769,6 +1804,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <button type="button" class="settings-primary-btn" id="btnSettingsApplyConfig" data-i18n="settings.config_apply">确认并重启</button>
           </div>
           <p class="settings-msg" id="settingsConfigMsg"></p>
+          <h3 class="settings-panel-title" style="margin-top:1rem;" data-i18n="settings.home_title">Home 关节角</h3>
+          <p class="hint" data-i18n="settings.home_hint">与 YAML home_joints_rad /「设为 home」同步；点「更新到 YAML」写入上方选中的配置文件（不重启）。</p>
+          <div class="settings-config-row">
+            <input type="text" id="settingsHomeJoints" data-i18n-placeholder="arm.abs_ph" placeholder="0.00,0.00,0.00,0.00,0.00,0.00" autocomplete="off" spellcheck="false" style="flex:1;min-width:12rem;" />
+            <button type="button" class="settings-ghost-btn" id="btnSettingsHomeReload" data-i18n="settings.home_reload">同步</button>
+            <button type="button" class="settings-primary-btn" id="btnSettingsHomeSave" data-i18n="settings.home_save">更新到 YAML</button>
+          </div>
+          <p class="settings-msg" id="settingsHomeMsg"></p>
         </div>
         <div class="settings-panel" id="settingsPanelUsers" data-settings-panel="users" role="tabpanel">
           <h3 class="settings-panel-title" data-i18n="settings.tabs.users.label">用户</h3>
@@ -1934,6 +1977,66 @@ PREVIEW_HTML = """<!DOCTYPE html>
       appModalTitle.textContent = title || t('modal.default_title');
       appModalBody.textContent = body || '';
       appModal.classList.add('show');
+    }
+    window.__armHome = window.__armHome || { configured: false, home_joints_rad: null };
+    function formatHomeJointsCsv(joints) {
+      if (!Array.isArray(joints) || joints.length < 6) return '';
+      return joints.slice(0, 6).map((v) => Number(v).toFixed(4)).join(',');
+    }
+    function syncSettingsHomeFromState(st) {
+      const inp = document.getElementById('settingsHomeJoints');
+      if (!inp || document.activeElement === inp) return;
+      const joints = (st && st.home_joints_rad) || null;
+      inp.value = formatHomeJointsCsv(joints);
+    }
+    async function refreshArmHomeState() {
+      try {
+        const r = await fetch('/api/arm/home', { cache: 'no-store' }).then((x) => x.json());
+        window.__armHome = r;
+        syncSettingsHomeFromState(r);
+        return r;
+      } catch (e) {
+        return window.__armHome || {};
+      }
+    }
+    async function goArmHomeWithDuration(duration_s, progEl) {
+      const st = window.__armHome || {};
+      if (!st.configured || !Array.isArray(st.home_joints_rad) || st.home_joints_rad.length < 6) {
+        const live = await refreshArmHomeState();
+        if (!live.configured) {
+          showAppModal(t('arm.home_bad_title'), live.error || t('arm.home_missing'));
+          if (progEl) progEl.textContent = live.error || t('arm.home_missing');
+          return { ok: false, error: live.error || t('arm.home_missing') };
+        }
+      }
+      const agentId = window.__armWriteAgentId || null;
+      try {
+        const r = await fetch('/api/arm/home/go', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agent_id: agentId,
+            duration_s: duration_s,
+          }),
+        }).then((x) => x.json());
+        if (r && r.home) window.__armHome = r.home;
+        if (!r.ok) {
+          showAppModal(t('arm.home_bad_title'), r.error || JSON.stringify(r));
+          if (progEl) progEl.textContent = t('arm.home_fail', { error: r.error || JSON.stringify(r) });
+        } else {
+          if (progEl) {
+            progEl.textContent = t('arm.home_ok', {
+              dur: Number(duration_s != null ? duration_s : 10).toFixed(1),
+            });
+          }
+          if (r) window.__armAbsRamp = r;
+        }
+        return r;
+      } catch (e) {
+        showAppModal(t('arm.home_bad_title'), String(e));
+        if (progEl) progEl.textContent = t('arm.home_fail', { error: e });
+        return { ok: false, error: String(e) };
+      }
     }
     appModalOk.addEventListener('click', () => appModal.classList.remove('show'));
     appModal.addEventListener('click', (e) => {
@@ -2603,6 +2706,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
           // term_flag false/≤0.5 → continue send; true → stop before send
           if (Number.isFinite(term) && term > 0.5) {
             await stopPi05Loop(t('infer.hint_loop_done', { n: n }));
+            const autoHome = document.getElementById('infAutoHome');
+            if (autoHome && autoHome.checked) {
+              if (infPi05Hint) infPi05Hint.textContent = t('infer.hint_auto_home');
+              await goArmHomeWithDuration(infArmDurSeconds(), infArmProg);
+            }
             return;
           }
           if (Number.isFinite(rej) && rej !== 0) {
@@ -2723,6 +2831,28 @@ PREVIEW_HTML = """<!DOCTYPE html>
         }
       });
     }
+    const infArmHome = document.getElementById('infArmHome');
+    if (infArmHome) {
+      infArmHome.addEventListener('click', async () => {
+        if (pi05LoopRunning) {
+          await stopPi05Loop(t('infer.hint_loop_stopped', { n: pi05LoopStepN || 0 }));
+        }
+        await goArmHomeWithDuration(infArmDurSeconds(), infArmProg);
+      });
+    }
+    const infAutoHome = document.getElementById('infAutoHome');
+    try {
+      const lsAuto = localStorage.getItem('dcs.inf.autoHome');
+      if (infAutoHome && lsAuto === '1') infAutoHome.checked = true;
+    } catch (e) {}
+    if (infAutoHome) {
+      infAutoHome.addEventListener('change', () => {
+        try {
+          localStorage.setItem('dcs.inf.autoHome', infAutoHome.checked ? '1' : '0');
+        } catch (e) {}
+      });
+    }
+    refreshArmHomeState();
 
     // ---- tabs + postprocess ----
     const tabBtnHome = document.getElementById('tabBtnHome');
@@ -3478,6 +3608,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         } else if (settingsConfigPath && j.path && !settingsConfigPath.dataset.touched) {
           settingsConfigPath.value = j.path;
         }
+        await refreshArmHomeState();
         return j;
       } catch (e) {
         setSettingsMsg(settingsConfigMsg, String(e), true);
@@ -3849,6 +3980,62 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const btnSettingsApplyConfig = document.getElementById('btnSettingsApplyConfig');
     if (btnSettingsApplyConfig) {
       btnSettingsApplyConfig.addEventListener('click', () => applySelectedConfig());
+    }
+    const settingsHomeMsg = document.getElementById('settingsHomeMsg');
+    const settingsHomeJoints = document.getElementById('settingsHomeJoints');
+    const btnSettingsHomeReload = document.getElementById('btnSettingsHomeReload');
+    const btnSettingsHomeSave = document.getElementById('btnSettingsHomeSave');
+    if (btnSettingsHomeReload) {
+      btnSettingsHomeReload.addEventListener('click', async () => {
+        const r = await refreshArmHomeState();
+        setSettingsMsg(
+          settingsHomeMsg,
+          r.configured ? t('settings.home_synced') : (r.error || t('arm.home_missing')),
+          !r.configured,
+        );
+      });
+    }
+    if (btnSettingsHomeSave) {
+      btnSettingsHomeSave.addEventListener('click', async () => {
+        const raw = ((settingsHomeJoints && settingsHomeJoints.value) || '').trim();
+        const parts = raw.split(/[,\s;]+/).filter(Boolean);
+        if (parts.length !== 6 || parts.some((x) => !Number.isFinite(Number(x)))) {
+          setSettingsMsg(settingsHomeMsg, t('arm.home_missing'), true);
+          showAppModal(t('arm.home_bad_title'), t('arm.home_missing'));
+          return;
+        }
+        const joints = parts.map((x) => Number(x));
+        try {
+          const setR = await fetch('/api/arm/home/set', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ joints_rad: joints }),
+          }).then((x) => x.json());
+          if (!setR.ok) {
+            setSettingsMsg(settingsHomeMsg, setR.error || 'set failed', true);
+            showAppModal(t('arm.home_bad_title'), setR.error || JSON.stringify(setR));
+            return;
+          }
+          window.__armHome = setR;
+          const path = (settingsConfigPath && settingsConfigPath.value) || null;
+          const saveR = await fetch('/api/arm/home/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: path }),
+          }).then((x) => x.json());
+          window.__armHome = saveR;
+          syncSettingsHomeFromState(saveR);
+          if (!saveR.ok) {
+            setSettingsMsg(settingsHomeMsg, saveR.error || 'save failed', true);
+            showAppModal(t('arm.home_bad_title'), saveR.error || JSON.stringify(saveR));
+            return;
+          }
+          setSettingsMsg(settingsHomeMsg, saveR.message || t('settings.home_saved'));
+        } catch (e) {
+          setSettingsMsg(settingsHomeMsg, String(e), true);
+          showAppModal(t('arm.home_bad_title'), String(e));
+        }
+      });
     }
     const pathPickerOverlay = document.getElementById('pathPickerOverlay');
     const pathPickerDialog = document.getElementById('pathPickerDialog');
@@ -4408,6 +4595,39 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (cmd) cmd.remove();
       renderJointVals(root, joints.map((v, i) => ({ lab: 'j' + i, cal: v })));
       renderPoseRow(card, p.cartesian_xyzrpy);
+      if (!card.querySelector('.arm-home-set-row')) {
+        const row = document.createElement('div');
+        row.className = 'arm-home-set-row';
+        row.innerHTML =
+          '<button type="button" class="arm-home-set" data-i18n="arm.home_set">设为 home</button>' +
+          '<span class="hint arm-home-set-hint"></span>';
+        card.appendChild(row);
+        applyDomI18n(row);
+        const btn = row.querySelector('.arm-home-set');
+        const hint = row.querySelector('.arm-home-set-hint');
+        if (btn) {
+          btn.addEventListener('click', async () => {
+            try {
+              const r = await fetch('/api/arm/home/set', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ from_live: true }),
+              }).then((x) => x.json());
+              window.__armHome = r;
+              if (hint) {
+                hint.textContent = r.ok
+                  ? t('arm.home_set_ok')
+                  : t('arm.home_set_fail', { error: r.error || JSON.stringify(r) });
+              }
+              if (!r.ok) showAppModal(t('arm.home_bad_title'), r.error || JSON.stringify(r));
+              else syncSettingsHomeFromState(r);
+            } catch (e) {
+              if (hint) hint.textContent = String(e);
+              showAppModal(t('arm.home_bad_title'), String(e));
+            }
+          });
+        }
+      }
     }
 
     function fmtPose7(arr) {
@@ -4697,6 +4917,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             '<label class="arm-abs-label" data-i18n="arm.abs_label" data-i18n-title="arm.abs_label_tip" title="双击填入当前关节角">joints</label>' +
             '<input type="text" class="arm-abs-input" data-i18n-placeholder="arm.abs_ph" placeholder="0.00,0.00,0.00,0.00,0.00,0.00" autocomplete="off" spellcheck="false" />' +
             '<button type="button" class="arm-abs-send" data-i18n="arm.abs_send">下发</button>' +
+            '<button type="button" class="arm-home-go" data-i18n="arm.home">Home</button>' +
             '<label class="arm-abs-dur" data-i18n-title="arm.abs_dur_hint" title="1–300（100ms–30s）">' +
               '<span data-i18n="arm.abs_dur">到达</span>' +
               '<input type="number" class="arm-abs-dur-range" min="1" max="300" step="1" value="100" />' +
@@ -4722,6 +4943,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const teleopProg = box.querySelector('.arm-teleop-prog');
         const absInput = box.querySelector('.arm-abs-input');
         const absSend = box.querySelector('.arm-abs-send');
+        const absHome = box.querySelector('.arm-home-go');
         const absLabel = box.querySelector('.arm-abs-label');
         const absDur = box.querySelector('.arm-abs-dur-range');
         const absDurVal = box.querySelector('.arm-abs-dur-val');
@@ -4781,6 +5003,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           if (absInput) absInput.disabled = !on;
           if (absDur) absDur.disabled = !on;
           if (absSend) absSend.disabled = !on;
+          if (absHome) absHome.disabled = !on || !!(window.__armAbsRamp && window.__armAbsRamp.enabled);
         };
         box._applyArmUi = (armed) => {
           const hasRead = Array.isArray(window.__armReadJoints) && window.__armReadJoints.length > 0;
@@ -4798,6 +5021,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           } else if (absSend) {
             absSend.textContent = t('arm.abs_send');
           }
+          if (absHome) absHome.disabled = !armed || !hasRead || syncing || teleoping || absRamping;
           armBtn.disabled = !hasRead || syncing || teleoping || absRamping;
           if (syncBtn) {
             syncBtn.disabled = !hasRead || teleoping || absRamping;
@@ -5040,6 +5264,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
             }
           });
         }
+        if (absHome) {
+          absHome.addEventListener('click', async () => {
+            let durN = absDur ? Math.round(Number(absDur.value)) : 100;
+            if (!Number.isFinite(durN)) durN = 100;
+            durN = Math.max(1, Math.min(300, durN));
+            const duration_s = durN * 0.1;
+            const r = await goArmHomeWithDuration(duration_s, absProg || runHint);
+            if (r && r.ok && box._applyArmUi) box._applyArmUi(true);
+          });
+        }
         box._applyArmUi(false);
       }
       if (box && box._applyArmUi) {
@@ -5183,6 +5417,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
           }
         }
       }
+      if (msg.arm_home) {
+        window.__armHome = msg.arm_home;
+        syncSettingsHomeFromState(msg.arm_home);
+      }
       frames.forEach((frame) => {
         try {
           const ar = agentRates[frame.agent_id] || {};
@@ -5319,6 +5557,10 @@ def create_viz_app(
     pi05_status: Callable[..., dict[str, Any]] | None = None,
     pi05_set_prompt: Callable[..., dict[str, Any]] | None = None,
     pi05_step: Callable[..., dict[str, Any]] | None = None,
+    arm_home_status: Callable[..., dict[str, Any]] | None = None,
+    arm_home_set: Callable[..., dict[str, Any]] | None = None,
+    arm_home_save: Callable[..., dict[str, Any]] | None = None,
+    arm_home_go: Callable[..., dict[str, Any]] | None = None,
     shutdown: Callable[[], dict[str, Any]] | None = None,
     boot_error: str | None = None,
     boot_box: dict[str, Any] | None = None,
@@ -5880,6 +6122,41 @@ def create_viz_app(
             return {"ok": False, "configured": False, "error": "pi05 unavailable"}
         body = req or Pi05AgentIdBody()
         return await asyncio.to_thread(pi05_step, agent_id=body.agent_id)
+
+    @app.get("/api/arm/home")
+    async def arm_home_get() -> dict[str, Any]:
+        if arm_home_status is None:
+            return {"ok": False, "configured": False, "error": "arm home unavailable"}
+        return await asyncio.to_thread(arm_home_status)
+
+    @app.post("/api/arm/home/set")
+    async def arm_home_set_api(req: ArmHomeSetBody | None = None) -> dict[str, Any]:
+        if arm_home_set is None:
+            return {"ok": False, "error": "arm home unavailable"}
+        body = req or ArmHomeSetBody()
+        return await asyncio.to_thread(
+            arm_home_set,
+            joints_rad=body.joints_rad,
+            from_live=bool(body.from_live),
+        )
+
+    @app.post("/api/arm/home/save")
+    async def arm_home_save_api(req: ArmHomeSaveBody | None = None) -> dict[str, Any]:
+        if arm_home_save is None:
+            return {"ok": False, "error": "arm home unavailable"}
+        body = req or ArmHomeSaveBody()
+        return await asyncio.to_thread(arm_home_save, path=body.path)
+
+    @app.post("/api/arm/home/go")
+    async def arm_home_go_api(req: ArmHomeGoBody | None = None) -> dict[str, Any]:
+        if arm_home_go is None:
+            return {"ok": False, "error": "arm home unavailable"}
+        body = req or ArmHomeGoBody()
+        return await asyncio.to_thread(
+            arm_home_go,
+            duration_s=body.duration_s,
+            agent_id=body.agent_id,
+        )
 
     @app.post("/api/shutdown")
     async def api_shutdown() -> dict[str, Any]:
