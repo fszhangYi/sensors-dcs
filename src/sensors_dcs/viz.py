@@ -290,7 +290,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
     .save-path button:hover,
     .pp-actions button:hover { border-color: var(--accent); background: var(--accent-dim); }
     .actions button:disabled,
-    .pp-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .pp-actions button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
     .actions button.primary,
     .pp-actions button.primary {
       background: linear-gradient(120deg, var(--accent-dim), color-mix(in srgb, var(--spark-dim) 55%, var(--accent-dim)));
@@ -301,6 +305,21 @@ PREVIEW_HTML = """<!DOCTYPE html>
     .actions button.primary:hover,
     .pp-actions button.primary:hover {
       border-color: var(--spark);
+    }
+    .actions button.primary:disabled,
+    .pp-actions button.primary:disabled {
+      opacity: 1;
+      color: var(--muted);
+      background: var(--chrome);
+      border-color: var(--border);
+      box-shadow: none;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+    .actions button.primary:disabled:hover,
+    .pp-actions button.primary:disabled:hover {
+      border-color: var(--border);
+      background: var(--chrome);
     }
     .actions .hint, .pp-actions .hint { color: var(--muted); font-size: 0.82rem; }
     .save-path {
@@ -994,6 +1013,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
           applyRecordUi(window.__lastRecordStatus);
         }
       } catch (e) {}
+      try {
+        const b = document.getElementById('btnHomeCollect');
+        const tc = document.getElementById('tabBtnCollect');
+        if (b && b.disabled) b.title = t('boot.collect_title');
+        if (tc && tc.disabled) tc.title = t('boot.collect_title');
+      } catch (e) {}
     }
     document.querySelectorAll('.lang-btn').forEach((btn) => {
       btn.addEventListener('click', () => setLocale(btn.getAttribute('data-locale')));
@@ -1237,6 +1262,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
       tabBtnCollect.disabled = !collectOk;
       tabBtnCollect.setAttribute('aria-disabled', collectOk ? 'false' : 'true');
       tabBtnCollect.title = collectOk ? '' : t('boot.collect_title');
+      const btnHomeCollect = document.getElementById('btnHomeCollect');
+      if (btnHomeCollect) {
+        btnHomeCollect.disabled = !collectOk;
+        btnHomeCollect.setAttribute('aria-disabled', collectOk ? 'false' : 'true');
+        btnHomeCollect.title = collectOk ? '' : t('boot.collect_title');
+      }
       if (!collectOk) {
         if (bootBanner) {
           bootBanner.hidden = false;
