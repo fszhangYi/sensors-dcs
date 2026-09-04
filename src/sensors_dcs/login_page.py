@@ -8,6 +8,9 @@ LOGIN_HTML = r"""<!DOCTYPE html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>sensors-dcs · Login</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="/assets/favicon.ico" sizes="any" />
+  <link rel="apple-touch-icon" href="/assets/favicon.png" />
   <link rel="stylesheet" href="/assets/fonts/ibm-plex-sans.css" />
   <style>
     :root {
@@ -89,11 +92,7 @@ LOGIN_HTML = r"""<!DOCTYPE html>
       animation: login-rise 520ms var(--motion-ease) both;
     }
     .login-logo {
-      width: 48px; height: 48px; border-radius: 12px;
-      background:
-        radial-gradient(circle at 35% 30%, #3dd6c6, transparent 55%),
-        radial-gradient(circle at 70% 75%, #f0b429, transparent 50%),
-        #121a26;
+      width: 48px; height: 48px; border-radius: 12px; display: block;
       box-shadow: 0 0 0 1px rgba(61, 214, 198, 0.25), 0 12px 32px rgba(0,0,0,0.45);
     }
     .login-brand-name {
@@ -195,7 +194,7 @@ LOGIN_HTML = r"""<!DOCTYPE html>
     </div>
 
     <header class="login-brand">
-      <div class="login-logo" aria-hidden="true"></div>
+      <img class="login-logo" src="/assets/favicon.svg" alt="" width="48" height="48" />
       <span class="login-brand-name">sensors-dcs</span>
       <div class="login-lang" role="group" data-i18n-title="lang.title" title="界面语言 / Language">
         <button type="button" class="login-lang-btn active" data-locale="zh" data-i18n="lang.zh">中文</button>

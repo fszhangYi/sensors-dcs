@@ -1,4 +1,4 @@
-"""Packaged static assets (fonts, etc.) for the embedded viz/login shells."""
+"""Packaged static assets (fonts, favicons, etc.) for the embedded viz/login shells."""
 
 from __future__ import annotations
 
@@ -11,3 +11,8 @@ def static_root() -> Path:
 
 def fonts_dir() -> Path:
     return static_root() / "fonts"
+
+
+def favicon_path(name: str = "favicon.ico") -> Path:
+    """Resolve a favicon under ``static/`` (``favicon.svg`` / ``.png`` / ``.ico``)."""
+    return static_root() / name

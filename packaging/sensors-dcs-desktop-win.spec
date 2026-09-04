@@ -128,6 +128,7 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
+_icon = SRC / "sensors_dcs" / "static" / "favicon.ico"
 exe = EXE(
     pyz,
     a.scripts,
@@ -144,6 +145,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(_icon) if _icon.is_file() else None,
 )
 
 coll = COLLECT(

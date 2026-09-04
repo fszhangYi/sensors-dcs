@@ -97,6 +97,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>sensors-dcs · 采集 / 后处理</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="/assets/favicon.ico" sizes="any" />
+  <link rel="apple-touch-icon" href="/assets/favicon.png" />
   <link rel="stylesheet" href="/assets/fonts/ibm-plex-sans.css" />
   <style>
     :root {
@@ -179,6 +182,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
       gap: 1rem;
       backdrop-filter: blur(10px);
       -webkit-backdrop-filter: blur(10px);
+    }
+    header .header-brand {
+      display: flex; align-items: flex-start; gap: 0.75rem; flex: 1; min-width: 0;
+    }
+    header .header-logo {
+      width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0; margin-top: 0.15rem;
+      box-shadow: 0 0 0 1px rgba(61, 214, 198, 0.22);
     }
     header .header-text { flex: 1; min-width: 0; }
     header .kicker {
@@ -1115,10 +1125,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
 </head>
 <body class="dcs-page">
   <header>
-    <div class="header-text">
+    <div class="header-brand">
+      <img class="header-logo" src="/assets/favicon.svg" alt="" width="36" height="36" />
+      <div class="header-text">
       <p class="kicker" data-i18n="header.kicker">Robotics lab console</p>
       <h1>sensors-dcs</h1>
       <p data-i18n="header.subtitle">主页介绍软件；「数据采集」录制写盘；「数据后处理」等价于 export-timeline → filter-timeline → export-hik-dataset。</p>
+      </div>
     </div>
     <div class="header-actions">
       <button type="button" id="btnSettings" data-i18n="home.cta_settings">设置</button>
@@ -3348,6 +3361,19 @@ def create_viz_app(
     _static = static_root()
     if _static.is_dir():
         app.mount("/assets", StaticFiles(directory=str(_static)), name="assets")
+
+    @app.get("/favicon.ico")
+    async def favicon_ico():
+        """Browsers probe /favicon.ico; keep it public (see auth_session.PUBLIC_EXACT)."""
+        from fastapi.responses import FileResponse
+
+        ico = _static / "favicon.ico"
+        if ico.is_file():
+            return FileResponse(ico, media_type="image/x-icon")
+        svg = _static / "favicon.svg"
+        if svg.is_file():
+            return FileResponse(svg, media_type="image/svg+xml")
+        return HTMLResponse("", status_code=404)
 
     @app.middleware("http")
     async def _auth_gate(request: Request, call_next):  # type: ignore[no-untyped-def]
