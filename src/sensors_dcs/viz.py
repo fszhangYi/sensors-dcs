@@ -807,10 +807,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
       gap: 0.35rem;
       height: var(--inf-ctrl-h);
     }
-    .inf-pi05-panel .arm-abs-dur input[type="range"] {
-      width: 7rem;
-      height: auto;
-      padding: 0;
+    .inf-pi05-panel .arm-abs-dur input[type="number"] {
+      width: 4.25rem;
+      text-align: right;
+    }
+    #infArmDurVal {
+      min-width: 3.2rem;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
     }
     #infPi05Status {
       display: inline-flex;
@@ -1023,8 +1027,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
       display: inline-flex; align-items: center; gap: 0.35rem;
       color: var(--muted); font-size: 0.72rem;
     }
-    .arm-cmd .arm-abs-dur input[type="range"] {
-      width: 7.5rem; vertical-align: middle;
+    .arm-cmd .arm-abs-dur input[type="number"] {
+      width: 4.25rem; height: 1.7rem; padding: 0 0.35rem;
+      text-align: right; font-size: 0.78rem;
+    }
+    .arm-cmd .arm-abs-dur-val {
+      min-width: 3.2rem; font-variant-numeric: tabular-nums;
     }
     .arm-cmd .arm-abs-prog {
       width: 100%; color: var(--muted); font-size: 0.72rem; margin-top: 0.15rem;
@@ -1437,10 +1445,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
         <label for="infArmJoints" class="arm-abs-label" data-i18n="arm.abs_label" data-i18n-title="infer.joints_tip" title="单步调试后回填 next_state；下发前 6 个数为 joints_rad">joints</label>
         <input type="text" id="infArmJoints" class="inf-arm-joints" data-i18n-placeholder="arm.abs_ph" placeholder="0.00,0.00,0.00,0.00,0.00,0.00" autocomplete="off" spellcheck="false" />
         <button type="button" id="infArmSend" data-i18n="arm.abs_send">下发</button>
-        <label class="arm-abs-dur">
+        <label class="arm-abs-dur" data-i18n-title="arm.abs_dur_hint" title="1–300（100ms–30s）">
           <span data-i18n="arm.abs_dur">到达</span>
-          <input type="range" id="infArmDur" min="1" max="30" step="1" value="10" />
-          <span id="infArmDurVal">10s</span>
+          <input type="number" id="infArmDur" min="1" max="300" step="1" value="100" />
+          <span data-i18n="arm.abs_dur_unit">×100ms</span>
+          <span id="infArmDurVal">10.0s</span>
         </label>
       </div>
       <div class="inf-pi05-row inf-pi05-hints">
@@ -2337,12 +2346,23 @@ PREVIEW_HTML = """<!DOCTYPE html>
       return true;
     }
     function updateInfArmDurLabel() {
-      if (infArmDurVal && infArmDur) {
-        infArmDurVal.textContent = Number(infArmDur.value).toFixed(0) + 's';
-      }
+      if (!infArmDur) return;
+      let n = Math.round(Number(infArmDur.value));
+      if (!Number.isFinite(n)) n = 100;
+      n = Math.max(1, Math.min(300, n));
+      if (String(infArmDur.value) !== String(n)) infArmDur.value = String(n);
+      if (infArmDurVal) infArmDurVal.textContent = (n * 0.1).toFixed(1) + 's';
+    }
+    function infArmDurSeconds() {
+      if (!infArmDur) return 10;
+      let n = Math.round(Number(infArmDur.value));
+      if (!Number.isFinite(n)) n = 100;
+      n = Math.max(1, Math.min(300, n));
+      return n * 0.1;
     }
     if (infArmDur) {
       infArmDur.addEventListener('input', updateInfArmDurLabel);
+      infArmDur.addEventListener('change', updateInfArmDurLabel);
       updateInfArmDurLabel();
     }
     function applyPi05PanelFromPayload(p) {
@@ -2497,12 +2517,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
           if (infArmProg) infArmProg.textContent = t('infer.arm_need_writer');
           return;
         }
-        const duration_s = infArmDur ? Number(infArmDur.value) : 10;
+        const duration_s = infArmDurSeconds();
         try {
           const r = await postInfArm({ joints_rad: joints, duration_s: duration_s });
           if (infArmProg) {
             infArmProg.textContent = r.ok
-              ? t('arm.abs_ok', { dur: Number(duration_s).toFixed(0) })
+              ? t('arm.abs_ok', { dur: Number(duration_s).toFixed(1) })
               : t('arm.abs_fail', { error: r.error || JSON.stringify(r) });
           }
           if (r.ok) window.__armAbsRamp = r;
@@ -4485,10 +4505,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
             '<label class="arm-abs-label" data-i18n="arm.abs_label" data-i18n-title="arm.abs_label_tip" title="双击填入当前关节角">joints</label>' +
             '<input type="text" class="arm-abs-input" data-i18n-placeholder="arm.abs_ph" placeholder="0.00,0.00,0.00,0.00,0.00,0.00" autocomplete="off" spellcheck="false" />' +
             '<button type="button" class="arm-abs-send" data-i18n="arm.abs_send">下发</button>' +
-            '<label class="arm-abs-dur">' +
+            '<label class="arm-abs-dur" data-i18n-title="arm.abs_dur_hint" title="1–300（100ms–30s）">' +
               '<span data-i18n="arm.abs_dur">到达</span>' +
-              '<input type="range" class="arm-abs-dur-range" min="1" max="30" step="1" value="10" />' +
-              '<span class="arm-abs-dur-val">10s</span>' +
+              '<input type="number" class="arm-abs-dur-range" min="1" max="300" step="1" value="100" />' +
+              '<span data-i18n="arm.abs_dur_unit">×100ms</span>' +
+              '<span class="arm-abs-dur-val">10.0s</span>' +
             '</label>' +
           '</div>' +
           '<div class="arm-abs-prog" data-i18n="arm.abs_idle">绝对下发：空闲</div>' +
@@ -4542,12 +4563,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
           deltaVal.textContent = Number(delta.value).toFixed(1) + '°';
         };
         const updateAbsDurLabel = () => {
-          if (absDurVal && absDur) {
-            absDurVal.textContent = Number(absDur.value).toFixed(0) + 's';
-          }
+          if (!absDur) return;
+          let n = Math.round(Number(absDur.value));
+          if (!Number.isFinite(n)) n = 100;
+          n = Math.max(1, Math.min(300, n));
+          if (String(absDur.value) !== String(n)) absDur.value = String(n);
+          if (absDurVal) absDurVal.textContent = (n * 0.1).toFixed(1) + 's';
         };
         delta.addEventListener('input', updateDeltaLabel);
-        if (absDur) absDur.addEventListener('input', updateAbsDurLabel);
+        if (absDur) {
+          absDur.addEventListener('input', updateAbsDurLabel);
+          absDur.addEventListener('change', updateAbsDurLabel);
+        }
         updateAbsDurLabel();
         const postArm = async (body) => {
           const r = await fetch('/api/arm/command', {
@@ -4802,11 +4829,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
               runHint.textContent = t('arm.need_read');
               return;
             }
-            const duration_s = absDur ? Number(absDur.value) : 10;
+            let durN = absDur ? Math.round(Number(absDur.value)) : 100;
+            if (!Number.isFinite(durN)) durN = 100;
+            durN = Math.max(1, Math.min(300, durN));
+            const duration_s = durN * 0.1;
             try {
               const r = await postArm({ joints_rad: joints, duration_s: duration_s });
               runHint.textContent = r.ok
-                ? t('arm.abs_ok', { dur: Number(duration_s).toFixed(0) })
+                ? t('arm.abs_ok', { dur: Number(duration_s).toFixed(1) })
                 : t('arm.abs_fail', { error: r.error || JSON.stringify(r) });
               if (r.armed === false) box._applyArmUi(false);
               if (r.ok) {
