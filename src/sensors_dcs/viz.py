@@ -1442,6 +1442,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       </div>
       <div class="inf-pi05-row">
         <button type="button" class="primary" id="infPi05Step" data-i18n="infer.step" disabled>单步调试</button>
+        <button type="button" id="infPi05Loop" data-i18n="infer.loop" disabled>LOOP</button>
         <label for="infArmJoints" class="arm-abs-label" data-i18n="arm.abs_label" data-i18n-title="infer.joints_tip" title="单步调试后回填 next_state；下发前 6 个数为 joints_rad">joints</label>
         <input type="text" id="infArmJoints" class="inf-arm-joints" data-i18n-placeholder="arm.abs_ph" placeholder="0.00,0.00,0.00,0.00,0.00,0.00" autocomplete="off" spellcheck="false" />
         <button type="button" id="infArmSend" data-i18n="arm.abs_send">下发</button>
@@ -2213,6 +2214,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const infPi05Connect = document.getElementById('infPi05Connect');
     const infPi05Disconnect = document.getElementById('infPi05Disconnect');
     const infPi05Step = document.getElementById('infPi05Step');
+    const infPi05Loop = document.getElementById('infPi05Loop');
     const infPi05PromptApply = document.getElementById('infPi05PromptApply');
     const infFlagTermDot = document.getElementById('infFlagTermDot');
     const infFlagTermVal = document.getElementById('infFlagTermVal');
@@ -2232,6 +2234,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const infArmProg = document.getElementById('infArmProg');
     const LS_PI05 = 'dcs.inf.pi05';
     let pi05StepBusy = false;
+    let pi05LoopRunning = false;
+    let pi05LoopGen = 0;
+    let pi05LoopStepN = 0;
     function loadPi05Form() {
       try {
         const raw = localStorage.getItem(LS_PI05);
@@ -2377,17 +2382,25 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (infPi05Connect) infPi05Connect.disabled = true;
         if (infPi05Disconnect) infPi05Disconnect.disabled = true;
         if (infPi05Step) infPi05Step.disabled = true;
+        if (infPi05Loop) {
+          infPi05Loop.disabled = true;
+          infPi05Loop.textContent = t('infer.loop');
+        }
         if (infPi05Host) infPi05Host.disabled = true;
         if (infPi05Port) infPi05Port.disabled = true;
         setPi05RawPayload(p);
         updatePi05Flags(p);
         return;
       }
-      if (infPi05Host) infPi05Host.disabled = connected;
-      if (infPi05Port) infPi05Port.disabled = connected;
-      if (infPi05Connect) infPi05Connect.disabled = connected;
-      if (infPi05Disconnect) infPi05Disconnect.disabled = !connected;
-      if (infPi05Step) infPi05Step.disabled = !connected || pi05StepBusy;
+      if (infPi05Host) infPi05Host.disabled = connected || pi05LoopRunning;
+      if (infPi05Port) infPi05Port.disabled = connected || pi05LoopRunning;
+      if (infPi05Connect) infPi05Connect.disabled = connected || pi05LoopRunning;
+      if (infPi05Disconnect) infPi05Disconnect.disabled = !connected || pi05LoopRunning;
+      if (infPi05Step) infPi05Step.disabled = !connected || pi05StepBusy || pi05LoopRunning;
+      if (infPi05Loop) {
+        infPi05Loop.disabled = !connected || (pi05StepBusy && !pi05LoopRunning);
+        infPi05Loop.textContent = pi05LoopRunning ? t('infer.loop_stop') : t('infer.loop');
+      }
       if (connected) {
         const host = (p && p.host) || ((infPi05Host && infPi05Host.value) || '127.0.0.1');
         const port = (p && p.port != null) ? p.port : ((infPi05Port && infPi05Port.value) || '5000');
@@ -2458,22 +2471,183 @@ PREVIEW_HTML = """<!DOCTYPE html>
     if (infPi05Disconnect) {
       infPi05Disconnect.addEventListener('click', () => postPi05('/api/pi05/disconnect', {}));
     }
+    function sleepMs(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+    function parseInfArmJoints6() {
+      const raw = ((infArmJoints && infArmJoints.value) || '').trim();
+      const parts = raw.split(/[,\s;]+/).filter(Boolean);
+      if (parts.length < 6) return { ok: false, error: t('arm.abs_need6') };
+      const joints = parts.slice(0, 6).map((x) => Number(x));
+      if (joints.some((v) => !Number.isFinite(v))) return { ok: false, error: t('arm.abs_bad') };
+      return { ok: true, joints: joints };
+    }
+    async function runInfPi05StepOnce() {
+      if (infPi05Hint) infPi05Hint.textContent = t('infer.hint_stepping');
+      const r = await postPi05('/api/pi05/step', {});
+      if (r && r.ok && fillInfArmJointsFromNextState(r.next_state)) {
+        if (infArmProg) infArmProg.textContent = t('infer.joints_filled');
+      }
+      return r;
+    }
+    async function sendInfArmJointsOnce() {
+      const parsed = parseInfArmJoints6();
+      if (!parsed.ok) return { ok: false, error: parsed.error };
+      if (!Array.isArray(window.__armReadJoints) || window.__armReadJoints.length < 6) {
+        return { ok: false, error: t('arm.need_read') };
+      }
+      if (!window.__armWriteAgentId) {
+        return { ok: false, error: t('infer.arm_need_writer') };
+      }
+      const duration_s = infArmDurSeconds();
+      const r = await postInfArm({ joints_rad: parsed.joints, duration_s: duration_s });
+      if (infArmProg) {
+        infArmProg.textContent = r.ok
+          ? t('arm.abs_ok', { dur: Number(duration_s).toFixed(1) })
+          : t('arm.abs_fail', { error: r.error || JSON.stringify(r) });
+      }
+      if (r.ok) window.__armAbsRamp = r;
+      return Object.assign({ duration_s: duration_s }, r);
+    }
+    async function waitInfArmArrive(gen, duration_s) {
+      const timeoutMs = Math.max(5000, (Number(duration_s) || 10) * 1500 + 2000);
+      const t0 = Date.now();
+      while (pi05LoopRunning && gen === pi05LoopGen) {
+        const ramp = window.__armAbsRamp || {};
+        if (!ramp.enabled) {
+          if (ramp.phase === 'error') {
+            return { ok: false, error: ramp.last_error || ramp.message || 'abs ramp error' };
+          }
+          if (ramp.phase === 'completed' || ramp.phase === 'idle' || ramp.phase == null) {
+            return { ok: true, phase: ramp.phase || 'idle' };
+          }
+        }
+        if (Date.now() - t0 > timeoutMs) {
+          return { ok: false, error: 'arrive timeout' };
+        }
+        await sleepMs(120);
+      }
+      return { ok: false, error: 'stopped', stopped: true };
+    }
+    function syncPi05LoopButton() {
+      if (!infPi05Loop) return;
+      infPi05Loop.textContent = pi05LoopRunning ? t('infer.loop_stop') : t('infer.loop');
+    }
+    async function stopPi05Loop(reasonHint) {
+      if (!pi05LoopRunning) return;
+      pi05LoopRunning = false;
+      pi05LoopGen += 1;
+      syncPi05LoopButton();
+      const ramp = window.__armAbsRamp || {};
+      if (ramp.enabled) {
+        try {
+          const r = await postInfArm({ cancel_abs_ramp: true });
+          window.__armAbsRamp = r;
+          if (infArmProg && r.ok) infArmProg.textContent = t('arm.abs_cancelled');
+        } catch (e) {}
+      }
+      if (reasonHint && infPi05Hint) infPi05Hint.textContent = reasonHint;
+      const st = await fetch('/api/pi05/status').then((x) => x.json()).catch(() => ({}));
+      applyPi05PanelFromPayload(st);
+    }
+    async function runPi05Loop() {
+      const gen = pi05LoopGen;
+      pi05LoopStepN = 0;
+      try {
+        while (pi05LoopRunning && gen === pi05LoopGen) {
+          pi05LoopStepN += 1;
+          const n = pi05LoopStepN;
+          if (infPi05Hint) infPi05Hint.textContent = t('infer.hint_looping', { n: n });
+          pi05StepBusy = true;
+          if (infPi05Step) infPi05Step.disabled = true;
+          let stepRes;
+          try {
+            stepRes = await runInfPi05StepOnce();
+          } finally {
+            pi05StepBusy = false;
+          }
+          if (!pi05LoopRunning || gen !== pi05LoopGen) break;
+          if (!stepRes || !stepRes.ok) {
+            await stopPi05Loop(t('infer.hint_loop_error', {
+              error: (stepRes && (stepRes.error || stepRes.message)) || 'step failed',
+            }));
+            return;
+          }
+          const term = (stepRes.term_flag != null) ? Number(stepRes.term_flag) : 0;
+          const rej = (stepRes.reject_flag != null) ? Number(stepRes.reject_flag) : 0;
+          // term_flag false/≤0.5 → continue send; true → stop before send
+          if (Number.isFinite(term) && term > 0.5) {
+            await stopPi05Loop(t('infer.hint_loop_done', { n: n }));
+            return;
+          }
+          if (Number.isFinite(rej) && rej !== 0) {
+            await stopPi05Loop(t('infer.hint_loop_reject', { n: n }));
+            return;
+          }
+          let sendRes;
+          try {
+            sendRes = await sendInfArmJointsOnce();
+          } catch (e) {
+            await stopPi05Loop(t('infer.hint_loop_error', { error: String(e) }));
+            return;
+          }
+          if (!pi05LoopRunning || gen !== pi05LoopGen) break;
+          if (!sendRes || !sendRes.ok) {
+            await stopPi05Loop(t('infer.hint_loop_error', {
+              error: (sendRes && sendRes.error) || 'send failed',
+            }));
+            return;
+          }
+          if (infPi05Hint) infPi05Hint.textContent = t('infer.hint_loop_wait', { n: n });
+          const waitRes = await waitInfArmArrive(gen, sendRes.duration_s);
+          if (!pi05LoopRunning || gen !== pi05LoopGen) break;
+          if (waitRes.stopped) break;
+          if (!waitRes.ok) {
+            await stopPi05Loop(t('infer.hint_loop_error', { error: waitRes.error || 'wait failed' }));
+            return;
+          }
+        }
+      } catch (e) {
+        await stopPi05Loop(t('infer.hint_loop_error', { error: String(e) }));
+        return;
+      }
+      if (pi05LoopRunning && gen === pi05LoopGen) {
+        await stopPi05Loop(t('infer.hint_loop_stopped', { n: pi05LoopStepN }));
+      } else {
+        const st = await fetch('/api/pi05/status').then((x) => x.json()).catch(() => ({}));
+        applyPi05PanelFromPayload(st);
+      }
+    }
     if (infPi05Step) {
       infPi05Step.addEventListener('click', async () => {
+        if (pi05LoopRunning || pi05StepBusy) return;
         pi05StepBusy = true;
         infPi05Step.disabled = true;
-        if (infPi05Hint) infPi05Hint.textContent = t('infer.hint_stepping');
+        if (infPi05Loop) infPi05Loop.disabled = true;
         try {
-          const r = await postPi05('/api/pi05/step', {});
-          if (r && r.ok && fillInfArmJointsFromNextState(r.next_state)) {
+          const r = await runInfPi05StepOnce();
+          if (r && r.ok) {
             if (infPi05Hint) infPi05Hint.textContent = t('infer.joints_filled');
-            if (infArmProg) infArmProg.textContent = t('infer.joints_filled');
           }
         } finally {
           pi05StepBusy = false;
           const st = await fetch('/api/pi05/status').then((x) => x.json()).catch(() => ({}));
           applyPi05PanelFromPayload(st);
         }
+      });
+    }
+    if (infPi05Loop) {
+      infPi05Loop.addEventListener('click', async () => {
+        if (pi05LoopRunning) {
+          await stopPi05Loop(t('infer.hint_loop_stopped', { n: pi05LoopStepN || 0 }));
+          return;
+        }
+        if (pi05StepBusy) return;
+        pi05LoopRunning = true;
+        pi05LoopGen += 1;
+        syncPi05LoopButton();
+        if (infPi05Step) infPi05Step.disabled = true;
+        await runPi05Loop();
       });
     }
     if (infPi05PromptApply) {
@@ -2483,6 +2657,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     if (infArmSend) {
       infArmSend.addEventListener('click', async () => {
+        if (pi05LoopRunning) {
+          await stopPi05Loop(t('infer.hint_loop_stopped', { n: pi05LoopStepN || 0 }));
+          return;
+        }
         const absRamp = window.__armAbsRamp || {};
         if (absRamp.enabled) {
           try {
@@ -2497,35 +2675,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
           }
           return;
         }
-        const raw = ((infArmJoints && infArmJoints.value) || '').trim();
-        const parts = raw.split(/[,\s;]+/).filter(Boolean);
-        if (parts.length < 6) {
-          if (infArmProg) infArmProg.textContent = t('arm.abs_need6');
-          return;
-        }
-        const joints = parts.slice(0, 6).map((x) => Number(x));
-        if (joints.some((v) => !Number.isFinite(v))) {
-          if (infArmProg) infArmProg.textContent = t('arm.abs_bad');
-          return;
-        }
-        const ref = window.__armReadJoints;
-        if (!Array.isArray(ref) || ref.length < 6) {
-          if (infArmProg) infArmProg.textContent = t('arm.need_read');
-          return;
-        }
-        if (!window.__armWriteAgentId) {
-          if (infArmProg) infArmProg.textContent = t('infer.arm_need_writer');
-          return;
-        }
-        const duration_s = infArmDurSeconds();
         try {
-          const r = await postInfArm({ joints_rad: joints, duration_s: duration_s });
-          if (infArmProg) {
-            infArmProg.textContent = r.ok
-              ? t('arm.abs_ok', { dur: Number(duration_s).toFixed(1) })
-              : t('arm.abs_fail', { error: r.error || JSON.stringify(r) });
-          }
-          if (r.ok) window.__armAbsRamp = r;
+          await sendInfArmJointsOnce();
         } catch (e) {
           if (infArmProg) infArmProg.textContent = t('arm.abs_err', { error: e });
         }
