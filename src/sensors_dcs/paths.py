@@ -89,6 +89,15 @@ def default_dcs_config() -> Path:
     env = (os.environ.get("SENSORS_DCS_CONFIG") or "").strip()
     if env:
         return Path(env).expanduser().resolve()
+    # UI-selected config (Settings → 配置文件) survives restart.
+    try:
+        from sensors_dcs.reexec import read_active_config_path
+
+        active = read_active_config_path()
+        if active is not None:
+            return active
+    except Exception:  # noqa: BLE001
+        pass
     data = user_data_dir() / "configs" / "gello_gripper.yaml"
     if data.is_file():
         return data

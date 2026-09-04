@@ -20,7 +20,8 @@ YAML / boot 失败时仍走同一套 UI（`create_error_app` → `create_viz_app
 
 主页 **设置** 弹窗：
 
-- **鉴权**：当前会话状态、用户/角色、退出登录
+- **鉴权**：当前会话状态、用户/角色、语言切换、退出登录
+- **配置文件**：embody path-picker 浏览选择 DCS YAML →「确认并重启」校验、写入 `active_config.path`、re-exec 前后端
 - **用户管理**（admin）：列表、角色、启用、改密、删除、添加账号（角色 `admin` / `operator` / `guest`）
 
 实现：

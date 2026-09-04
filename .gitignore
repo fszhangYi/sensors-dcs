@@ -32,6 +32,7 @@ NEXT_EPISODE
 # Auth secrets (local user store)
 **/configs/users.json
 **/configs/.auth.json
+**/configs/active_config.path
 
 # Desktop packaging
 release/

@@ -73,6 +73,10 @@ class UserUpdateBody(BaseModel):
     password: str | None = None
 
 
+class ApplyConfigBody(BaseModel):
+    path: str = ""
+
+
 class GelloArmSyncBody(BaseModel):
     enabled: bool
     gello_agent_id: str | None = None
@@ -829,7 +833,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .settings-users-table button,
     .settings-add button,
-    .settings-actions button {
+    .settings-actions button,
+    .settings-config-row button {
       appearance: none;
       border: 1px solid var(--border);
       background: var(--chrome);
@@ -843,12 +848,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .settings-users-table button:hover,
     .settings-add button:hover,
-    .settings-actions button:hover {
+    .settings-actions button:hover,
+    .settings-config-row button:hover {
       border-color: var(--accent);
       background: var(--accent-dim);
     }
+    .settings-config-row button.primary {
+      background: linear-gradient(120deg, var(--accent-dim), color-mix(in srgb, var(--spark-dim) 55%, var(--accent-dim)));
+      border-color: var(--accent);
+    }
     .settings-users-table button:disabled,
-    .settings-add button:disabled {
+    .settings-add button:disabled,
+    .settings-config-row button:disabled {
       opacity: 0.45;
       cursor: not-allowed;
     }
@@ -871,6 +882,174 @@ PREVIEW_HTML = """<!DOCTYPE html>
       min-height: 1.2em;
     }
     .settings-msg.err { color: var(--danger); }
+    .settings-config-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      align-items: center;
+    }
+    .settings-config-row input[type="text"] {
+      flex: 1 1 16rem;
+      min-width: 12rem;
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--input-bg);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.8rem;
+      font-family: ui-monospace, Consolas, monospace;
+      padding: 0.4rem 0.65rem;
+      border-radius: 8px;
+    }
+    .path-picker-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 1200;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: var(--overlay-scrim);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+    }
+    .path-picker-overlay.show { display: flex; }
+    .path-picker-dialog {
+      width: min(920px, 96vw);
+      max-height: 86vh;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--surface);
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+      color: var(--text);
+    }
+    .path-picker-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .path-picker-head h3 { margin: 0; font-size: 0.95rem; }
+    .path-picker-close {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 1.4rem;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0 4px;
+    }
+    .path-picker-root {
+      padding: 8px 16px;
+      font-size: 0.7rem;
+      color: var(--muted);
+    }
+    .path-picker-root code { color: var(--accent); font-size: 0.68rem; }
+    .path-picker-err {
+      margin: 0 16px 8px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 0.72rem;
+      color: #fecaca;
+      background: rgba(80, 20, 28, 0.45);
+      border: 1px solid rgba(248, 113, 113, 0.35);
+    }
+    .path-picker-cascade {
+      display: flex;
+      gap: 0;
+      margin: 0 16px;
+      min-height: 220px;
+      max-height: 42vh;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--input-bg);
+    }
+    .path-picker-loading {
+      padding: 24px;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+    .path-picker-col {
+      list-style: none;
+      margin: 0;
+      padding: 6px 0;
+      min-width: 180px;
+      max-width: 240px;
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+    }
+    .path-picker-col:last-child { border-right: 0; }
+    .path-picker-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      padding: 6px 10px;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+      font: inherit;
+      font-size: 0.76rem;
+      text-align: left;
+      cursor: pointer;
+    }
+    .path-picker-item:hover,
+    .path-picker-item.active { background: rgba(61, 214, 198, 0.12); }
+    .path-picker-item.active { color: var(--accent); }
+    .path-picker-icon { flex-shrink: 0; font-size: 0.72rem; color: var(--muted); width: 1.6rem; }
+    .path-picker-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .path-picker-edit {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin: 12px 16px 0;
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .path-picker-edit input {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--input-bg);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.8rem;
+      font-family: ui-monospace, Consolas, monospace;
+      padding: 0.4rem 0.65rem;
+      border-radius: 8px;
+    }
+    .path-picker-foot {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 14px 16px 16px;
+    }
+    .path-picker-btn {
+      border-radius: 8px;
+      padding: 8px 14px;
+      font: inherit;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+    .path-picker-btn.ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .path-picker-btn.primary {
+      background: var(--accent-dim);
+      border: 1px solid var(--accent);
+      color: var(--text);
+      font-weight: 550;
+    }
     .cam-section {
       min-width: 0;
       min-height: 0;
@@ -1142,6 +1321,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       </div>
       <div class="settings-nav" role="tablist">
         <button type="button" class="active" id="settingsNavAuth" data-settings-tab="auth" data-i18n="settings.nav_auth">鉴权</button>
+        <button type="button" id="settingsNavConfig" data-settings-tab="config" data-i18n="settings.nav_config">配置文件</button>
         <button type="button" id="settingsNavUsers" data-settings-tab="users" data-i18n="settings.nav_users" hidden>用户管理</button>
       </div>
       <div class="settings-body">
@@ -1164,6 +1344,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <button type="button" id="btnSettingsRefreshAuth" data-i18n="settings.refresh">刷新</button>
           </div>
           <p class="settings-msg" id="settingsAuthMsg"></p>
+        </div>
+        <div class="settings-panel" id="settingsPanelConfig" data-settings-panel="config">
+          <p class="hint" data-i18n="settings.config_hint">选择 DCS 启动 YAML（需含 sensors_config 与 agents）。确认后将写入活动配置并重启前后端。</p>
+          <div class="settings-kv">
+            <div><span data-i18n="settings.config_current">当前配置</span><strong id="settingsConfigCurrent">—</strong></div>
+          </div>
+          <div class="settings-config-row">
+            <input type="text" id="settingsConfigPath" data-i18n-placeholder="settings.config_path_ph" placeholder="DCS YAML 绝对路径" autocomplete="off" />
+            <button type="button" id="btnSettingsBrowseConfig" data-i18n="settings.config_browse">浏览…</button>
+            <button type="button" class="primary" id="btnSettingsApplyConfig" data-i18n="settings.config_apply">确认并重启</button>
+          </div>
+          <p class="settings-msg" id="settingsConfigMsg"></p>
         </div>
         <div class="settings-panel" id="settingsPanelUsers" data-settings-panel="users">
           <p class="hint" data-i18n="settings.users_hint">仅管理员可管理本地账号（写入用户数据目录 configs/users.json，勿提交仓库）。</p>
@@ -1201,6 +1393,25 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <p class="settings-msg" id="settingsUsersMsg"></p>
         </div>
       </div>
+    </div>
+  </div>
+  <div class="path-picker-overlay" id="pathPickerOverlay" role="presentation">
+    <div class="path-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="pathPickerTitle" id="pathPickerDialog">
+      <header class="path-picker-head">
+        <h3 id="pathPickerTitle" data-i18n="pathPicker.title">选择配置文件</h3>
+        <button type="button" class="path-picker-close" id="pathPickerClose" data-i18n-attr="aria-label" data-i18n="pathPicker.closeAria" aria-label="关闭">×</button>
+      </header>
+      <div class="path-picker-root"><span data-i18n="pathPicker.root">根目录：</span><code id="pathPickerRootCode"></code></div>
+      <div class="path-picker-err" id="pathPickerErr" hidden></div>
+      <div class="path-picker-cascade" id="pathPickerCascade" data-i18n-attr="aria-label" data-i18n="pathPicker.cascade" aria-label="路径级联选择"></div>
+      <label class="path-picker-edit">
+        <span data-i18n="pathPicker.pathEdit">路径（可手动修改）</span>
+        <input type="text" id="pathPickerDraft" data-i18n-placeholder="pathPicker.filePlaceholder" placeholder="文件绝对路径" />
+      </label>
+      <footer class="path-picker-foot">
+        <button type="button" class="path-picker-btn ghost" id="pathPickerCancel" data-i18n="pathPicker.cancel">取消</button>
+        <button type="button" class="path-picker-btn primary" id="pathPickerConfirm" data-i18n="pathPicker.confirm">确认</button>
+      </footer>
     </div>
   </div>
   <script>
@@ -1569,19 +1780,33 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const btnSettings = document.getElementById('btnSettings');
     const btnSettingsClose = document.getElementById('btnSettingsClose');
     const settingsNavAuth = document.getElementById('settingsNavAuth');
+    const settingsNavConfig = document.getElementById('settingsNavConfig');
     const settingsNavUsers = document.getElementById('settingsNavUsers');
     const settingsPanelAuth = document.getElementById('settingsPanelAuth');
+    const settingsPanelConfig = document.getElementById('settingsPanelConfig');
     const settingsPanelUsers = document.getElementById('settingsPanelUsers');
     const settingsAuthStatus = document.getElementById('settingsAuthStatus');
     const settingsAuthUser = document.getElementById('settingsAuthUser');
     const settingsAuthRole = document.getElementById('settingsAuthRole');
     const settingsAuthMsg = document.getElementById('settingsAuthMsg');
+    const settingsConfigMsg = document.getElementById('settingsConfigMsg');
+    const settingsConfigCurrent = document.getElementById('settingsConfigCurrent');
+    const settingsConfigPath = document.getElementById('settingsConfigPath');
     const settingsUsersMsg = document.getElementById('settingsUsersMsg');
     const settingsUsersBody = document.getElementById('settingsUsersBody');
     const settingsUsersAdmin = document.getElementById('settingsUsersAdmin');
     const settingsUsersNonAdmin = document.getElementById('settingsUsersNonAdmin');
     let settingsMe = null;
     let settingsBusy = false;
+    let settingsRoots = {};
+    let pathPicker = {
+      columns: [],
+      activePath: '',
+      draft: '',
+      rootKey: 'configs',
+      rootPath: '',
+      pathKind: 'file',
+    };
 
     function setSettingsMsg(el, text, isErr) {
       if (!el) return;
@@ -1590,10 +1815,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
 
     function switchSettingsTab(name) {
-      const which = name === 'users' ? 'users' : 'auth';
+      const which = (name === 'users' || name === 'config') ? name : 'auth';
       if (settingsNavAuth) settingsNavAuth.classList.toggle('active', which === 'auth');
+      if (settingsNavConfig) settingsNavConfig.classList.toggle('active', which === 'config');
       if (settingsNavUsers) settingsNavUsers.classList.toggle('active', which === 'users');
       if (settingsPanelAuth) settingsPanelAuth.classList.toggle('active', which === 'auth');
+      if (settingsPanelConfig) settingsPanelConfig.classList.toggle('active', which === 'config');
       if (settingsPanelUsers) settingsPanelUsers.classList.toggle('active', which === 'users');
     }
 
@@ -1767,16 +1994,276 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
     }
 
+    async function refreshSettingsConfig() {
+      setSettingsMsg(settingsConfigMsg, '');
+      try {
+        const j = await fetch('/api/runtime/config', { credentials: 'same-origin', cache: 'no-store' }).then((r) => r.json());
+        if (!j.ok) {
+          setSettingsMsg(settingsConfigMsg, j.error || 'config error', true);
+          return j;
+        }
+        settingsRoots = j.roots || {};
+        if (settingsConfigCurrent) settingsConfigCurrent.textContent = j.path || '—';
+        if (settingsConfigPath && !settingsConfigPath.value) {
+          settingsConfigPath.value = j.path || '';
+        } else if (settingsConfigPath && j.path && !settingsConfigPath.dataset.touched) {
+          settingsConfigPath.value = j.path;
+        }
+        return j;
+      } catch (e) {
+        setSettingsMsg(settingsConfigMsg, String(e), true);
+        return null;
+      }
+    }
+
+    function relParts(root, absPath) {
+      const r = String(root || '').replace(/[/\\\\]+$/g, '');
+      const p = String(absPath || '').replace(/[/\\\\]+$/g, '');
+      if (!p || p === r) return [];
+      const slash = r.indexOf('\\\\') >= 0 ? '\\\\' : '/';
+      const prefix = r.endsWith('/') || r.endsWith('\\\\') ? r : (r + slash);
+      if (!(p === r || p.startsWith(prefix))) return [];
+      return p.slice(r.length).split(/[/\\\\]/).filter(Boolean);
+    }
+
+    async function fetchFsChildren(rootKey, path, rootPath) {
+      const qs = new URLSearchParams({ root: rootKey || 'configs' });
+      if (path) qs.set('path', path);
+      if (rootPath) qs.set('rootPath', rootPath);
+      const r = await fetch('/api/fs/children?' + qs.toString(), { credentials: 'same-origin', cache: 'no-store' });
+      const j = await r.json();
+      if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      return j;
+    }
+
+    async function buildPickerColumns(rootKey, root, targetPath) {
+      const rootRes = await fetchFsChildren(rootKey, root, root);
+      const columns = [rootRes.entries || []];
+      let selectedPath = rootRes.path;
+      const parts = relParts(root, targetPath);
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        const parentCol = columns[columns.length - 1] || [];
+        const hit = parentCol.find((e) => e.name === part && e.isDir);
+        if (!hit) break;
+        const childRes = await fetchFsChildren(rootKey, hit.path, root);
+        columns.push(childRes.entries || []);
+        selectedPath = childRes.path;
+      }
+      if (targetPath && String(targetPath).startsWith(String(root))) {
+        selectedPath = targetPath;
+      }
+      return { columns, selectedPath };
+    }
+
+    function renderPathPicker() {
+      const cascade = document.getElementById('pathPickerCascade');
+      const draftEl = document.getElementById('pathPickerDraft');
+      const rootCode = document.getElementById('pathPickerRootCode');
+      const errEl = document.getElementById('pathPickerErr');
+      if (rootCode) rootCode.textContent = pathPicker.rootPath || '';
+      if (draftEl) draftEl.value = pathPicker.draft || '';
+      if (!cascade) return;
+      cascade.innerHTML = '';
+      if (!pathPicker.columns.length) {
+        const loading = document.createElement('div');
+        loading.className = 'path-picker-loading';
+        loading.textContent = t('pathPicker.loading');
+        cascade.appendChild(loading);
+        return;
+      }
+      pathPicker.columns.forEach((col, colIndex) => {
+        const ul = document.createElement('ul');
+        ul.className = 'path-picker-col';
+        (col || []).forEach((entry) => {
+          const li = document.createElement('li');
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          const active = entry.path === pathPicker.activePath || entry.path === pathPicker.draft;
+          btn.className = 'path-picker-item' + (active ? ' active' : '') + (entry.isDir ? ' dir' : ' file');
+          const icon = document.createElement('span');
+          icon.className = 'path-picker-icon';
+          icon.textContent = entry.isDir ? '[D]' : '[F]';
+          const name = document.createElement('span');
+          name.className = 'path-picker-name';
+          name.textContent = entry.name;
+          btn.appendChild(icon);
+          btn.appendChild(name);
+          btn.addEventListener('click', () => onPathPickerEntry(colIndex, entry));
+          li.appendChild(btn);
+          ul.appendChild(li);
+        });
+        cascade.appendChild(ul);
+      });
+      if (errEl) {
+        if (pathPicker.err) {
+          errEl.hidden = false;
+          errEl.textContent = pathPicker.err;
+        } else {
+          errEl.hidden = true;
+          errEl.textContent = '';
+        }
+      }
+    }
+
+    async function onPathPickerEntry(colIndex, entry) {
+      pathPicker.err = '';
+      pathPicker.activePath = entry.path;
+      pathPicker.draft = entry.path;
+      const nextCols = pathPicker.columns.slice(0, colIndex + 1);
+      if (entry.isDir) {
+        try {
+          const res = await fetchFsChildren(pathPicker.rootKey, entry.path, pathPicker.rootPath);
+          nextCols.push(res.entries || []);
+          pathPicker.columns = nextCols;
+        } catch (e) {
+          pathPicker.err = String(e.message || e);
+          pathPicker.columns = nextCols;
+        }
+        renderPathPicker();
+        return;
+      }
+      if (pathPicker.pathKind === 'file') {
+        pathPicker.columns = nextCols;
+      }
+      renderPathPicker();
+    }
+
+    async function openPathPicker() {
+      const overlay = document.getElementById('pathPickerOverlay');
+      if (!overlay) return;
+      if (!Object.keys(settingsRoots).length) {
+        await refreshSettingsConfig();
+      }
+      const seed = (settingsConfigPath && settingsConfigPath.value) || (settingsConfigCurrent && settingsConfigCurrent.textContent) || '';
+      let rootKey = 'configs';
+      let rootPath = settingsRoots.configs || settingsRoots.workspace || '';
+      if (settingsRoots.autodl && seed && seed.indexOf('/root/autodl-tmp') === 0) {
+        rootKey = 'autodl';
+        rootPath = settingsRoots.autodl;
+      } else if (settingsRoots.user && seed && seed.indexOf(settingsRoots.user) === 0) {
+        rootKey = 'user';
+        rootPath = settingsRoots.user;
+      } else if (settingsRoots.workspace && seed && seed.indexOf(settingsRoots.workspace) === 0) {
+        rootKey = 'workspace';
+        rootPath = settingsRoots.workspace;
+      } else if (settingsRoots.home && seed && seed.indexOf(settingsRoots.home) === 0) {
+        rootKey = 'home';
+        rootPath = settingsRoots.home;
+      }
+      // Prefer browsing from parent of current file when possible.
+      let browseAnchor = rootPath;
+      if (seed) {
+        const slash = seed.lastIndexOf('/');
+        const bslash = seed.lastIndexOf('\\\\');
+        const cut = Math.max(slash, bslash);
+        if (cut > 0) browseAnchor = seed.slice(0, cut);
+      }
+      pathPicker.rootKey = rootKey;
+      pathPicker.rootPath = browseAnchor || rootPath;
+      pathPicker.pathKind = 'file';
+      pathPicker.draft = seed || pathPicker.rootPath;
+      pathPicker.activePath = pathPicker.draft;
+      pathPicker.columns = [];
+      pathPicker.err = '';
+      overlay.classList.add('show');
+      renderPathPicker();
+      try {
+        const built = await buildPickerColumns(pathPicker.rootKey, pathPicker.rootPath, pathPicker.draft);
+        pathPicker.columns = built.columns;
+        pathPicker.activePath = built.selectedPath;
+        if (!pathPicker.draft) pathPicker.draft = built.selectedPath;
+        renderPathPicker();
+      } catch (e) {
+        pathPicker.err = String(e.message || e);
+        renderPathPicker();
+      }
+    }
+
+    function closePathPicker() {
+      const overlay = document.getElementById('pathPickerOverlay');
+      if (overlay) overlay.classList.remove('show');
+    }
+
+    async function applySelectedConfig() {
+      const path = ((settingsConfigPath && settingsConfigPath.value) || '').trim();
+      if (!path) {
+        setSettingsMsg(settingsConfigMsg, t('settings.config_need_path'), true);
+        return;
+      }
+      if (!confirm(t('settings.config_confirm', { path: path }))) return;
+      setSettingsMsg(settingsConfigMsg, t('settings.config_restarting'));
+      const btn = document.getElementById('btnSettingsApplyConfig');
+      if (btn) btn.disabled = true;
+      try {
+        const r = await fetch('/api/runtime/apply-config', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: path }),
+        });
+        const j = await r.json();
+        if (!r.ok || !j.ok) {
+          setSettingsMsg(settingsConfigMsg, j.error || ('HTTP ' + r.status), true);
+          if (btn) btn.disabled = false;
+          return;
+        }
+        setSettingsMsg(settingsConfigMsg, t('settings.config_restarting'));
+        // Wait for backend to come back, then reload UI.
+        const started = Date.now();
+        const poll = async () => {
+          if (Date.now() - started > 45000) {
+            setSettingsMsg(settingsConfigMsg, t('settings.config_restart_timeout'), true);
+            if (btn) btn.disabled = false;
+            return;
+          }
+          try {
+            await new Promise((res) => setTimeout(res, 800));
+            const h = await fetch('/api/health', { cache: 'no-store' });
+            if (h.ok) {
+              location.reload();
+              return;
+            }
+          } catch (e) {}
+          poll();
+        };
+        setTimeout(poll, 1200);
+      } catch (e) {
+        // Connection drop during restart is expected — keep polling.
+        setSettingsMsg(settingsConfigMsg, t('settings.config_restarting'));
+        const started = Date.now();
+        const poll = async () => {
+          if (Date.now() - started > 45000) {
+            setSettingsMsg(settingsConfigMsg, t('settings.config_restart_timeout'), true);
+            if (btn) btn.disabled = false;
+            return;
+          }
+          try {
+            await new Promise((res) => setTimeout(res, 800));
+            const h = await fetch('/api/health', { cache: 'no-store' });
+            if (h.ok) {
+              location.reload();
+              return;
+            }
+          } catch (err) {}
+          poll();
+        };
+        setTimeout(poll, 1200);
+      }
+    }
+
     async function openSettings() {
       if (!settingsModal) return;
       switchSettingsTab('auth');
       settingsModal.classList.add('show');
       await refreshSettingsAuth();
+      await refreshSettingsConfig();
       await refreshSettingsUsers();
     }
 
     function closeSettings() {
       if (settingsModal) settingsModal.classList.remove('show');
+      closePathPicker();
     }
 
     if (btnSettings) btnSettings.addEventListener('click', () => openSettings());
@@ -1787,11 +2274,61 @@ PREVIEW_HTML = """<!DOCTYPE html>
       });
     }
     if (settingsNavAuth) settingsNavAuth.addEventListener('click', () => switchSettingsTab('auth'));
+    if (settingsNavConfig) {
+      settingsNavConfig.addEventListener('click', async () => {
+        switchSettingsTab('config');
+        await refreshSettingsConfig();
+      });
+    }
     if (settingsNavUsers) {
       settingsNavUsers.addEventListener('click', async () => {
         switchSettingsTab('users');
         await refreshSettingsAuth();
         await refreshSettingsUsers();
+      });
+    }
+    if (settingsConfigPath) {
+      settingsConfigPath.addEventListener('input', () => {
+        settingsConfigPath.dataset.touched = '1';
+      });
+    }
+    const btnSettingsBrowseConfig = document.getElementById('btnSettingsBrowseConfig');
+    if (btnSettingsBrowseConfig) {
+      btnSettingsBrowseConfig.addEventListener('click', () => openPathPicker());
+    }
+    const btnSettingsApplyConfig = document.getElementById('btnSettingsApplyConfig');
+    if (btnSettingsApplyConfig) {
+      btnSettingsApplyConfig.addEventListener('click', () => applySelectedConfig());
+    }
+    const pathPickerOverlay = document.getElementById('pathPickerOverlay');
+    const pathPickerDialog = document.getElementById('pathPickerDialog');
+    const pathPickerClose = document.getElementById('pathPickerClose');
+    const pathPickerCancel = document.getElementById('pathPickerCancel');
+    const pathPickerConfirm = document.getElementById('pathPickerConfirm');
+    const pathPickerDraft = document.getElementById('pathPickerDraft');
+    if (pathPickerOverlay) {
+      pathPickerOverlay.addEventListener('click', (e) => {
+        if (e.target === pathPickerOverlay) closePathPicker();
+      });
+    }
+    if (pathPickerDialog) {
+      pathPickerDialog.addEventListener('click', (e) => e.stopPropagation());
+    }
+    if (pathPickerClose) pathPickerClose.addEventListener('click', closePathPicker);
+    if (pathPickerCancel) pathPickerCancel.addEventListener('click', closePathPicker);
+    if (pathPickerDraft) {
+      pathPickerDraft.addEventListener('input', () => {
+        pathPicker.draft = pathPickerDraft.value;
+      });
+    }
+    if (pathPickerConfirm) {
+      pathPickerConfirm.addEventListener('click', () => {
+        const val = (pathPicker.draft || (pathPickerDraft && pathPickerDraft.value) || '').trim();
+        if (settingsConfigPath) {
+          settingsConfigPath.value = val;
+          settingsConfigPath.dataset.touched = '1';
+        }
+        closePathPicker();
       });
     }
     const btnSettingsRefreshAuth = document.getElementById('btnSettingsRefreshAuth');
@@ -3000,6 +3537,69 @@ def create_viz_app(
         except ValueError as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
         return JSONResponse({"ok": True})
+
+    @app.get("/api/fs/roots")
+    async def fs_roots() -> dict[str, Any]:
+        from sensors_dcs.fs_browse import browse_roots
+
+        return {"ok": True, "roots": browse_roots()}
+
+    @app.get("/api/fs/children")
+    async def fs_children(
+        root: str = "configs",
+        path: str = "",
+        rootPath: str | None = None,
+    ) -> JSONResponse:
+        from sensors_dcs.fs_browse import list_children
+
+        try:
+            payload = list_children(root, path, rootPath)
+        except (ValueError, PermissionError, NotADirectoryError, OSError) as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        return JSONResponse(payload)
+
+    @app.get("/api/runtime/config")
+    async def runtime_config() -> dict[str, Any]:
+        from sensors_dcs.fs_browse import browse_roots
+        from sensors_dcs.paths import default_dcs_config
+
+        path = config_path or str(default_dcs_config())
+        return {"ok": True, "path": path, "roots": browse_roots()}
+
+    @app.post("/api/runtime/apply-config")
+    async def runtime_apply_config(
+        request: Request, req: ApplyConfigBody
+    ) -> JSONResponse:
+        from sensors_dcs.reexec import (
+            schedule_reexec,
+            validate_dcs_config_file,
+            write_active_config_path,
+        )
+
+        # Require login when auth is on (any authenticated user may switch config).
+        if auth_enabled() and not is_authenticated(request.headers.get("cookie")):
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "unauthorized",
+                    "authRequired": True,
+                    "loginPath": "/login",
+                },
+                status_code=401,
+            )
+        try:
+            path = validate_dcs_config_file(req.path)
+            write_active_config_path(path)
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        schedule_reexec(path, shutdown=shutdown)
+        return JSONResponse(
+            {
+                "ok": True,
+                "restarting": True,
+                "path": str(path),
+            }
+        )
 
     @app.get("/api/status")
     async def status() -> dict[str, Any]:

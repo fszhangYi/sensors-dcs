@@ -1312,6 +1312,8 @@ class Orchestrator:
         """
         import traceback
 
+        from sensors_dcs.paths import default_dcs_config
+
         rt = self.cfg.runtime
         # Locked until agents start successfully (or permanently on open failure).
         boot_box: dict[str, Any] = {"error": "agents starting…"}
@@ -1330,6 +1332,7 @@ class Orchestrator:
             shutdown=self.request_shutdown,
             boot_box=boot_box,
             postprocess_save_dir=str(self.recorder.save_dir),
+            config_path=str(default_dcs_config()),
         )
         self._server = uvicorn.Server(
             uvicorn.Config(
