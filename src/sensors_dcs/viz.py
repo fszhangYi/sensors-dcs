@@ -671,7 +671,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .pp-row input.wide { flex: 1 1 16rem; min-width: 12rem; font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem; }
     .pp-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-    pre#ppLog, pre#raw {
+    pre#ppLog, pre#raw, pre#infRaw {
       margin: 0;
       padding: 0.65rem 0.85rem;
       overflow: auto;
@@ -684,11 +684,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
       font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
     }
     pre#ppLog { max-height: 28vh; min-height: 5rem; white-space: pre-wrap; }
-    pre#raw {
+    pre#raw, pre#infRaw {
       flex-shrink: 0;
       width: 100%;
       max-height: 22vh;
       min-height: 4.5rem;
+    }
+    .inf-banner {
+      margin: 0 0 0.55rem;
+      padding: 0.45rem 0.65rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--panel, rgba(18, 26, 38, 0.55));
+      color: var(--muted);
+      font-size: 0.82rem;
     }
     .agent-vals {
       display: flex; flex-wrap: wrap; gap: 0.35rem 0.55rem;
@@ -724,7 +733,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       gap: 0.75rem;
       align-items: stretch;
     }
-    #agents {
+    #agents, #infAgents {
       min-width: 0;
       min-height: 0;
       overflow-y: auto;
@@ -1015,7 +1024,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       color: var(--muted);
       font-weight: 600;
     }
-    #cam-grid {
+    #cam-grid, #infCamGrid {
       flex: 1;
       min-height: 0;
       display: grid;
@@ -1090,6 +1099,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
   <nav class="tabs" role="tablist">
     <button type="button" class="tab active" id="tabBtnHome" data-tab="home" role="tab" aria-selected="true" data-i18n="tab.home">主页</button>
     <button type="button" class="tab" id="tabBtnCollect" data-tab="collect" role="tab" aria-selected="false" data-i18n="tab.collect">数据采集</button>
+    <button type="button" class="tab" id="tabBtnInfer" data-tab="infer" role="tab" aria-selected="false" data-i18n="tab.infer">推理</button>
     <button type="button" class="tab" id="tabBtnPost" data-tab="post" role="tab" aria-selected="false" data-i18n="tab.post">数据后处理</button>
     <button type="button" class="tab" id="tabBtnSensors" data-tab="sensors" role="tab" aria-selected="false" data-i18n="tab.sensors">传感器状态</button>
   </nav>
@@ -1132,6 +1142,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <p data-i18n="home.cta_body">从下方进入采集或后处理；右上角「设置」可切换语言与管理账号。</p>
           <div class="pp-actions">
             <button type="button" class="primary" id="btnHomeCollect" data-i18n="home.cta_collect">进入数据采集</button>
+            <button type="button" id="btnHomeInfer" data-i18n="home.cta_infer">进入推理</button>
             <button type="button" id="btnHomePost" data-i18n="home.cta_post">进入数据后处理</button>
             <button type="button" id="btnHomeSensors" data-i18n="home.cta_sensors">传感器状态</button>
           </div>
@@ -1194,6 +1205,46 @@ PREVIEW_HTML = """<!DOCTYPE html>
     </div>
     <pre id="raw">{}</pre>
     </div>
+
+    <div class="tab-panel" id="tab-infer" role="tabpanel">
+    <p class="inf-banner" data-i18n="infer.banner">推理页（与采集共用录制后端；首版不控臂）。</p>
+    <div class="actions">
+      <button type="button" class="primary" id="infBtnStart" data-i18n="btn.start">开始</button>
+      <button type="button" id="infBtnStop" disabled data-i18n="btn.stop">结束</button>
+      <button type="button" class="discard" id="infBtnDiscard" disabled data-i18n="btn.discard">作废</button>
+      <label class="quick-collect" data-i18n-title="quick.title" title="结束或作废后自动执行后处理三步（参数见「数据后处理」Tab）">
+        <input type="checkbox" id="infChkQuickCollect" />
+        <span data-i18n="quick.label">快速采集</span>
+      </label>
+      <label class="quick-collect" data-i18n-title="async.title" title="结束/作废后后台落盘；未写完也可开始下一集">
+        <input type="checkbox" id="infChkAsyncFlush" />
+        <span data-i18n="async.label">异步落盘</span>
+      </label>
+      <span class="hint" id="infRunHint" data-i18n="hint.idle">空闲 — 点「开始」录制当前 episode</span>
+    </div>
+    <div class="save-path">
+      <label for="infSaveDirInput" data-i18n="save.label">保存路径</label>
+      <input type="text" id="infSaveDirInput" data-i18n-placeholder="save.placeholder" placeholder="留空则沿用当前路径" />
+      <button type="button" id="infBtnSaveDir" data-i18n="btn.apply">应用</button>
+    </div>
+    <div class="meta">
+      <div><span data-i18n="meta.conn">连接：</span><strong id="infStatus" class="st-connecting">connecting…</strong></div>
+      <div><span data-i18n="meta.rec">录制：</span><strong id="infRecState">idle</strong></div>
+      <div><span data-i18n="meta.save">保存路径：</span><strong id="infSaveDir">—</strong></div>
+      <div><span data-i18n="meta.episode">episode：</span><strong id="infEpisode">—</strong></div>
+      <div><span data-i18n="meta.hz">前端 hz：</span><strong id="infHzFront">—</strong></div>
+      <div><span data-i18n="meta.written">已写帧：</span><strong id="infWritten">0</strong></div>
+    </div>
+    <div class="content-row">
+      <section class="cam-section">
+        <h2 data-i18n="cam.title">Camera preview · 2×2</h2>
+        <div id="infCamGrid"></div>
+      </section>
+      <div id="infAgents"></div>
+    </div>
+    <pre id="infRaw">{}</pre>
+    </div>
+
 
     <div class="tab-panel" id="tab-post" role="tabpanel">
       <div class="pp-grid">
@@ -1590,11 +1641,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
     const agentsEl = document.getElementById('agents');
     const camGridEl = document.getElementById('cam-grid');
+    const infAgentsEl = document.getElementById('infAgents');
+    const infCamGridEl = document.getElementById('infCamGrid');
     const statusEl = document.getElementById('status');
+    const infStatusEl = document.getElementById('infStatus');
     let exitRequested = false;
     function setConnStatus(text, cls) {
-      statusEl.textContent = text;
-      statusEl.className = cls || '';
+      [statusEl, infStatusEl].forEach((el) => {
+        if (!el) return;
+        el.textContent = text;
+        el.className = cls || '';
+      });
       // After「安全退出」, WS reconnect shows connecting — force a full page reload.
       if (exitRequested && cls === 'st-connecting') {
         try {
@@ -1615,37 +1672,78 @@ PREVIEW_HTML = """<!DOCTYPE html>
     appModal.addEventListener('click', (e) => {
       if (e.target === appModal) appModal.classList.remove('show');
     });
-    const recStateEl = document.getElementById('recState');
-    const saveDirEl = document.getElementById('saveDir');
-    const episodeEl = document.getElementById('episode');
-    const writtenEl = document.getElementById('written');
-    const hzFrontEl = document.getElementById('hzFront');
-    const rawEl = document.getElementById('raw');
-    const btnStart = document.getElementById('btnStart');
-    const btnStop = document.getElementById('btnStop');
-    const btnDiscard = document.getElementById('btnDiscard');
-    const btnSaveDir = document.getElementById('btnSaveDir');
-    const saveDirInput = document.getElementById('saveDirInput');
-    const runHint = document.getElementById('runHint');
-    const chkQuickCollect = document.getElementById('chkQuickCollect');
-    const chkAsyncFlush = document.getElementById('chkAsyncFlush');
-    const LS_QUICK = 'dcs.quickCollect';
-    const LS_ASYNC = 'dcs.asyncFlush';
+    function bindRecordPanel(ids, lsQuick, lsAsync) {
+      return {
+        recStateEl: document.getElementById(ids.recState),
+        saveDirEl: document.getElementById(ids.saveDir),
+        episodeEl: document.getElementById(ids.episode),
+        writtenEl: document.getElementById(ids.written),
+        hzFrontEl: document.getElementById(ids.hzFront),
+        rawEl: document.getElementById(ids.raw),
+        btnStart: document.getElementById(ids.btnStart),
+        btnStop: document.getElementById(ids.btnStop),
+        btnDiscard: document.getElementById(ids.btnDiscard),
+        btnSaveDir: document.getElementById(ids.btnSaveDir),
+        saveDirInput: document.getElementById(ids.saveDirInput),
+        runHint: document.getElementById(ids.runHint),
+        chkQuickCollect: document.getElementById(ids.chkQuickCollect),
+        chkAsyncFlush: document.getElementById(ids.chkAsyncFlush),
+        lsQuick: lsQuick,
+        lsAsync: lsAsync,
+      };
+    }
+    const collectRec = bindRecordPanel({
+      recState: 'recState', saveDir: 'saveDir', episode: 'episode', written: 'written',
+      hzFront: 'hzFront', raw: 'raw',
+      btnStart: 'btnStart', btnStop: 'btnStop', btnDiscard: 'btnDiscard',
+      btnSaveDir: 'btnSaveDir', saveDirInput: 'saveDirInput', runHint: 'runHint',
+      chkQuickCollect: 'chkQuickCollect', chkAsyncFlush: 'chkAsyncFlush',
+    }, 'dcs.quickCollect', 'dcs.asyncFlush');
+    const inferRec = bindRecordPanel({
+      recState: 'infRecState', saveDir: 'infSaveDir', episode: 'infEpisode', written: 'infWritten',
+      hzFront: 'infHzFront', raw: 'infRaw',
+      btnStart: 'infBtnStart', btnStop: 'infBtnStop', btnDiscard: 'infBtnDiscard',
+      btnSaveDir: 'infBtnSaveDir', saveDirInput: 'infSaveDirInput', runHint: 'infRunHint',
+      chkQuickCollect: 'infChkQuickCollect', chkAsyncFlush: 'infChkAsyncFlush',
+    }, 'dcs.inf.quickCollect', 'dcs.inf.asyncFlush');
+    const recordPanels = [collectRec, inferRec].filter((p) => p && p.btnStart);
+    // Legacy aliases (collect) used by exit / arm hints elsewhere.
+    const recStateEl = collectRec.recStateEl;
+    const saveDirEl = collectRec.saveDirEl;
+    const episodeEl = collectRec.episodeEl;
+    const writtenEl = collectRec.writtenEl;
+    const hzFrontEl = collectRec.hzFrontEl;
+    const rawEl = collectRec.rawEl;
+    const btnStart = collectRec.btnStart;
+    const btnStop = collectRec.btnStop;
+    const btnDiscard = collectRec.btnDiscard;
+    const btnSaveDir = collectRec.btnSaveDir;
+    const saveDirInput = collectRec.saveDirInput;
+    const runHint = collectRec.runHint;
+    const chkQuickCollect = collectRec.chkQuickCollect;
+    const chkAsyncFlush = collectRec.chkAsyncFlush;
+    const LS_QUICK = collectRec.lsQuick;
+    const LS_ASYNC = collectRec.lsAsync;
     const LS_PP = 'dcs.postprocess';
-    try {
-      chkQuickCollect.checked = localStorage.getItem(LS_QUICK) === '1';
-      if (chkAsyncFlush && localStorage.getItem(LS_ASYNC) === '1') chkAsyncFlush.checked = true;
-    } catch (e) {}
-    chkQuickCollect.addEventListener('change', () => {
+    function wireRecordChecks(panel) {
+      if (!panel) return;
       try {
-        localStorage.setItem(LS_QUICK, chkQuickCollect.checked ? '1' : '0');
+        if (panel.chkQuickCollect) {
+          panel.chkQuickCollect.checked = localStorage.getItem(panel.lsQuick) === '1';
+          panel.chkQuickCollect.addEventListener('change', () => {
+            try { localStorage.setItem(panel.lsQuick, panel.chkQuickCollect.checked ? '1' : '0'); } catch (e) {}
+          });
+        }
+        if (panel.chkAsyncFlush) {
+          if (localStorage.getItem(panel.lsAsync) === '1') panel.chkAsyncFlush.checked = true;
+          panel.chkAsyncFlush.addEventListener('change', () => {
+            try { localStorage.setItem(panel.lsAsync, panel.chkAsyncFlush.checked ? '1' : '0'); } catch (e) {}
+          });
+        }
       } catch (e) {}
-    });
-    if (chkAsyncFlush) {
-      chkAsyncFlush.addEventListener('change', () => {
-        try { localStorage.setItem(LS_ASYNC, chkAsyncFlush.checked ? '1' : '0'); } catch (e) {}
-      });
-    }    let lastMsgT = null, emaFront = null;
+    }
+    recordPanels.forEach(wireRecordChecks);
+    let lastMsgT = null, emaFront = null;
     let busy = false;
     const backState = {};
     const CAM_SLOTS = [
@@ -1654,14 +1752,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
       { key: 'middle', label: 'Middle' },
       { key: 'wrist', label: 'Wrist' },
     ];
-    const camCells = {};
+    const camCellsByScope = { collect: {}, infer: {} };
 
-    function initCamGrid() {
-      camGridEl.innerHTML = '';
+    function initCamGridInto(gridEl, scope) {
+      if (!gridEl) return;
+      const cells = camCellsByScope[scope];
+      gridEl.innerHTML = '';
       CAM_SLOTS.forEach((slot) => {
         const cell = document.createElement('div');
         cell.className = 'cam-cell empty';
-        cell.id = 'cam-slot-' + slot.key;
+        cell.id = (scope === 'infer' ? 'inf-cam-slot-' : 'cam-slot-') + slot.key;
         cell.innerHTML =
           '<div class="cam-title">' +
             '<span>' + slot.label + '</span>' +
@@ -1670,66 +1770,92 @@ PREVIEW_HTML = """<!DOCTYPE html>
           '</div>' +
           '<img alt="' + slot.label + '" />' +
           '<div class="cam-sub k-sub">empty</div>';
-        camGridEl.appendChild(cell);
-        camCells[slot.key] = cell;
+        gridEl.appendChild(cell);
+        cells[slot.key] = cell;
       });
     }
-    initCamGrid();
+    initCamGridInto(camGridEl, 'collect');
+    initCamGridInto(infCamGridEl, 'infer');
+    // Back-compat alias used by renderCamSlot helpers that still look at camCells.
+    const camCells = camCellsByScope.collect;
 
-    function applyRecordUi(rec) {
-      if (!rec) return;
-      window.__lastRecordStatus = rec;
+    function applyRecordUiToPanel(panel, rec) {
+      if (!panel || !rec) return;
       const st = rec.state || 'idle';
       const flushN = rec.flushing_count || 0;
-      recStateEl.textContent = flushN > 0 && st === 'idle'
-        ? (st + ' · flush×' + flushN)
-        : st;
-      saveDirEl.textContent = rec.save_dir || '—';
-      if (document.activeElement !== saveDirInput) {
-        saveDirInput.placeholder = rec.save_dir || t('save.placeholder');
+      if (panel.recStateEl) {
+        panel.recStateEl.textContent = flushN > 0 && st === 'idle'
+          ? (st + ' · flush×' + flushN)
+          : st;
       }
-      episodeEl.textContent = (rec.episode_index == null) ? '—' : String(rec.episode_index);
-      writtenEl.textContent = String(rec.written == null ? 0 : rec.written);
+      if (panel.saveDirEl) panel.saveDirEl.textContent = rec.save_dir || '—';
+      if (panel.saveDirInput && document.activeElement !== panel.saveDirInput) {
+        panel.saveDirInput.placeholder = rec.save_dir || t('save.placeholder');
+      }
+      if (panel.episodeEl) {
+        panel.episodeEl.textContent = (rec.episode_index == null) ? '—' : String(rec.episode_index);
+      }
+      if (panel.writtenEl) {
+        panel.writtenEl.textContent = String(rec.written == null ? 0 : rec.written);
+      }
       const recBusy = st === 'recording' || st === 'flushing';
-      saveDirInput.disabled = recBusy;
-      btnSaveDir.disabled = recBusy;
+      if (panel.saveDirInput) panel.saveDirInput.disabled = recBusy;
+      if (panel.btnSaveDir) panel.btnSaveDir.disabled = recBusy;
       if (busy) return;
       if (st === 'recording') {
-        btnStart.disabled = true;
-        btnStop.disabled = false;
-        btnDiscard.disabled = false;
-        runHint.textContent = t('hint.recording');
+        if (panel.btnStart) panel.btnStart.disabled = true;
+        if (panel.btnStop) panel.btnStop.disabled = false;
+        if (panel.btnDiscard) panel.btnDiscard.disabled = false;
+        if (panel.runHint) panel.runHint.textContent = t('hint.recording');
       } else if (st === 'flushing') {
-        btnStart.disabled = true;
-        btnStop.disabled = true;
-        btnDiscard.disabled = true;
-        runHint.textContent = t('hint.flushing');
+        if (panel.btnStart) panel.btnStart.disabled = true;
+        if (panel.btnStop) panel.btnStop.disabled = true;
+        if (panel.btnDiscard) panel.btnDiscard.disabled = true;
+        if (panel.runHint) panel.runHint.textContent = t('hint.flushing');
       } else {
-        btnStart.disabled = false;
-        btnStop.disabled = true;
-        btnDiscard.disabled = true;
-        if (flushN > 0) {
-          runHint.textContent = t('hint.async_flushing', { n: flushN, ep: episodeEl.textContent });
-        } else {
-          runHint.textContent = t('hint.idle_ep', { ep: episodeEl.textContent });
+        if (panel.btnStart) panel.btnStart.disabled = false;
+        if (panel.btnStop) panel.btnStop.disabled = true;
+        if (panel.btnDiscard) panel.btnDiscard.disabled = true;
+        if (panel.runHint) {
+          if (flushN > 0) {
+            panel.runHint.textContent = t('hint.async_flushing', {
+              n: flushN,
+              ep: panel.episodeEl ? panel.episodeEl.textContent : '—',
+            });
+          } else {
+            panel.runHint.textContent = t('hint.idle_ep', {
+              ep: panel.episodeEl ? panel.episodeEl.textContent : '—',
+            });
+          }
         }
       }
     }
 
-    async function postRecord(path, body) {
+    function applyRecordUi(rec) {
+      if (!rec) return;
+      window.__lastRecordStatus = rec;
+      recordPanels.forEach((p) => applyRecordUiToPanel(p, rec));
+    }
+
+    async function postRecord(path, body, panel) {
+      const ui = panel || collectRec;
       busy = true;
-      btnStart.disabled = true;
-      btnStop.disabled = true;
-      btnDiscard.disabled = true;
+      recordPanels.forEach((p) => {
+        if (p.btnStart) p.btnStart.disabled = true;
+        if (p.btnStop) p.btnStop.disabled = true;
+        if (p.btnDiscard) p.btnDiscard.disabled = true;
+      });
       const isStop = path.indexOf('stop') >= 0;
       const discarding = isStop && body && body.valid === false;
-      const asyncFlush = !!(chkAsyncFlush && chkAsyncFlush.checked);
+      const asyncFlush = !!(ui.chkAsyncFlush && ui.chkAsyncFlush.checked);
       if (isStop && body && typeof body === 'object') {
         body.async_flush = asyncFlush;
       }
-      runHint.textContent = discarding
-        ? t('hint.discarding')
-        : (isStop ? (asyncFlush ? t('hint.async_stopping') : t('hint.stopping')) : t('hint.starting'));
+      if (ui.runHint) {
+        ui.runHint.textContent = discarding
+          ? t('hint.discarding')
+          : (isStop ? (asyncFlush ? t('hint.async_stopping') : t('hint.stopping')) : t('hint.starting'));
+      }
       try {
         const opts = { method: 'POST' };
         if (body !== undefined) {
@@ -1740,27 +1866,30 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const j = await r.json();
         applyRecordUi(j);
         if (!j.ok && j.error) {
-          runHint.textContent = j.error;
+          if (ui.runHint) ui.runHint.textContent = j.error;
         } else if (discarding && j.ok) {
-          runHint.textContent = t('hint.discarded');
+          if (ui.runHint) ui.runHint.textContent = t('hint.discarded');
         }
-        if (isStop && j.ok && chkQuickCollect.checked && j.finished_episode_path) {
+        const wantQc = !!(ui.chkQuickCollect && ui.chkQuickCollect.checked);
+        if (isStop && j.ok && wantQc && j.finished_episode_path) {
           const epPath = j.finished_episode_path;
           if (ppEpisode) ppEpisode.value = epPath;
           const runQc = async () => {
-            runHint.textContent = discarding
-              ? t('hint.qc_discard')
-              : t('hint.qc_stop');
+            if (ui.runHint) {
+              ui.runHint.textContent = discarding
+                ? t('hint.qc_discard')
+                : t('hint.qc_stop');
+            }
             await inspectSelectedEpisode(epPath, { silent: true });
             const pp = await runPostprocess({
               steps: ['export-timeline', 'filter-timeline', 'export-hik-dataset'],
               allow_invalid: discarding || (document.getElementById('ppAllowInvalid') || {}).checked,
             }, epPath);
             if (pp && pp.ok) {
-              runHint.textContent = t('hint.qc_ok', { path: epPath });
+              if (ui.runHint) ui.runHint.textContent = t('hint.qc_ok', { path: epPath });
               showAppModal(t('modal.qc_ok'), epPath);
             } else if (pp) {
-              runHint.textContent = t('hint.qc_fail', { error: pp.error || 'unknown' });
+              if (ui.runHint) ui.runHint.textContent = t('hint.qc_fail', { error: pp.error || 'unknown' });
               showAppModal(t('modal.qc_fail'), pp.error || JSON.stringify(pp));
               try { switchTab('post'); } catch (e) {}
             }
@@ -1777,7 +1906,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           await runQc();
         }
       } catch (e) {
-        runHint.textContent = String(e);
+        if (ui.runHint) ui.runHint.textContent = String(e);
       } finally {
         busy = false;
         try {
@@ -1787,20 +1916,26 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
     }
 
-    btnStart.addEventListener('click', () => postRecord('/api/record/start'));
-    btnStop.addEventListener('click', () => postRecord('/api/record/stop', { valid: true }));
-    btnDiscard.addEventListener('click', () => {
-      if (!confirm(t('confirm.discard'))) return;
-      postRecord('/api/record/stop', { valid: false });
-    });
+    function wireRecordButtons(panel) {
+      if (!panel || !panel.btnStart) return;
+      panel.btnStart.addEventListener('click', () => postRecord('/api/record/start', undefined, panel));
+      panel.btnStop.addEventListener('click', () => postRecord('/api/record/stop', { valid: true }, panel));
+      panel.btnDiscard.addEventListener('click', () => {
+        if (!confirm(t('confirm.discard'))) return;
+        postRecord('/api/record/stop', { valid: false }, panel);
+      });
+    }
+    recordPanels.forEach(wireRecordButtons);
 
     // ---- tabs + postprocess ----
     const tabBtnHome = document.getElementById('tabBtnHome');
     const tabBtnCollect = document.getElementById('tabBtnCollect');
+    const tabBtnInfer = document.getElementById('tabBtnInfer');
     const tabBtnPost = document.getElementById('tabBtnPost');
     const tabBtnSensors = document.getElementById('tabBtnSensors');
     const tabHome = document.getElementById('tab-home');
     const tabCollect = document.getElementById('tab-collect');
+    const tabInfer = document.getElementById('tab-infer');
     const tabPost = document.getElementById('tab-post');
     const tabSensors = document.getElementById('tab-sensors');
     const bootBanner = document.getElementById('bootBanner');
@@ -2065,17 +2200,22 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (name === 'sensors' && sensorsEmbed.reachability === 'fail') {
         return;
       }
-      const which = (name === 'collect' || name === 'post' || name === 'home' || name === 'sensors') ? name : 'home';
+      const which = (name === 'collect' || name === 'infer' || name === 'post' || name === 'home' || name === 'sensors')
+        ? name
+        : 'home';
       tabBtnHome.classList.toggle('active', which === 'home');
       tabBtnCollect.classList.toggle('active', which === 'collect');
+      if (tabBtnInfer) tabBtnInfer.classList.toggle('active', which === 'infer');
       tabBtnPost.classList.toggle('active', which === 'post');
       if (tabBtnSensors) tabBtnSensors.classList.toggle('active', which === 'sensors');
       tabBtnHome.setAttribute('aria-selected', which === 'home' ? 'true' : 'false');
       tabBtnCollect.setAttribute('aria-selected', which === 'collect' ? 'true' : 'false');
+      if (tabBtnInfer) tabBtnInfer.setAttribute('aria-selected', which === 'infer' ? 'true' : 'false');
       tabBtnPost.setAttribute('aria-selected', which === 'post' ? 'true' : 'false');
       if (tabBtnSensors) tabBtnSensors.setAttribute('aria-selected', which === 'sensors' ? 'true' : 'false');
       tabHome.classList.toggle('active', which === 'home');
       tabCollect.classList.toggle('active', which === 'collect');
+      if (tabInfer) tabInfer.classList.toggle('active', which === 'infer');
       tabPost.classList.toggle('active', which === 'post');
       if (tabSensors) tabSensors.classList.toggle('active', which === 'sensors');
       // Embody convention: Settings gear only on the home overview.
@@ -2085,16 +2225,21 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     tabBtnHome.addEventListener('click', () => switchTab('home'));
     tabBtnCollect.addEventListener('click', () => switchTab('collect'));
+    if (tabBtnInfer) tabBtnInfer.addEventListener('click', () => switchTab('infer'));
     tabBtnPost.addEventListener('click', () => {
       switchTab('post');
       refreshEpisodeList();
     });
     if (tabBtnSensors) tabBtnSensors.addEventListener('click', () => switchTab('sensors'));
     const btnHomeCollect = document.getElementById('btnHomeCollect');
+    const btnHomeInfer = document.getElementById('btnHomeInfer');
     const btnHomePost = document.getElementById('btnHomePost');
     const btnHomeSensors = document.getElementById('btnHomeSensors');
     if (btnHomeCollect) {
       btnHomeCollect.addEventListener('click', () => switchTab('collect'));
+    }
+    if (btnHomeInfer) {
+      btnHomeInfer.addEventListener('click', () => switchTab('infer'));
     }
     if (btnHomePost) {
       btnHomePost.addEventListener('click', () => {
@@ -3294,10 +3439,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
       });
     }
 
-    async function applySaveDir() {
-      const path = saveDirInput.value.trim();
-      btnSaveDir.disabled = true;
-      runHint.textContent = path ? t('hint.save_updating') : t('hint.save_refresh');
+    async function applySaveDir(panel) {
+      const ui = panel || collectRec;
+      if (!ui || !ui.saveDirInput) return;
+      const path = ui.saveDirInput.value.trim();
+      if (ui.btnSaveDir) ui.btnSaveDir.disabled = true;
+      if (ui.runHint) {
+        ui.runHint.textContent = path ? t('hint.save_updating') : t('hint.save_refresh');
+      }
       try {
         const r = await fetch('/api/record/save_dir', {
           method: 'POST',
@@ -3307,20 +3456,29 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const j = await r.json();
         applyRecordUi(j);
         if (j.ok) {
-          saveDirInput.value = '';
-          runHint.textContent = t('hint.save_ok', { ep: episodeEl.textContent });
-        } else if (j.error) {
-          runHint.textContent = j.error;
+          ui.saveDirInput.value = '';
+          if (ui.runHint) {
+            ui.runHint.textContent = t('hint.save_ok', {
+              ep: ui.episodeEl ? ui.episodeEl.textContent : '—',
+            });
+          }
+        } else if (j.error && ui.runHint) {
+          ui.runHint.textContent = j.error;
         }
       } catch (e) {
-        runHint.textContent = String(e);
+        if (ui.runHint) ui.runHint.textContent = String(e);
       } finally {
-        btnSaveDir.disabled = false;
+        if (ui.btnSaveDir) ui.btnSaveDir.disabled = false;
       }
     }
-    btnSaveDir.addEventListener('click', () => applySaveDir());
-    saveDirInput.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter') applySaveDir();
+    recordPanels.forEach((panel) => {
+      if (!panel.btnSaveDir) return;
+      panel.btnSaveDir.addEventListener('click', () => applySaveDir(panel));
+      if (panel.saveDirInput) {
+        panel.saveDirInput.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter') applySaveDir(panel);
+        });
+      }
     });
 
     function fmtRate(meas, target) {
@@ -3329,12 +3487,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
       return m + ' / 目标 ' + t;
     }
 
-    function ensureStateCard(agentId) {
-      let card = document.getElementById('card-' + agentId);
+    function ensureStateCard(agentId, scope) {
+      const sc = scope || 'collect';
+      const parent = sc === 'infer' ? infAgentsEl : agentsEl;
+      if (!parent) return null;
+      const id = (sc === 'infer' ? 'inf-card-' : 'card-') + agentId;
+      let card = document.getElementById(id);
       if (card) return card;
       card = document.createElement('section');
-      card.className = 'agent-card';
-      card.id = 'card-' + agentId;
+      card.className = 'agent-card' + (sc === 'infer' ? ' inf-agent-card' : '');
+      card.id = id;
+      card.dataset.scope = sc;
       card.innerHTML =
         '<h2></h2>' +
         '<div class="agent-meta">' +
@@ -3344,7 +3507,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         '<div>dry_run：<strong class="k-dry">—</strong></div>' +
         '</div>' +
         '<div class="agent-bars"></div>';
-      agentsEl.appendChild(card);
+      parent.appendChild(card);
       return card;
     }
 
@@ -4041,21 +4204,23 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
 
     function renderCamSlot(slotKey, frame, hzText) {
-      const cell = camCells[slotKey];
-      if (!cell) return;
-      cell.classList.remove('empty');
-      const p = frame.payload || {};
-      cell.querySelector('.k-agent').textContent = frame.agent_id;
-      const hzEl = cell.querySelector('.k-hz');
-      if (hzEl) hzEl.textContent = hzText;
-      const img = cell.querySelector('img');
-      if (p.jpeg_b64_preview) img.src = 'data:image/jpeg;base64,' + p.jpeg_b64_preview;
-      else if (p.jpeg_b64) img.src = 'data:image/jpeg;base64,' + p.jpeg_b64;
-      const sn = p.serial || '—';
-      const dry = p.dry_run ? ' dry' : '';
-      const fps = p.fps != null ? (' · cfg ' + Number(p.fps).toFixed(0) + 'fps') : '';
-      cell.querySelector('.k-sub').textContent =
-        'seq ' + frame.seq + ' · sn ' + sn + fps + dry;
+      ['collect', 'infer'].forEach((scope) => {
+        const cell = (camCellsByScope[scope] || {})[slotKey];
+        if (!cell) return;
+        cell.classList.remove('empty');
+        const p = frame.payload || {};
+        cell.querySelector('.k-agent').textContent = frame.agent_id;
+        const hzEl = cell.querySelector('.k-hz');
+        if (hzEl) hzEl.textContent = hzText;
+        const img = cell.querySelector('img');
+        if (p.jpeg_b64_preview) img.src = 'data:image/jpeg;base64,' + p.jpeg_b64_preview;
+        else if (p.jpeg_b64) img.src = 'data:image/jpeg;base64,' + p.jpeg_b64;
+        const sn = p.serial || '—';
+        const dry = p.dry_run ? ' dry' : '';
+        const fps = p.fps != null ? (' · cfg ' + Number(p.fps).toFixed(0) + 'fps') : '';
+        cell.querySelector('.k-sub').textContent =
+          'seq ' + frame.seq + ' · sn ' + sn + fps + dry;
+      });
     }
 
     function updateBackHz(agentId, frame, target, measFromBackend, nowT) {
@@ -4096,7 +4261,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         }
       }
       lastMsgT = msg.t_wall;
-      hzFrontEl.textContent = fmtRate(emaFront, vizTarget);
+      const hzTextFront = fmtRate(emaFront, vizTarget);
+      recordPanels.forEach((p) => {
+        if (p.hzFrontEl) p.hzFrontEl.textContent = hzTextFront;
+      });
 
       const frames = msg.frames || [];
       const usedSlots = new Set();
@@ -4141,26 +4309,32 @@ PREVIEW_HTML = """<!DOCTYPE html>
           }
           return;
         }
-        const card = ensureStateCard(frame.agent_id);
-        if (frame.kind === 'gripper_read') {
-          renderGripperRead(card, frame, hzText);
-        } else if (frame.kind === 'gripper_write') {
-          renderGripperWrite(card, frame, hzText);
-        } else if (frame.kind === 'arm_write') {
-          renderArmWrite(card, frame, hzText);
-        } else if (frame.kind === 'arm_read') {
-          renderArmRead(card, frame, hzText);
-        } else {
-          renderGello(card, frame, hzText);
-        }
+        ['collect', 'infer'].forEach((scope) => {
+          const card = ensureStateCard(frame.agent_id, scope);
+          if (!card) return;
+          if (frame.kind === 'gripper_read') {
+            renderGripperRead(card, frame, hzText);
+          } else if (frame.kind === 'gripper_write') {
+            renderGripperWrite(card, frame, hzText);
+          } else if (frame.kind === 'arm_write') {
+            renderArmWrite(card, frame, hzText);
+          } else if (frame.kind === 'arm_read') {
+            renderArmRead(card, frame, hzText);
+          } else {
+            renderGello(card, frame, hzText);
+          }
+        });
       });
 
-      rawEl.textContent = JSON.stringify(msg, (k, v) => {
+      const rawText = JSON.stringify(msg, (k, v) => {
         if ((k === 'jpeg_b64' || k === 'jpeg_b64_preview') && typeof v === 'string') {
           return '<jpeg ' + v.length + ' chars>';
         }
         return v;
       }, 2);
+      recordPanels.forEach((p) => {
+        if (p.rawEl) p.rawEl.textContent = rawText;
+      });
     }
 
     function connect() {
