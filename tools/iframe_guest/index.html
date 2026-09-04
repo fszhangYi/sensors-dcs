@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>iframe guest probe · 6008</title>
+  <title>iframe host probe · 6008</title>
   <style>
     :root {
       --bg: #0b1018;
@@ -13,153 +13,200 @@
       --border: rgba(58, 77, 102, 0.75);
       --panel: rgba(18, 26, 38, 0.92);
     }
-    html[data-theme="light"] {
-      --bg: #c5d0df;
-      --text: #152033;
-      --muted: #3d4f66;
-      --accent: #0f766e;
-      --border: rgba(45, 62, 86, 0.22);
-      --panel: rgba(196, 208, 222, 0.94);
-    }
-    body {
+    * { box-sizing: border-box; }
+    html, body {
       margin: 0;
+      height: 100%;
       font-family: system-ui, sans-serif;
       background: var(--bg);
       color: var(--text);
-      min-height: 100vh;
-      padding: 24px;
-      box-sizing: border-box;
     }
-    .card {
-      max-width: 36rem;
-      padding: 16px 18px;
-      border: 1px solid var(--border);
-      border-radius: 12px;
+    body {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-height: 100vh;
+    }
+    .bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      align-items: center;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
       background: var(--panel);
     }
-    h1 { margin: 0 0 8px; font-size: 1.15rem; }
-    .muted { color: var(--muted); font-size: 0.85rem; }
-    .badge {
+    .bar h1 {
+      margin: 0;
+      font-size: 0.95rem;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+    .muted { color: var(--muted); font-size: 0.78rem; }
+    label {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      margin: 10px 0;
-      padding: 4px 10px;
-      border-radius: 999px;
-      border: 1px solid rgba(248, 113, 113, 0.45);
-      color: #fecaca;
-      font-size: 0.75rem;
-      font-weight: 600;
+      font-size: 0.78rem;
+      color: var(--muted);
     }
-    .badge[hidden] { display: none !important; }
-    .dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: #f87171;
-      animation: pulse 1.2s ease-in-out infinite;
+    input[type="url"], select {
+      background: #0f1622;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 8px;
+      font-size: 0.78rem;
     }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.35; }
+    input[type="url"] { min-width: min(42rem, 55vw); flex: 1 1 18rem; }
+    button {
+      background: #152033;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 0.78rem;
+      cursor: pointer;
     }
-    code { color: var(--accent); }
-    #settingsBox[hidden] { display: none !important; }
+    button:hover { border-color: var(--accent); color: var(--accent); }
+    #status { font-size: 0.75rem; color: var(--muted); }
+    #status.ok { color: #86efac; }
+    #status.fail { color: #fca5a5; }
+    .frame-wrap {
+      position: relative;
+      min-height: 0;
+      background: #000;
+    }
+    iframe {
+      display: block;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #000;
+    }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>iframe guest probe</h1>
-    <p class="muted">Minimal sensors-view-compatible guest on port <code>6008</code>.</p>
-    <div class="badge" id="iframeBadge" hidden>
-      <span class="dot" aria-hidden="true"></span>
-      <span>iframe</span>
-    </div>
-    <p>Framed: <strong id="framedVal">—</strong></p>
-    <p>Locale: <strong id="localeVal">—</strong></p>
-    <p>Theme pref: <strong id="themeVal">—</strong></p>
-    <div id="settingsBox">
-      <p class="muted">Standalone settings (hidden when framed):</p>
-      <button type="button" id="btnZh">中文</button>
-      <button type="button" id="btnEn">EN</button>
-      <button type="button" id="btnDark">Dark</button>
-      <button type="button" id="btnLight">Light</button>
-    </div>
+  <div class="bar">
+    <h1>iframe host · 6008</h1>
+    <span class="muted">embeds sensors-dcs as guest</span>
+    <label>
+      URL
+      <input type="url" id="urlInput" spellcheck="false" />
+    </label>
+    <button type="button" id="btnLoad">Load</button>
+    <label>
+      locale
+      <select id="localeSel">
+        <option value="zh">zh</option>
+        <option value="en">en</option>
+      </select>
+    </label>
+    <label>
+      theme
+      <select id="themeSel">
+        <option value="dark">dark</option>
+        <option value="light">light</option>
+        <option value="system">system</option>
+      </select>
+    </label>
+    <button type="button" id="btnPush">Push prefs</button>
+    <span id="status">idle</span>
+  </div>
+  <div class="frame-wrap">
+    <iframe id="guest" title="sensors-dcs guest" allow="fullscreen"></iframe>
   </div>
   <script>
-    const SOURCE = 'sensors-view';
     const HOST_SOURCE = 'sensors-view-host';
-    const VERSION = 1;
-    let locale = 'zh';
-    let theme = 'dark';
+    const GUEST_SOURCE = 'sensors-view';
+    const DEFAULT_URL = 'https://u658526-m86b-7fdc269f.weste.seetacloud.com:8443/login?from=/';
+    const STORAGE_KEY = 'sensors-dcs.iframe-host.url';
 
-    function isFramed() {
-      try { return window.self !== window.top; }
-      catch (e) { return true; }
+    const urlInput = document.getElementById('urlInput');
+    const localeSel = document.getElementById('localeSel');
+    const themeSel = document.getElementById('themeSel');
+    const frame = document.getElementById('guest');
+    const statusEl = document.getElementById('status');
+
+    function setStatus(text, kind) {
+      statusEl.textContent = text;
+      statusEl.className = kind || '';
     }
 
-    function render() {
-      const framed = isFramed();
-      document.getElementById('framedVal').textContent = framed ? 'yes' : 'no';
-      document.getElementById('localeVal').textContent = locale;
-      document.getElementById('themeVal').textContent = theme;
-      document.getElementById('iframeBadge').hidden = !framed;
-      document.getElementById('settingsBox').hidden = framed;
-      const resolved = theme === 'system'
-        ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
-        : theme;
-      document.documentElement.setAttribute('data-theme', resolved);
-      document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en';
-    }
-
-    function applyPrefs(prefs) {
-      if (!prefs) return;
-      if (prefs.locale === 'zh' || prefs.locale === 'en') locale = prefs.locale;
-      if (prefs.theme === 'dark' || prefs.theme === 'light' || prefs.theme === 'system') theme = prefs.theme;
-      render();
-    }
-
-    function qsPrefs() {
-      const out = {};
+    function normalizeBase(raw) {
+      const s = String(raw || '').trim();
+      if (!s) return '';
       try {
-        const q = new URLSearchParams(location.search);
-        const loc = (q.get('locale') || q.get('lang') || '').toLowerCase();
-        if (loc === 'zh' || loc === 'en') out.locale = loc;
-        const th = (q.get('theme') || '').toLowerCase();
-        if (th === 'dark' || th === 'light' || th === 'system') out.theme = th;
-      } catch (e) {}
-      return out;
+        const u = new URL(s);
+        return u.origin + (u.pathname.replace(/\/+$/, '') || '');
+      } catch (e) {
+        return s.replace(/\/+$/, '');
+      }
     }
 
-    function postToHost(payload) {
-      if (!isFramed()) return;
+    function withPrefs(raw) {
+      const u = new URL(raw, location.href);
+      u.searchParams.set('locale', localeSel.value);
+      u.searchParams.set('theme', themeSel.value);
+      return u.toString();
+    }
+
+    function guestOrigin() {
+      try { return new URL(frame.src).origin; }
+      catch (e) { return '*'; }
+    }
+
+    function pushPrefs() {
+      if (!frame.contentWindow) return;
+      const payload = {
+        source: HOST_SOURCE,
+        version: 1,
+        type: 'embed-prefs',
+        locale: localeSel.value,
+        theme: themeSel.value,
+      };
       try {
-        parent.postMessage({ source: SOURCE, version: VERSION, ...payload }, '*');
-      } catch (e) {}
+        frame.contentWindow.postMessage(payload, guestOrigin());
+        setStatus('prefs pushed', 'ok');
+      } catch (e) {
+        setStatus('prefs push failed', 'fail');
+      }
+    }
+
+    function loadFrame() {
+      const raw = urlInput.value.trim() || DEFAULT_URL;
+      urlInput.value = raw;
+      try { localStorage.setItem(STORAGE_KEY, raw); } catch (e) {}
+      setStatus('loading…');
+      frame.src = withPrefs(raw);
     }
 
     window.addEventListener('message', (event) => {
-      if (!isFramed()) return;
       const data = event.data;
-      if (!data || data.source !== HOST_SOURCE) return;
-      if (data.type === 'embed-prefs' || data.type === 'appearance') {
-        applyPrefs({ locale: data.locale, theme: data.theme });
-      } else if (data.type === 'embed-locale') {
-        applyPrefs({ locale: data.locale });
-      } else if (data.type === 'embed-theme') {
-        applyPrefs({ theme: data.theme });
+      if (!data || data.source !== GUEST_SOURCE) return;
+      let expected;
+      try { expected = new URL(urlInput.value || DEFAULT_URL).origin; }
+      catch (e) { expected = null; }
+      if (expected && event.origin !== expected) return;
+      if (data.type === 'embed-ready' || data.type === 'embed-request-prefs') {
+        setStatus('guest ready · ' + data.type, 'ok');
+        pushPrefs();
       }
     });
 
-    document.getElementById('btnZh').onclick = () => applyPrefs({ locale: 'zh' });
-    document.getElementById('btnEn').onclick = () => applyPrefs({ locale: 'en' });
-    document.getElementById('btnDark').onclick = () => applyPrefs({ theme: 'dark' });
-    document.getElementById('btnLight').onclick = () => applyPrefs({ theme: 'light' });
+    document.getElementById('btnLoad').onclick = loadFrame;
+    document.getElementById('btnPush').onclick = pushPrefs;
+    localeSel.onchange = pushPrefs;
+    themeSel.onchange = pushPrefs;
+    urlInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') loadFrame();
+    });
 
-    applyPrefs(qsPrefs());
-    render();
-    if (isFramed()) {
-      postToHost({ type: 'embed-ready' });
-      postToHost({ type: 'embed-request-prefs' });
+    try {
+      urlInput.value = localStorage.getItem(STORAGE_KEY) || DEFAULT_URL;
+    } catch (e) {
+      urlInput.value = DEFAULT_URL;
     }
+    loadFrame();
   </script>
 </body>
 </html>

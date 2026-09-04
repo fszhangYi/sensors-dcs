@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal sensors-view-compatible iframe guest on port 6008."""
+"""Minimal iframe host on port 6008 — embeds sensors-dcs as guest."""
 
 from __future__ import annotations
 
