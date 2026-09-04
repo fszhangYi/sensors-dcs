@@ -136,7 +136,6 @@ class Pi05ClientAgent(BaseAgent):
         self._peers: dict[str, BaseAgent] = {}
         self._sock: socket.socket | None = None
         self._connected = False
-        self._running = False
         self._step = 0
         self._last_latency_ms: float | None = None
         self._last_robot_state: list[float] | None = None
@@ -155,7 +154,6 @@ class Pi05ClientAgent(BaseAgent):
             return {
                 "agent_id": self.agent_id,
                 "connected": self._connected,
-                "running": self._running,
                 "host": self._host,
                 "port": self._port,
                 "prompt": self._prompt,
@@ -186,21 +184,18 @@ class Pi05ClientAgent(BaseAgent):
             except OSError as e:
                 sock.close()
                 self._connected = False
-                self._running = False
                 self._last_ok = False
                 self._last_error = f"connect failed: {e}"
                 return {"ok": False, "error": self._last_error, **self.status_payload()}
-            sock.settimeout(10.0)
+            sock.settimeout(30.0)
             self._sock = sock
             self._connected = True
-            self._running = True
             self._last_error = None
             self._last_ok = True
             return {"ok": True, **self.status_payload()}
 
     def disconnect(self) -> dict[str, Any]:
         with self._lock:
-            self._running = False
             self._close_sock_unlocked()
             self._connected = False
             self._last_ok = True
@@ -212,16 +207,65 @@ class Pi05ClientAgent(BaseAgent):
             self._prompt = str(prompt or "")
             return {"ok": True, **self.status_payload()}
 
-    def set_run(self, enabled: bool) -> dict[str, Any]:
+    def step(self) -> dict[str, Any]:
+        """Gather obs once, send to serve, store/echo next_state. Manual only."""
         with self._lock:
-            if enabled and not self._connected:
+            if not self._connected or self._sock is None:
                 return {
                     "ok": False,
-                    "error": "not connected",
+                    "error": "not connected — connect to serve first",
                     **self.status_payload(),
                 }
-            self._running = bool(enabled)
-            return {"ok": True, **self.status_payload()}
+            prompt = self._prompt
+            sock = self._sock
+
+        try:
+            jpegs, jpeg_lens = self._gather_jpegs()
+            robot_state = self._gather_robot_state()
+            req = pack_serve_request(
+                top_jpeg=jpegs["top"],
+                chest_jpeg=jpegs["chest"],
+                wrist2_jpeg=jpegs["wrist2"],
+                text=prompt,
+                robot_state=robot_state,
+            )
+            t0 = time.perf_counter()
+            with self._lock:
+                sock = self._sock
+                if sock is None:
+                    raise RuntimeError("socket closed")
+                sock.sendall(req)
+                resp = unpack_serve_response(sock)
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            if resp is None:
+                raise ConnectionError("serve disconnected during response")
+            frame = self._push_result_frame(
+                robot_state=robot_state,
+                resp=resp,
+                jpeg_lens=jpeg_lens,
+                latency_ms=latency_ms,
+                prompt=prompt,
+                ok=True,
+                error=None,
+            )
+            out = {"ok": True, **self.status_payload()}
+            out["frame_seq"] = frame.seq
+            return out
+        except ConnectionError as e:
+            with self._lock:
+                self._last_ok = False
+                self._last_error = str(e)
+                self._close_sock_unlocked()
+                self._connected = False
+            self._push_status_frame()
+            return {"ok": False, "error": str(e), **self.status_payload()}
+        except Exception as e:  # noqa: BLE001
+            # Keep TCP up for gather/protocol mistakes so user can retry Step.
+            with self._lock:
+                self._last_ok = False
+                self._last_error = str(e)
+            self._push_status_frame()
+            return {"ok": False, "error": str(e), **self.status_payload()}
 
     def _close_sock_unlocked(self) -> None:
         sock = self._sock
@@ -246,7 +290,6 @@ class Pi05ClientAgent(BaseAgent):
     def stop(self) -> None:
         self._stop.set()
         with self._lock:
-            self._running = False
             self._close_sock_unlocked()
             self._connected = False
         if self._thread and self._thread.is_alive():
@@ -254,137 +297,110 @@ class Pi05ClientAgent(BaseAgent):
         self._thread = None
 
     def read_frame(self) -> Frame:
-        """One status/infer step — called by ``_loop`` at ``hz``."""
+        """Heartbeat status for Infer card — does not call serve."""
+        return self._make_status_frame()
+
+    def _push_status_frame(self) -> Frame:
+        frame = self._make_status_frame()
+        self.ring.push(frame)
+        return frame
+
+    def _make_status_frame(self) -> Frame:
         t_wall = time.time()
         t_mono = time.perf_counter()
+        self._seq += 1
         with self._lock:
+            payload = {
+                "connected": self._connected,
+                "host": self._host,
+                "port": self._port,
+                "prompt": self._prompt,
+                "dry_run": False,
+                "step": self._step,
+                "robot_state": list(self._last_robot_state) if self._last_robot_state else None,
+                "next_state": list(self._last_next_state) if self._last_next_state else None,
+                "term_flag": self._last_term,
+                "reject_flag": self._last_reject,
+                "server_text": self._last_server_text,
+                "latency_ms": self._last_latency_ms,
+                "ok": self._last_ok,
+                "error": self._last_error,
+                "jpeg_lens": dict(self._last_jpeg_lens),
+                "camera_map": dict(self._camera_map),
+            }
+            err = self._last_error
+        return Frame(
+            sensor_id=self.sensor_id,
+            agent_id=self.agent_id,
+            kind=self.kind,
+            t_wall=t_wall,
+            t_mono=t_mono,
+            payload=payload,
+            seq=self._seq,
+            # Keep error=None so recorder/viz still accept status heartbeats.
+            error=None,
+        )
+
+    def _push_result_frame(
+        self,
+        *,
+        robot_state: list[float],
+        resp: dict[str, Any],
+        jpeg_lens: dict[str, int],
+        latency_ms: float,
+        prompt: str,
+        ok: bool,
+        error: str | None,
+    ) -> Frame:
+        t_wall = time.time()
+        t_mono = time.perf_counter()
+        self._seq += 1
+        with self._lock:
+            self._step += 1
+            self._last_robot_state = list(robot_state)
+            self._last_next_state = list(resp["next_state"])
+            self._last_term = float(resp["term_flag"])
+            self._last_reject = int(resp["reject_flag"])
+            self._last_server_text = str(resp["server_text"] or "")
+            self._last_latency_ms = latency_ms
+            self._last_jpeg_lens = jpeg_lens
+            self._last_ok = ok
+            self._last_error = error
+            step = self._step
             connected = self._connected
-            running = self._running
-            sock = self._sock
-            prompt = self._prompt
             host = self._host
             port = self._port
-
-        payload: dict[str, Any] = {
+        payload = {
             "connected": connected,
-            "running": running,
             "host": host,
             "port": port,
             "prompt": prompt,
             "dry_run": False,
+            "step": step,
+            "robot_state": list(robot_state),
+            "next_state": list(resp["next_state"]),
+            "term_flag": float(resp["term_flag"]),
+            "reject_flag": int(resp["reject_flag"]),
+            "server_text": str(resp["server_text"] or ""),
+            "latency_ms": latency_ms,
+            "ok": ok,
+            "error": error,
+            "jpeg_lens": jpeg_lens,
         }
-
-        if not (connected and running and sock is not None):
-            self._seq += 1
-            with self._lock:
-                payload.update(
-                    {
-                        "step": self._step,
-                        "robot_state": self._last_robot_state,
-                        "next_state": self._last_next_state,
-                        "term_flag": self._last_term,
-                        "reject_flag": self._last_reject,
-                        "server_text": self._last_server_text,
-                        "latency_ms": self._last_latency_ms,
-                        "ok": self._last_ok,
-                        "error": self._last_error,
-                        "jpeg_lens": dict(self._last_jpeg_lens),
-                    }
-                )
-            return Frame(
-                sensor_id=self.sensor_id,
-                agent_id=self.agent_id,
-                kind=self.kind,
-                t_wall=t_wall,
-                t_mono=t_mono,
-                payload=payload,
-                seq=self._seq,
-                error=self._last_error,
-            )
-
-        try:
-            jpegs, jpeg_lens = self._gather_jpegs()
-            robot_state = self._gather_robot_state()
-            req = pack_serve_request(
-                top_jpeg=jpegs["top"],
-                chest_jpeg=jpegs["chest"],
-                wrist2_jpeg=jpegs["wrist2"],
-                text=prompt,
-                robot_state=robot_state,
-            )
-            t0 = time.perf_counter()
-            with self._lock:
-                sock = self._sock
-                if sock is None:
-                    raise RuntimeError("socket closed")
-                sock.sendall(req)
-                resp = unpack_serve_response(sock)
-            latency_ms = (time.perf_counter() - t0) * 1000.0
-            if resp is None:
-                raise RuntimeError("serve disconnected during response")
-            self._seq += 1
-            with self._lock:
-                self._step += 1
-                self._last_robot_state = list(robot_state)
-                self._last_next_state = list(resp["next_state"])
-                self._last_term = float(resp["term_flag"])
-                self._last_reject = int(resp["reject_flag"])
-                self._last_server_text = str(resp["server_text"] or "")
-                self._last_latency_ms = latency_ms
-                self._last_jpeg_lens = jpeg_lens
-                self._last_ok = True
-                self._last_error = None
-                step = self._step
-            payload.update(
-                {
-                    "step": step,
-                    "robot_state": list(robot_state),
-                    "next_state": list(resp["next_state"]),
-                    "term_flag": float(resp["term_flag"]),
-                    "reject_flag": int(resp["reject_flag"]),
-                    "server_text": str(resp["server_text"] or ""),
-                    "latency_ms": latency_ms,
-                    "ok": True,
-                    "error": None,
-                    "jpeg_lens": jpeg_lens,
-                }
-            )
-            return Frame(
-                sensor_id=self.sensor_id,
-                agent_id=self.agent_id,
-                kind=self.kind,
-                t_wall=t_wall,
-                t_mono=t_mono,
-                payload=payload,
-                seq=self._seq,
-            )
-        except Exception as e:  # noqa: BLE001
-            with self._lock:
-                self._last_ok = False
-                self._last_error = str(e)
-                self._close_sock_unlocked()
-                self._connected = False
-                self._running = False
-            self._seq += 1
-            payload.update(
-                {
-                    "connected": False,
-                    "running": False,
-                    "ok": False,
-                    "error": str(e),
-                    "step": self._step,
-                }
-            )
-            return Frame(
-                sensor_id=self.sensor_id,
-                agent_id=self.agent_id,
-                kind=self.kind,
-                t_wall=t_wall,
-                t_mono=t_mono,
-                payload=payload,
-                seq=self._seq,
-                error=str(e),
-            )
+        frame = Frame(
+            sensor_id=self.sensor_id,
+            agent_id=self.agent_id,
+            kind=self.kind,
+            t_wall=t_wall,
+            t_mono=t_mono,
+            payload=payload,
+            seq=self._seq,
+            error=None,
+        )
+        self.ring.push(frame)
+        # Also advance BaseAgent counters like a normal successful read.
+        self._ok_count += 1
+        return frame
 
     def _gather_jpegs(self) -> tuple[dict[str, bytes], dict[str, int]]:
         out: dict[str, bytes] = {}

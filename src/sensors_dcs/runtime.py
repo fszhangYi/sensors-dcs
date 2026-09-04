@@ -32,7 +32,7 @@ class Orchestrator:
         known = self.manager.ids()
         for acfg in cfg.agents:
             if acfg.type == "pi05":
-                self.agents[acfg.id] = build_agent(acfg, pi05_defaults=cfg.pi05)
+                self.agents[acfg.id] = build_agent(acfg)
                 continue
             try:
                 sensor = self.manager.get(acfg.sensor_id or "")
@@ -188,11 +188,11 @@ class Orchestrator:
             return {"ok": False, "configured": False, "error": "no pi05 agent in config"}
         return agent.set_prompt(prompt)
 
-    def pi05_set_run(self, enabled: bool, *, agent_id: str | None = None) -> dict[str, Any]:
+    def pi05_step(self, *, agent_id: str | None = None) -> dict[str, Any]:
         agent = self._pi05_agent(agent_id)
         if agent is None:
             return {"ok": False, "configured": False, "error": "no pi05 agent in config"}
-        return agent.set_run(enabled)
+        return agent.step()
 
     def start(self) -> None:
         for agent in self.agents.values():
@@ -1681,7 +1681,7 @@ class Orchestrator:
             pi05_disconnect=self.pi05_disconnect,
             pi05_status=self.pi05_status,
             pi05_set_prompt=self.pi05_set_prompt,
-            pi05_set_run=self.pi05_set_run,
+            pi05_step=self.pi05_step,
             shutdown=self.request_shutdown,
             boot_box=boot_box,
             postprocess_save_dir=str(self.recorder.save_dir),

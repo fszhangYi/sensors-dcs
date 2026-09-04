@@ -751,6 +751,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     #infPi05Host { width: 9rem; }
     #infPi05Prompt { flex: 1; min-width: 12rem; }
+    .inf-pi05-out {
+      margin: 0;
+      max-height: 10rem;
+      overflow: auto;
+      font-size: 0.75rem;
+      line-height: 1.35;
+      padding: 0.45rem 0.55rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--input-bg);
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
     .agent-vals {
       display: flex; flex-wrap: wrap; gap: 0.35rem 0.55rem;
       font-variant-numeric: tabular-nums; font-size: 0.8rem;
@@ -1268,14 +1282,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
         <input type="number" id="infPi05Port" value="5000" min="1" max="65535" step="1" />
         <button type="button" class="primary" id="infPi05Connect" data-i18n="infer.connect">连接</button>
         <button type="button" id="infPi05Disconnect" data-i18n="infer.disconnect">断开</button>
-        <button type="button" id="infPi05Run" data-i18n="infer.run">推理中</button>
+        <button type="button" class="primary" id="infPi05Step" data-i18n="infer.step">询问一步</button>
       </div>
       <div class="inf-pi05-row">
         <label for="infPi05Prompt" data-i18n="infer.prompt">Prompt</label>
         <input type="text" id="infPi05Prompt" data-i18n-placeholder="infer.prompt_ph" placeholder="任务描述（可空）" autocomplete="off" />
         <button type="button" id="infPi05PromptApply" data-i18n="btn.apply">应用</button>
-        <span class="hint" id="infPi05Hint" data-i18n="infer.hint_idle">未配置或未连接 pi05</span>
+        <span class="hint" id="infPi05Hint" data-i18n="infer.hint_idle">连接后点「询问一步」采集传感器并发给 serve</span>
       </div>
+      <pre class="inf-pi05-out" id="infPi05Out">{}</pre>
     </div>
     <div class="actions">
       <button type="button" class="primary" id="infBtnStart" data-i18n="btn.start">开始</button>
@@ -2011,9 +2026,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const infPi05Port = document.getElementById('infPi05Port');
     const infPi05Prompt = document.getElementById('infPi05Prompt');
     const infPi05Hint = document.getElementById('infPi05Hint');
+    const infPi05Out = document.getElementById('infPi05Out');
     const infPi05Connect = document.getElementById('infPi05Connect');
     const infPi05Disconnect = document.getElementById('infPi05Disconnect');
-    const infPi05Run = document.getElementById('infPi05Run');
+    const infPi05Step = document.getElementById('infPi05Step');
     const infPi05PromptApply = document.getElementById('infPi05PromptApply');
     const LS_PI05 = 'dcs.inf.pi05';
     function loadPi05Form() {
@@ -2035,20 +2051,42 @@ PREVIEW_HTML = """<!DOCTYPE html>
         }));
       } catch (e) {}
     }
+    function formatPi05Out(p) {
+      if (!p) return '{}';
+      const slim = {
+        ok: p.ok,
+        connected: p.connected,
+        host: p.host,
+        port: p.port,
+        step: p.step,
+        latency_ms: p.latency_ms,
+        robot_state: p.robot_state,
+        next_state: p.next_state,
+        term_flag: p.term_flag,
+        reject_flag: p.reject_flag,
+        server_text: p.server_text,
+        jpeg_lens: p.jpeg_lens,
+        error: p.error,
+      };
+      return JSON.stringify(slim, null, 2);
+    }
     function applyPi05PanelFromPayload(p) {
       if (!infPi05Hint) return;
       if (p && p.configured === false) {
         infPi05Hint.textContent = t('infer.hint_unconfigured');
+        if (infPi05Step) infPi05Step.disabled = true;
+        if (infPi05Out) infPi05Out.textContent = formatPi05Out(p);
         return;
       }
+      if (infPi05Step) infPi05Step.disabled = !(p && p.connected);
       if (p && p.connected) {
-        infPi05Hint.textContent = p.running ? t('infer.hint_connected') : t('infer.hint_paused');
-        if (infPi05Run) infPi05Run.textContent = p.running ? t('infer.run') : t('infer.pause');
+        infPi05Hint.textContent = t('infer.hint_connected');
       } else if (p && p.error) {
         infPi05Hint.textContent = String(p.error);
       } else {
         infPi05Hint.textContent = t('infer.hint_idle');
       }
+      if (infPi05Out) infPi05Out.textContent = formatPi05Out(p);
       if (p && p.host && infPi05Host && document.activeElement !== infPi05Host) {
         infPi05Host.value = p.host;
       }
@@ -2081,11 +2119,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
     if (infPi05Disconnect) {
       infPi05Disconnect.addEventListener('click', () => postPi05('/api/pi05/disconnect', {}));
     }
-    if (infPi05Run) {
-      infPi05Run.addEventListener('click', async () => {
-        const st = await fetch('/api/pi05/status').then((x) => x.json()).catch(() => ({}));
-        const want = !(st && st.running);
-        await postPi05('/api/pi05/run', { enabled: want });
+    if (infPi05Step) {
+      infPi05Step.addEventListener('click', async () => {
+        infPi05Step.disabled = true;
+        if (infPi05Hint) infPi05Hint.textContent = t('infer.hint_stepping');
+        try {
+          await postPi05('/api/pi05/step', {});
+        } finally {
+          const st = await fetch('/api/pi05/status').then((x) => x.json()).catch(() => ({}));
+          if (infPi05Step) infPi05Step.disabled = !(st && st.connected);
+        }
       });
     }
     if (infPi05PromptApply) {
@@ -3797,7 +3840,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const p = frame.payload || {};
       const root = ensureValsRoot(card);
       const items = [
-        { lab: 'conn', calText: p.connected ? (p.running ? 'run' : 'pause') : 'off' },
+        { lab: 'conn', calText: p.connected ? 'on' : 'off' },
         { lab: 'host', calText: (p.host || '—') + ':' + (p.port != null ? p.port : '—') },
         { lab: 'step', calText: p.step != null ? String(p.step) : '—' },
         {
@@ -3810,17 +3853,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
         { lab: 'term', calText: p.term_flag != null ? String(p.term_flag) : '—' },
         { lab: 'rej', calText: p.reject_flag != null ? String(p.reject_flag) : '—' },
       ];
-      if (p.error) items.push({ lab: 'err', calText: String(p.error).slice(0, 80) });
-      if (p.server_text) items.push({ lab: 'txt', calText: String(p.server_text).slice(0, 60) });
+      if (p.error) items.push({ lab: 'err', calText: String(p.error).slice(0, 120) });
+      if (p.server_text) items.push({ lab: 'txt', calText: String(p.server_text).slice(0, 80) });
       renderJointVals(root, items);
       const poseRoot = ensurePoseRoot(card);
       poseRoot.hidden = false;
-      const next = p.next_state;
-      const sent = p.robot_state;
       poseRoot.innerHTML =
-        '<span class="jv"><b>out</b> ' + fmtPose7(next) + '</span>' +
-        '<span class="jv"><b>in</b> ' + fmtPose7(sent) + '</span>';
-      applyPi05PanelFromPayload(p);
+        '<span class="jv"><b>next_state</b> ' + fmtPose7(p.next_state) + '</span>' +
+        '<span class="jv"><b>robot_state</b> ' + fmtPose7(p.robot_state) + '</span>';
+      applyPi05PanelFromPayload(Object.assign({ configured: true }, p));
     }
 
     function renderGello(card, frame, hzText) {
@@ -4654,7 +4695,7 @@ def create_viz_app(
     pi05_disconnect: Callable[..., dict[str, Any]] | None = None,
     pi05_status: Callable[..., dict[str, Any]] | None = None,
     pi05_set_prompt: Callable[..., dict[str, Any]] | None = None,
-    pi05_set_run: Callable[..., dict[str, Any]] | None = None,
+    pi05_step: Callable[..., dict[str, Any]] | None = None,
     shutdown: Callable[[], dict[str, Any]] | None = None,
     boot_error: str | None = None,
     boot_box: dict[str, Any] | None = None,
@@ -5210,13 +5251,12 @@ def create_viz_app(
             pi05_set_prompt, req.prompt, agent_id=req.agent_id
         )
 
-    @app.post("/api/pi05/run")
-    async def pi05_run_set(req: Pi05RunBody) -> dict[str, Any]:
-        if pi05_set_run is None:
+    @app.post("/api/pi05/step")
+    async def pi05_step_set(req: Pi05AgentIdBody | None = None) -> dict[str, Any]:
+        if pi05_step is None:
             return {"ok": False, "configured": False, "error": "pi05 unavailable"}
-        return await asyncio.to_thread(
-            pi05_set_run, bool(req.enabled), agent_id=req.agent_id
-        )
+        body = req or Pi05AgentIdBody()
+        return await asyncio.to_thread(pi05_step, agent_id=body.agent_id)
 
     @app.post("/api/shutdown")
     async def api_shutdown() -> dict[str, Any]:

@@ -89,7 +89,6 @@ def test_pi05_agent_config_optional_sensor(tmp_path: Path) -> None:
         "site": "pi05-test",
         "sensors_config": str(sensors),
         "dry_run": True,
-        "pi05": {"host": "10.0.0.1", "port": 5001, "prompt": "demo"},
         "agents": [
             {
                 "id": "cam",
@@ -98,14 +97,25 @@ def test_pi05_agent_config_optional_sensor(tmp_path: Path) -> None:
                 "hz": 5,
                 "buffer_frames": 2,
             },
-            {"id": "pi05", "type": "pi05", "hz": 5, "buffer_frames": 4},
+            {
+                "id": "pi05",
+                "type": "pi05",
+                "hz": 2,
+                "buffer_frames": 4,
+                "host": "10.0.0.1",
+                "port": 5001,
+                "prompt": "demo",
+                "camera_map": {"top": "cam", "chest": "cam", "wrist2": "cam"},
+            },
         ],
         "record": {"save_dir": str(tmp_path / "data")},
     }
     dcs.write_text(yaml.dump(data), encoding="utf-8")
     cfg = load_dcs_config(dcs)
-    assert cfg.pi05.host == "10.0.0.1"
-    assert any(a.type == "pi05" and a.sensor_id is None for a in cfg.agents)
+    pi = next(a for a in cfg.agents if a.type == "pi05")
+    assert pi.host == "10.0.0.1"
+    assert pi.port == 5001
+    assert pi.sensor_id is None
 
 
 def test_pi05_api_unconfigured(monkeypatch, tmp_path: Path) -> None:

@@ -68,4 +68,17 @@ agents:
     sensor_id: arm-elite
     hz: 5
     buffer_frames: 8
+  - id: pi05
+    type: pi05
+    hz: 2
+    buffer_frames: 8
+    host: "127.0.0.1"
+    port: 5000
+    prompt: ""
+    camera_map:
+      top: cam-middle
+      chest: cam-left
+      wrist2: cam-right
+    arm_agent_id: arm
+    gripper_agent_id: gripper-read
 

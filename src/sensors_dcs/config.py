@@ -23,6 +23,13 @@ class AgentConfig(BaseModel):
     sensor_id: str | None = None
     hz: float = 50.0
     buffer_frames: int = 64
+    # pi05 client fields (ignored for other types)
+    host: str | None = None
+    port: int | None = None
+    prompt: str | None = None
+    camera_map: dict[str, str] | None = None
+    arm_agent_id: str | None = None
+    gripper_agent_id: str | None = None
 
     @field_validator("hz")
     @classmethod
@@ -36,23 +43,6 @@ class AgentConfig(BaseModel):
         if self.type != "pi05" and not (self.sensor_id or "").strip():
             raise ValueError("sensor_id is required unless type is pi05")
         return self
-
-
-class Pi05Config(BaseModel):
-    """Defaults for the pi05 TCP client (UI may override host/port/prompt in-process)."""
-
-    host: str = "127.0.0.1"
-    port: int = 5000
-    prompt: str = ""
-    camera_map: dict[str, str] = Field(
-        default_factory=lambda: {
-            "top": "cam-middle",
-            "chest": "cam-left",
-            "wrist2": "cam-right",
-        }
-    )
-    arm_agent_id: str | None = None
-    gripper_agent_id: str | None = None
 
 
 class RuntimeConfig(BaseModel):
@@ -100,7 +90,6 @@ class DcsConfig(BaseModel):
     record: RecordConfig = Field(default_factory=RecordConfig)
     gello_arm_sync: GelloArmSyncConfig = Field(default_factory=GelloArmSyncConfig)
     gello_arm_teleop: GelloArmTeleopConfig = Field(default_factory=GelloArmTeleopConfig)
-    pi05: Pi05Config = Field(default_factory=Pi05Config)
     agents: list[AgentConfig] = Field(default_factory=list)
 
     @field_validator("agents")
@@ -187,6 +176,5 @@ def config_summary(cfg: DcsConfig) -> dict[str, Any]:
         "record": cfg.record.model_dump(),
         "gello_arm_sync": cfg.gello_arm_sync.model_dump(),
         "gello_arm_teleop": cfg.gello_arm_teleop.model_dump(),
-        "pi05": cfg.pi05.model_dump(),
         "agents": [a.model_dump() for a in cfg.agents],
     }

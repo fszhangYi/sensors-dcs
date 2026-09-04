@@ -10,30 +10,33 @@ from sensors_dcs.agents.gripper_read_agent import GripperReadAgent
 from sensors_dcs.agents.gripper_write_agent import GripperWriteAgent
 from sensors_dcs.agents.pi05_agent import Pi05ClientAgent
 from sensors_dcs.agents.realsense_agent import RealSenseAgent
-from sensors_dcs.config import AgentConfig, Pi05Config
+from sensors_dcs.config import AgentConfig
 
 if TYPE_CHECKING:
     from sensors.core.base import Sensor
+
+_DEFAULT_CAMERA_MAP = {
+    "top": "cam-middle",
+    "chest": "cam-left",
+    "wrist2": "cam-right",
+}
 
 
 def build_agent(
     cfg: AgentConfig,
     sensor: Sensor | None = None,
-    *,
-    pi05_defaults: Pi05Config | None = None,
 ) -> BaseAgent:
     if cfg.type == "pi05":
-        d = pi05_defaults or Pi05Config()
         return Pi05ClientAgent(
             agent_id=cfg.id,
             hz=cfg.hz,
             buffer_frames=cfg.buffer_frames,
-            host=d.host,
-            port=d.port,
-            prompt=d.prompt,
-            camera_map=dict(d.camera_map),
-            arm_agent_id=d.arm_agent_id,
-            gripper_agent_id=d.gripper_agent_id,
+            host=cfg.host or "127.0.0.1",
+            port=int(cfg.port) if cfg.port is not None else 5000,
+            prompt=cfg.prompt or "",
+            camera_map=dict(cfg.camera_map or _DEFAULT_CAMERA_MAP),
+            arm_agent_id=cfg.arm_agent_id,
+            gripper_agent_id=cfg.gripper_agent_id,
         )
     if sensor is None:
         raise ValueError(f"agent {cfg.id!r} type={cfg.type!r} requires a sensor")
