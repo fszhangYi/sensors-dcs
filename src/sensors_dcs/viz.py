@@ -1257,7 +1257,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
               <option value="union">union</option>
             </select>
             <label for="ppMaster">master</label>
-            <input type="text" id="ppMaster" value="cam-left" />
+            <select id="ppMaster">
+              <option value="" data-i18n="pp.master_pick">先选择合格 episode…</option>
+            </select>
             <label for="ppMasterHz">master-hz</label>
             <input type="number" id="ppMasterHz" value="5" step="0.1" min="0.1" />
           </div>
@@ -1656,6 +1658,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             runHint.textContent = discarding
               ? t('hint.qc_discard')
               : t('hint.qc_stop');
+            await inspectSelectedEpisode(epPath, { silent: true });
             const pp = await runPostprocess({
               steps: ['export-timeline', 'filter-timeline', 'export-hik-dataset'],
               allow_invalid: discarding || (document.getElementById('ppAllowInvalid') || {}).checked,
@@ -2406,7 +2409,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       return {
         episode: (ppEpisode.value || '').trim(),
         align: ppAlign.value || 'asof',
-        master: (ppMaster.value || '').trim() || 'cam-left',
+        master: (ppMaster.value || '').trim() || '',
         master_hz: Number.isFinite(hz) ? hz : 5,
         require: (ppRequire.value || '').trim(),
         max_match_dt: (ppMaxDt.value || '').trim() || '0.033',
@@ -2423,6 +2426,31 @@ PREVIEW_HTML = """<!DOCTYPE html>
       } catch (e) {}
     }
 
+    function fillMasterSelect(candidates, preferred) {
+      const prev = preferred || ppMaster.value || '';
+      ppMaster.innerHTML = '';
+      const opt0 = document.createElement('option');
+      opt0.value = '';
+      opt0.textContent = (candidates && candidates.length)
+        ? t('pp.master_select')
+        : t('pp.master_pick');
+      ppMaster.appendChild(opt0);
+      (candidates || []).forEach((aid) => {
+        const o = document.createElement('option');
+        o.value = aid;
+        o.textContent = aid;
+        ppMaster.appendChild(o);
+      });
+      if (prev && candidates && candidates.indexOf(prev) >= 0) {
+        ppMaster.value = prev;
+      } else if (preferred && candidates && candidates.indexOf(preferred) >= 0) {
+        ppMaster.value = preferred;
+      } else if (candidates && candidates.length === 1) {
+        ppMaster.value = candidates[0];
+      }
+      ppMaster.disabled = !(candidates && candidates.length);
+    }
+
     function loadPpForm(defaults) {
       let saved = null;
       try {
@@ -2430,16 +2458,29 @@ PREVIEW_HTML = """<!DOCTYPE html>
       } catch (e) {}
       const src = Object.assign({}, defaults || {}, saved || {});
       if (src.align) ppAlign.value = src.align;
-      if (src.master) ppMaster.value = src.master;
+      // master filled after episode inspect (select list)
       if (src.master_hz != null) ppMasterHz.value = src.master_hz;
       if (src.require) ppRequire.value = src.require;
       if (src.max_match_dt) ppMaxDt.value = src.max_match_dt;
       if (src.trim) ppTrim.value = src.trim;
       if (src.materialize != null) ppMaterialize.checked = !!src.materialize;
-      if (src.camera_map) ppCameraMap.value = src.camera_map;
-      else if (defaults && defaults.camera_map) ppCameraMap.value = defaults.camera_map;
       if (src.allow_invalid != null) ppAllowInvalid.checked = !!src.allow_invalid;
       if (src.episode) ppEpisode.value = src.episode;
+      window._ppSavedMaster = src.master || (defaults && defaults.master) || '';
+      // Prefer launch-pwd camera-map from server; skip stale AppData/user-data seeds.
+      let map = src.camera_map || '';
+      const defMap = (defaults && defaults.camera_map) || '';
+      if (defMap) {
+        const norm = String(map).replace(/\\\\/g, '/');
+        const staleUser =
+          /sensors-dcs\/configs\/hik_camera_map\.yaml$/i.test(norm) &&
+          (/\/\.local\/share\//i.test(norm) ||
+            /\/AppData\/Roaming\//i.test(norm) ||
+            /\/Application Support\//i.test(norm));
+        if (!map || staleUser) map = defMap;
+      }
+      if (map) ppCameraMap.value = map;
+      else if (defMap) ppCameraMap.value = defMap;
     }
 
     [ppAlign, ppMaster, ppMasterHz, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppAllowInvalid, ppEpisode].forEach((el) => {
@@ -2471,6 +2512,42 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
     }
 
+    async function inspectSelectedEpisode(path, opts) {
+      const silent = opts && opts.silent;
+      const want = (path || '').trim();
+      if (!want) {
+        fillMasterSelect([]);
+        return null;
+      }
+      try {
+        const j = await fetch(
+          '/api/postprocess/episode?path=' + encodeURIComponent(want),
+          { credentials: 'same-origin' }
+        ).then((r) => r.json());
+        if (!j.ok) {
+          const prefer = window._ppSavedMaster || j.suggested_master || '';
+          // Still offer agents so allow-invalid / quick-collect discard can pick master.
+          fillMasterSelect(j.master_candidates || [], prefer);
+          if (!silent) {
+            const detail = [j.error, j.note].filter(Boolean).join('\n');
+            showAppModal(t('pp.manifest_bad_title'), detail || t('pp.manifest_bad'));
+          }
+          return j;
+        }
+        const prefer = window._ppSavedMaster || j.suggested_master || '';
+        fillMasterSelect(j.master_candidates || [], prefer);
+        if (ppMaster.value) window._ppSavedMaster = ppMaster.value;
+        savePpForm();
+        return j;
+      } catch (e) {
+        fillMasterSelect([]);
+        if (!silent) {
+          showAppModal(t('pp.manifest_bad_title'), String(e));
+        }
+        return null;
+      }
+    }
+
     async function refreshEpisodeList() {
       try {
         const j = await fetch('/api/postprocess/defaults').then((r) => r.json());
@@ -2485,6 +2562,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (ppEpisodeSelect.value) {
         ppEpisode.value = ppEpisodeSelect.value;
         savePpForm();
+        inspectSelectedEpisode(ppEpisode.value);
+      } else {
+        fillMasterSelect([]);
+      }
+    });
+    ppEpisode.addEventListener('change', () => {
+      const path = (ppEpisode.value || '').trim();
+      if (path) {
+        // Sync list selection when path pasted.
+        ppEpisodeSelect.value = path;
+        if (ppEpisodeSelect.value !== path) ppEpisodeSelect.value = '';
+        inspectSelectedEpisode(path);
+      } else {
+        fillMasterSelect([]);
       }
     });
     document.getElementById('btnPpRefresh').addEventListener('click', () => refreshEpisodeList());
@@ -2504,6 +2595,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (!body.episode) {
         ppHint.textContent = t('pp.need_episode');
         return { ok: false, error: 'missing episode' };
+      }
+      if (!body.master) {
+        ppHint.textContent = t('pp.need_master');
+        return { ok: false, error: 'missing master' };
       }
       savePpForm();
       setPpBusy(true, t('pp.running'));
@@ -2541,7 +2636,23 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (!j.ok) return;
       loadPpForm(j);
       fillEpisodeSelect(j.episodes || []);
-    }).catch(() => loadPpForm({}));
+      fillMasterSelect([]);
+      const ep = (ppEpisode.value || '').trim();
+      if (ep) {
+        ppEpisodeSelect.value = ep;
+        if (ppEpisodeSelect.value !== ep) ppEpisodeSelect.value = '';
+        inspectSelectedEpisode(ep, { silent: true }).then((info) => {
+          if (info && !info.ok) {
+            // Restored path from localStorage — surface once if still bad.
+            const detail = [info.error, info.note].filter(Boolean).join('\n');
+            showAppModal(t('pp.manifest_bad_title'), detail || t('pp.manifest_bad'));
+          }
+        });
+      }
+    }).catch(() => {
+      loadPpForm({});
+      fillMasterSelect([]);
+    });
     const btnExit = document.getElementById('btnExit');
     if (btnExit) {
       btnExit.addEventListener('click', async () => {
@@ -3711,6 +3822,13 @@ def create_viz_app(
             except Exception:  # noqa: BLE001
                 pass
         return {"ok": True, **_defaults(save_dir=save_dir)}
+
+    @app.get("/api/postprocess/episode")
+    async def postprocess_episode(path: str = "") -> dict[str, Any]:
+        """Inspect episode manifest.json → qualify + master candidate list."""
+        from sensors_dcs.postprocess_service import inspect_episode
+
+        return inspect_episode(path)
 
     @app.post("/api/postprocess/run")
     async def postprocess_run(req: PostprocessBody) -> dict[str, Any]:

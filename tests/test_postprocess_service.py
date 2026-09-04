@@ -21,6 +21,24 @@ def test_postprocess_defaults_include_camera_map() -> None:
     assert isinstance(d["camera_map_candidates"], list)
 
 
+def test_camera_map_prefers_launch_pwd(tmp_path: Path, monkeypatch) -> None:
+    import sensors_dcs.paths as paths
+    from sensors_dcs.postprocess_service import default_camera_map_candidates
+
+    repo = Path("/root/autodl-tmp/sensors-dcs")
+    repo_map = repo / "configs" / "hik_camera_map.yaml"
+    assert repo_map.is_file()
+
+    paths._LAUNCH_CWD = None
+    monkeypatch.chdir(repo)
+    paths.capture_launch_cwd()
+    # Even if cwd later moves to user-data, launch pwd wins.
+    monkeypatch.chdir(tmp_path)
+    cands = default_camera_map_candidates()
+    assert cands, "expected at least repo camera map"
+    assert Path(cands[0]).resolve() == repo_map.resolve()
+
+
 def test_list_episodes(tmp_path: Path) -> None:
     ep = tmp_path / "episode_00003"
     ep.mkdir()
