@@ -101,6 +101,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
   <link rel="icon" href="/assets/favicon.ico" sizes="any" />
   <link rel="apple-touch-icon" href="/assets/favicon.png" />
   <link rel="stylesheet" href="/assets/fonts/ibm-plex-sans.css" />
+  <link rel="stylesheet" href="/assets/settings.css" />
   <style>
     :root {
       --bg: #0b1018;
@@ -231,25 +232,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
       color: #fff;
     }
     header #btnExit:disabled { opacity: 0.45; cursor: not-allowed; }
-    header #btnSettings {
-      flex-shrink: 0;
-      appearance: none;
-      border: 1px solid var(--border);
-      background: var(--chrome);
-      color: var(--text);
-      font: inherit;
-      font-size: 0.85rem;
-      font-weight: 550;
-      padding: 0.45rem 1.15rem;
-      border-radius: 999px;
-      cursor: pointer;
-      margin-top: 0.15rem;
-      transition: border-color var(--motion-fast) var(--motion-ease), background var(--motion-fast) var(--motion-ease);
-    }
-    header #btnSettings:hover {
-      border-color: var(--accent);
-      background: var(--accent-dim);
-    }
     header .header-actions {
       display: flex;
       flex-direction: row;
@@ -257,40 +239,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
       gap: 0.45rem;
       flex-shrink: 0;
     }
-    .lang-switch {
-      display: inline-flex;
-      gap: 0.25rem;
-      padding: 0.15rem;
-      border-radius: 999px;
-      border: 1px solid var(--border);
-      background: var(--chrome);
-    }
-    .lang-switch .lang-btn {
-      appearance: none;
-      border: 1px solid transparent;
-      background: transparent;
-      color: var(--muted);
-      font: inherit;
-      font-size: 0.72rem;
-      font-weight: 600;
-      letter-spacing: 0.04em;
-      padding: 0.22rem 0.65rem;
-      border-radius: 999px;
-      cursor: pointer;
-    }
-    .lang-switch .lang-btn:hover { color: var(--text); }
-    .lang-switch .lang-btn.active {
-      color: var(--text);
-      background: linear-gradient(90deg, var(--spark-dim), var(--accent-dim));
-      border-color: rgba(61, 214, 198, 0.4);
-    }
-    .settings-lang-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem 0.85rem;
-      align-items: center;
-    }
-    .settings-lang-row > span { color: var(--muted); min-width: 5rem; }
     html[lang='en'] header p { max-width: 42rem; }
     main {
       flex: 1;
@@ -742,175 +690,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
       padding: 0.4rem 1rem; border-radius: 999px; border: 1px solid var(--accent);
       background: var(--accent-dim); color: var(--text); cursor: pointer; font: inherit; font-weight: 550;
     }
-    .settings-modal.modal-card {
-      max-width: 40rem;
-      width: min(40rem, calc(100vw - 2rem));
-      max-height: min(88vh, 40rem);
-      display: flex;
-      flex-direction: column;
-      gap: 0.75rem;
-      overflow: hidden;
-    }
-    .settings-modal .settings-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.75rem;
-    }
-    .settings-modal .settings-head h3 { margin: 0; }
-    .settings-modal .settings-close {
-      border-color: var(--border);
-      background: var(--chrome);
-      color: var(--muted);
-      padding: 0.28rem 0.7rem;
-    }
-    .settings-nav {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.35rem;
-    }
-    .settings-nav button {
-      appearance: none;
-      border: 1px solid var(--border);
-      background: transparent;
-      color: var(--muted);
-      font: inherit;
-      font-size: 0.8rem;
-      font-weight: 550;
-      padding: 0.32rem 0.85rem;
-      border-radius: 999px;
-      cursor: pointer;
-    }
-    .settings-nav button.active {
-      color: var(--text);
-      border-color: var(--accent);
-      background: var(--accent-dim);
-    }
-    .settings-body {
-      flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-      display: grid;
-      gap: 0.75rem;
-    }
-    .settings-panel { display: none; gap: 0.65rem; }
-    .settings-panel.active { display: grid; }
-    .settings-panel .hint {
-      margin: 0;
-      color: var(--muted);
-      font-size: 0.8rem;
-      line-height: 1.45;
-    }
-    .settings-kv {
-      display: grid;
-      gap: 0.35rem;
-      font-size: 0.85rem;
-    }
-    .settings-kv div {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.35rem 0.75rem;
-      align-items: baseline;
-    }
-    .settings-kv span { color: var(--muted); min-width: 5rem; }
-    .settings-kv strong { color: var(--accent); font-weight: 600; }
-    .settings-users-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.82rem;
-    }
-    .settings-users-table th,
-    .settings-users-table td {
-      text-align: left;
-      padding: 0.4rem 0.35rem;
-      border-bottom: 1px solid var(--border);
-      vertical-align: middle;
-    }
-    .settings-users-table th { color: var(--muted); font-weight: 550; }
-    .settings-users-table select,
-    .settings-users-table input[type="password"],
-    .settings-add input,
-    .settings-add select {
-      appearance: none;
-      border: 1px solid var(--border);
-      background: var(--input-bg);
-      color: var(--text);
-      font: inherit;
-      font-size: 0.8rem;
-      padding: 0.28rem 0.45rem;
-      border-radius: 8px;
-      max-width: 9rem;
-    }
-    .settings-users-table button,
-    .settings-add button,
-    .settings-actions button,
-    .settings-config-row button {
-      appearance: none;
-      border: 1px solid var(--border);
-      background: var(--chrome);
-      color: var(--text);
-      font: inherit;
-      font-size: 0.78rem;
-      font-weight: 550;
-      padding: 0.28rem 0.65rem;
-      border-radius: 999px;
-      cursor: pointer;
-    }
-    .settings-users-table button:hover,
-    .settings-add button:hover,
-    .settings-actions button:hover,
-    .settings-config-row button:hover {
-      border-color: var(--accent);
-      background: var(--accent-dim);
-    }
-    .settings-config-row button.primary {
-      background: linear-gradient(120deg, var(--accent-dim), color-mix(in srgb, var(--spark-dim) 55%, var(--accent-dim)));
-      border-color: var(--accent);
-    }
-    .settings-users-table button:disabled,
-    .settings-add button:disabled,
-    .settings-config-row button:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-    }
-    .settings-add {
-      display: grid;
-      gap: 0.5rem;
-      padding-top: 0.35rem;
-      border-top: 1px solid var(--border);
-    }
-    .settings-add-grid {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.45rem;
-      align-items: center;
-    }
-    .settings-msg {
-      margin: 0;
-      font-size: 0.8rem;
-      color: var(--spark);
-      min-height: 1.2em;
-    }
-    .settings-msg.err { color: var(--danger); }
-    .settings-config-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.45rem;
-      align-items: center;
-    }
-    .settings-config-row input[type="text"] {
-      flex: 1 1 16rem;
-      min-width: 12rem;
-      appearance: none;
-      border: 1px solid var(--border);
-      background: var(--input-bg);
-      color: var(--text);
-      font: inherit;
-      font-size: 0.8rem;
-      font-family: ui-monospace, Consolas, monospace;
-      padding: 0.4rem 0.65rem;
-      border-radius: 8px;
-    }
     .path-picker-overlay {
       position: fixed;
       inset: 0;
@@ -1134,7 +913,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
       </div>
     </div>
     <div class="header-actions">
-      <button type="button" id="btnSettings" data-i18n="home.cta_settings">设置</button>
+      <button type="button" class="settings-gear-btn" id="btnSettings" aria-haspopup="dialog" data-i18n-attr="aria-label" data-i18n="common.settings" aria-label="设置">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        </svg>
+        <span class="settings-gear-label" data-i18n="common.settings">设置</span>
+      </button>
       <button type="button" class="danger" id="btnExit" data-i18n="header.exit">安全退出</button>
     </div>
   </header>
@@ -1174,7 +959,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <ul class="home-list">
             <li data-i18n="home.tips_1">dry_run=true 用合成数据联调 UI；真机请设 dry_run=false 并保证驱动 / 串口 / 相机可用。</li>
             <li data-i18n="home.tips_2">YAML 或传感器 open 失败时，本页与后处理仍可用，「数据采集」会被锁定并显示错误横幅。</li>
-            <li data-i18n="home.tips_3">右上角「设置」可切换语言、退出登录与管理账号；「安全退出」会停录制、关传感器并结束进程。</li>
+            <li data-i18n="home.tips_3">主页右上角「设置」可切换语言、退出登录与管理账号；「安全退出」会停录制、关传感器并结束进程。</li>
           </ul>
         </section>
         <section class="pp-card home-cta">
@@ -1328,51 +1113,81 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <button type="button" id="appModalOk" data-i18n="modal.ok">知道了</button>
     </div>
   </div>
-  <div class="modal-backdrop" id="settingsModal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
-    <div class="modal-card settings-modal">
-      <div class="settings-head">
-        <h3 id="settingsTitle" data-i18n="settings.title">设置</h3>
-        <button type="button" class="settings-close" id="btnSettingsClose" data-i18n="settings.close">关闭</button>
-      </div>
-      <div class="settings-nav" role="tablist">
-        <button type="button" class="active" id="settingsNavAuth" data-settings-tab="auth" data-i18n="settings.nav_auth">鉴权</button>
-        <button type="button" id="settingsNavConfig" data-settings-tab="config" data-i18n="settings.nav_config">配置文件</button>
-        <button type="button" id="settingsNavUsers" data-settings-tab="users" data-i18n="settings.nav_users" hidden>用户管理</button>
-      </div>
+  <div class="settings-overlay" id="settingsModal" role="presentation">
+    <div class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" id="settingsDialog">
+      <header class="settings-head">
+        <div>
+          <p class="settings-kicker" data-i18n="settings.kicker">Preferences</p>
+          <h2 id="settingsTitle" data-i18n="settings.title">设置</h2>
+        </div>
+        <button type="button" class="settings-close" id="btnSettingsClose" data-i18n-attr="aria-label" data-i18n="common.closeSettings" aria-label="关闭设置">×</button>
+      </header>
       <div class="settings-body">
-        <div class="settings-panel active" id="settingsPanelAuth" data-settings-panel="auth">
+        <nav class="settings-nav" role="tablist" data-i18n-attr="aria-label" data-i18n="settings.navAria" aria-label="设置分类">
+          <button type="button" class="settings-nav-item active" id="settingsNavLanguage" data-settings-tab="language" aria-current="page">
+            <span class="settings-nav-label" data-i18n="settings.tabs.language.label">语言</span>
+            <span class="settings-nav-hint" data-i18n="settings.tabs.language.hint">界面中英</span>
+          </button>
+          <button type="button" class="settings-nav-item" id="settingsNavAuth" data-settings-tab="auth">
+            <span class="settings-nav-label" data-i18n="settings.tabs.auth.label">鉴权</span>
+            <span class="settings-nav-hint" data-i18n="settings.tabs.auth.hint">会话与退出</span>
+          </button>
+          <button type="button" class="settings-nav-item" id="settingsNavConfig" data-settings-tab="config">
+            <span class="settings-nav-label" data-i18n="settings.tabs.config.label">配置文件</span>
+            <span class="settings-nav-hint" data-i18n="settings.tabs.config.hint">DCS YAML</span>
+          </button>
+          <button type="button" class="settings-nav-item" id="settingsNavUsers" data-settings-tab="users" hidden>
+            <span class="settings-nav-label" data-i18n="settings.tabs.users.label">用户</span>
+            <span class="settings-nav-hint" data-i18n="settings.tabs.users.hint">本地账号</span>
+          </button>
+        </nav>
+        <div class="settings-panel active" id="settingsPanelLanguage" data-settings-panel="language" role="tabpanel">
+          <h3 class="settings-panel-title" data-i18n="settings.tabs.language.label">语言</h3>
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <div class="settings-row-title">
+                <span data-i18n="settings.lang_label">界面语言</span>
+                <span class="settings-badge" data-i18n="common.live">实时</span>
+              </div>
+              <p class="settings-row-desc" data-i18n="settings.lang_desc">立即切换主界面与设置文案；写入本机 localStorage。</p>
+            </div>
+            <div class="settings-row-control">
+              <div class="settings-seg" role="group" data-i18n-attr="aria-label" data-i18n="settings.lang_label" aria-label="界面语言">
+                <button type="button" class="settings-seg-btn active" data-locale="zh" data-i18n="lang.zh">中文</button>
+                <button type="button" class="settings-seg-btn" data-locale="en" data-i18n="lang.en">EN</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="settings-panel" id="settingsPanelAuth" data-settings-panel="auth" role="tabpanel">
+          <h3 class="settings-panel-title" data-i18n="settings.tabs.auth.label">鉴权</h3>
           <p class="hint" data-i18n="settings.auth_hint">Cookie 会话鉴权（HttpOnly）。关闭鉴权请设环境变量 SENSORS_DCS_AUTH_DISABLED=1。</p>
           <div class="settings-kv">
             <div><span data-i18n="settings.auth_status">状态</span><strong id="settingsAuthStatus">—</strong></div>
             <div><span data-i18n="settings.auth_user">当前用户</span><strong id="settingsAuthUser">—</strong></div>
             <div><span data-i18n="settings.auth_role">角色</span><strong id="settingsAuthRole">—</strong></div>
-            <div class="settings-lang-row">
-              <span data-i18n="settings.lang_label">界面语言</span>
-              <div class="lang-switch" data-i18n-title="lang.title" title="界面语言 / Language">
-                <button type="button" class="lang-btn active" data-locale="zh" data-i18n="lang.zh">中文</button>
-                <button type="button" class="lang-btn" data-locale="en" data-i18n="lang.en">EN</button>
-              </div>
-            </div>
           </div>
           <div class="settings-actions">
-            <button type="button" id="btnSettingsLogout" data-i18n="settings.logout">退出登录</button>
-            <button type="button" id="btnSettingsRefreshAuth" data-i18n="settings.refresh">刷新</button>
+            <button type="button" class="settings-ghost-btn" id="btnSettingsLogout" data-i18n="settings.logout">退出登录</button>
+            <button type="button" class="settings-ghost-btn" id="btnSettingsRefreshAuth" data-i18n="settings.refresh">刷新</button>
           </div>
           <p class="settings-msg" id="settingsAuthMsg"></p>
         </div>
-        <div class="settings-panel" id="settingsPanelConfig" data-settings-panel="config">
+        <div class="settings-panel" id="settingsPanelConfig" data-settings-panel="config" role="tabpanel">
+          <h3 class="settings-panel-title" data-i18n="settings.tabs.config.label">配置文件</h3>
           <p class="hint" data-i18n="settings.config_hint">选择 DCS 启动 YAML（需含 sensors_config 与 agents）。确认后将写入活动配置并重启前后端。</p>
           <div class="settings-kv">
             <div><span data-i18n="settings.config_current">当前配置</span><strong id="settingsConfigCurrent">—</strong></div>
           </div>
           <div class="settings-config-row">
             <input type="text" id="settingsConfigPath" data-i18n-placeholder="settings.config_path_ph" placeholder="DCS YAML 绝对路径" autocomplete="off" />
-            <button type="button" id="btnSettingsBrowseConfig" data-i18n="settings.config_browse">浏览…</button>
-            <button type="button" class="primary" id="btnSettingsApplyConfig" data-i18n="settings.config_apply">确认并重启</button>
+            <button type="button" class="settings-ghost-btn" id="btnSettingsBrowseConfig" data-i18n="settings.config_browse">浏览…</button>
+            <button type="button" class="settings-primary-btn" id="btnSettingsApplyConfig" data-i18n="settings.config_apply">确认并重启</button>
           </div>
           <p class="settings-msg" id="settingsConfigMsg"></p>
         </div>
-        <div class="settings-panel" id="settingsPanelUsers" data-settings-panel="users">
+        <div class="settings-panel" id="settingsPanelUsers" data-settings-panel="users" role="tabpanel">
+          <h3 class="settings-panel-title" data-i18n="settings.tabs.users.label">用户</h3>
           <p class="hint" data-i18n="settings.users_hint">仅管理员可管理本地账号（写入用户数据目录 configs/users.json，勿提交仓库）。</p>
           <div id="settingsUsersNonAdmin" hidden>
             <p class="hint" data-i18n="settings.users_need_admin">当前账号无管理员权限。</p>
@@ -1401,13 +1216,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
                   <option value="admin" data-i18n="settings.role_admin">管理员</option>
                   <option value="guest" data-i18n="settings.role_guest">访客</option>
                 </select>
-                <button type="button" id="btnSettingsAddUser" data-i18n="settings.add_btn">添加</button>
+                <button type="button" class="settings-primary-btn" id="btnSettingsAddUser" data-i18n="settings.add_btn">添加</button>
               </div>
             </div>
           </div>
           <p class="settings-msg" id="settingsUsersMsg"></p>
         </div>
       </div>
+      <footer class="settings-foot">
+        <span class="muted" data-i18n="common.escHint">按 Esc 关闭</span>
+        <button type="button" class="settings-primary-btn" id="btnSettingsDone" data-i18n="common.done">完成</button>
+      </footer>
     </div>
   </div>
   <div class="path-picker-overlay" id="pathPickerOverlay" role="presentation">
@@ -1474,7 +1293,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       currentLocale = loc;
       try { localStorage.setItem(LS_LOCALE, loc); } catch (e) {}
       document.documentElement.lang = loc === 'zh' ? 'zh-CN' : 'en';
-      document.querySelectorAll('.lang-btn').forEach((btn) => {
+      document.querySelectorAll('.settings-seg-btn[data-locale]').forEach((btn) => {
         btn.classList.toggle('active', btn.getAttribute('data-locale') === loc);
       });
       applyDomI18n(document);
@@ -1490,7 +1309,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (tc && tc.disabled) tc.title = t('boot.collect_title');
       } catch (e) {}
     }
-    document.querySelectorAll('.lang-btn').forEach((btn) => {
+    document.querySelectorAll('.settings-seg-btn[data-locale]').forEach((btn) => {
       btn.addEventListener('click', () => setLocale(btn.getAttribute('data-locale')));
     });
     setLocale(currentLocale);
@@ -1770,6 +1589,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       tabHome.classList.toggle('active', which === 'home');
       tabCollect.classList.toggle('active', which === 'collect');
       tabPost.classList.toggle('active', which === 'post');
+      // Embody convention: Settings gear only on the home overview.
+      const gear = document.getElementById('btnSettings');
+      if (gear) gear.hidden = which !== 'home';
     }
     tabBtnHome.addEventListener('click', () => switchTab('home'));
     tabBtnCollect.addEventListener('click', () => switchTab('collect'));
@@ -1793,11 +1615,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
     // ---- settings modal (auth + users) ----
     const settingsModal = document.getElementById('settingsModal');
+    const settingsDialog = document.getElementById('settingsDialog');
     const btnSettings = document.getElementById('btnSettings');
     const btnSettingsClose = document.getElementById('btnSettingsClose');
+    const btnSettingsDone = document.getElementById('btnSettingsDone');
+    const settingsNavLanguage = document.getElementById('settingsNavLanguage');
     const settingsNavAuth = document.getElementById('settingsNavAuth');
     const settingsNavConfig = document.getElementById('settingsNavConfig');
     const settingsNavUsers = document.getElementById('settingsNavUsers');
+    const settingsPanelLanguage = document.getElementById('settingsPanelLanguage');
     const settingsPanelAuth = document.getElementById('settingsPanelAuth');
     const settingsPanelConfig = document.getElementById('settingsPanelConfig');
     const settingsPanelUsers = document.getElementById('settingsPanelUsers');
@@ -1814,6 +1640,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const settingsUsersNonAdmin = document.getElementById('settingsUsersNonAdmin');
     let settingsMe = null;
     let settingsBusy = false;
+    let settingsBodyOverflow = '';
     let settingsRoots = {};
     let pathPicker = {
       columns: [],
@@ -1831,13 +1658,31 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
 
     function switchSettingsTab(name) {
-      const which = (name === 'users' || name === 'config') ? name : 'auth';
-      if (settingsNavAuth) settingsNavAuth.classList.toggle('active', which === 'auth');
-      if (settingsNavConfig) settingsNavConfig.classList.toggle('active', which === 'config');
-      if (settingsNavUsers) settingsNavUsers.classList.toggle('active', which === 'users');
-      if (settingsPanelAuth) settingsPanelAuth.classList.toggle('active', which === 'auth');
-      if (settingsPanelConfig) settingsPanelConfig.classList.toggle('active', which === 'config');
-      if (settingsPanelUsers) settingsPanelUsers.classList.toggle('active', which === 'users');
+      const allowed = { language: 1, auth: 1, config: 1, users: 1 };
+      const which = allowed[name] ? name : 'language';
+      const navs = {
+        language: settingsNavLanguage,
+        auth: settingsNavAuth,
+        config: settingsNavConfig,
+        users: settingsNavUsers,
+      };
+      const panels = {
+        language: settingsPanelLanguage,
+        auth: settingsPanelAuth,
+        config: settingsPanelConfig,
+        users: settingsPanelUsers,
+      };
+      Object.keys(navs).forEach((k) => {
+        const nav = navs[k];
+        const panel = panels[k];
+        const on = k === which;
+        if (nav) {
+          nav.classList.toggle('active', on);
+          if (on) nav.setAttribute('aria-current', 'page');
+          else nav.removeAttribute('aria-current');
+        }
+        if (panel) panel.classList.toggle('active', on);
+      });
     }
 
     function roleLabel(role) {
@@ -2265,8 +2110,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
     async function openSettings() {
       if (!settingsModal) return;
-      switchSettingsTab('auth');
+      switchSettingsTab('language');
+      settingsBodyOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
       settingsModal.classList.add('show');
+      if (btnSettingsClose) btnSettingsClose.focus();
       await refreshSettingsAuth();
       await refreshSettingsConfig();
       await refreshSettingsUsers();
@@ -2274,16 +2122,30 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
     function closeSettings() {
       if (settingsModal) settingsModal.classList.remove('show');
+      document.body.style.overflow = settingsBodyOverflow || '';
       closePathPicker();
     }
 
+    function onSettingsKeydown(e) {
+      if (e.key === 'Escape' && settingsModal && settingsModal.classList.contains('show')) {
+        e.preventDefault();
+        closeSettings();
+      }
+    }
+    document.addEventListener('keydown', onSettingsKeydown);
+
     if (btnSettings) btnSettings.addEventListener('click', () => openSettings());
     if (btnSettingsClose) btnSettingsClose.addEventListener('click', closeSettings);
+    if (btnSettingsDone) btnSettingsDone.addEventListener('click', closeSettings);
     if (settingsModal) {
       settingsModal.addEventListener('click', (e) => {
         if (e.target === settingsModal) closeSettings();
       });
     }
+    if (settingsDialog) {
+      settingsDialog.addEventListener('click', (e) => e.stopPropagation());
+    }
+    if (settingsNavLanguage) settingsNavLanguage.addEventListener('click', () => switchSettingsTab('language'));
     if (settingsNavAuth) settingsNavAuth.addEventListener('click', () => switchSettingsTab('auth'));
     if (settingsNavConfig) {
       settingsNavConfig.addEventListener('click', async () => {
