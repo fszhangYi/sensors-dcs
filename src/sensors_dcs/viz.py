@@ -92,18 +92,42 @@ class GelloArmTeleopBody(BaseModel):
 
 
 PREVIEW_HTML = """<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark" data-theme-pref="dark" data-compact="0" data-density="comfortable">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>sensors-dcs · 采集 / 后处理</title>
+  <script>
+  (function () {
+    try {
+      var theme = localStorage.getItem('sensors-dcs.theme') || 'dark';
+      if (theme !== 'system' && theme !== 'dark' && theme !== 'light') theme = 'dark';
+      var compact = localStorage.getItem('sensors-dcs.compact');
+      var density = localStorage.getItem('sensors-dcs.density') || 'comfortable';
+      if (density !== 'comfortable' && density !== 'compact' && density !== 'dense') density = 'comfortable';
+      var resolved = theme;
+      if (theme === 'system') {
+        resolved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches)
+          ? 'light' : 'dark';
+      }
+      var root = document.documentElement;
+      root.setAttribute('data-theme', resolved);
+      root.setAttribute('data-theme-pref', theme);
+      root.setAttribute('data-compact', (compact === '1' || compact === 'true') ? '1' : '0');
+      root.setAttribute('data-density', density);
+      root.style.colorScheme = resolved;
+    } catch (e) {}
+  })();
+  </script>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
   <link rel="icon" href="/assets/favicon.ico" sizes="any" />
   <link rel="apple-touch-icon" href="/assets/favicon.png" />
   <link rel="stylesheet" href="/assets/fonts/ibm-plex-sans.css" />
   <link rel="stylesheet" href="/assets/settings.css" />
+  <link rel="stylesheet" href="/assets/appearance.css" />
   <style>
-    :root {
+    :root,
+    html[data-theme='dark'] {
       --bg: #0b1018;
       --panel: rgba(18, 26, 38, 0.9);
       --border: rgba(58, 77, 102, 0.75);
@@ -119,6 +143,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       --warn: #fbbf24;
       --off: #6b7a90;
       --surface: rgba(18, 26, 38, 0.96);
+      --surface-2: rgba(22, 32, 48, 0.92);
+      --surface-3: rgba(28, 40, 58, 0.95);
       --chrome: rgba(26, 35, 50, 0.88);
       --input-bg: rgba(8, 12, 20, 0.85);
       --bg-spot: #1a2740;
@@ -133,6 +159,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
       --motion-fast: 160ms;
       --motion-med: 280ms;
+      color-scheme: dark;
     }
     * { box-sizing: border-box; }
     * { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
@@ -558,7 +585,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       border-radius: 12px;
       font-size: 0.72rem;
       line-height: 1.4;
-      color: #c5d0e0;
+      color: var(--text);
       font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
     }
     pre#ppLog { max-height: 28vh; min-height: 5rem; white-space: pre-wrap; }
@@ -1126,7 +1153,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
       </header>
       <div class="settings-body">
         <nav class="settings-nav" role="tablist" data-i18n-attr="aria-label" data-i18n="settings.navAria" aria-label="设置分类">
-          <button type="button" class="settings-nav-item active" id="settingsNavLanguage" data-settings-tab="language" aria-current="page">
+          <button type="button" class="settings-nav-item active" id="settingsNavAppearance" data-settings-tab="appearance" aria-current="page">
+            <span class="settings-nav-label" data-i18n="settings.tabs.appearance.label">外观</span>
+            <span class="settings-nav-hint" data-i18n="settings.tabs.appearance.hint">主题与界面密度</span>
+          </button>
+          <button type="button" class="settings-nav-item" id="settingsNavLanguage" data-settings-tab="language">
             <span class="settings-nav-label" data-i18n="settings.tabs.language.label">语言</span>
             <span class="settings-nav-hint" data-i18n="settings.tabs.language.hint">界面中英</span>
           </button>
@@ -1143,7 +1174,56 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <span class="settings-nav-hint" data-i18n="settings.tabs.users.hint">本地账号</span>
           </button>
         </nav>
-        <div class="settings-panel active" id="settingsPanelLanguage" data-settings-panel="language" role="tabpanel">
+        <div class="settings-panel active" id="settingsPanelAppearance" data-settings-panel="appearance" role="tabpanel">
+          <h3 class="settings-panel-title" data-i18n="settings.tabs.appearance.label">外观</h3>
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <div class="settings-row-title">
+                <span data-i18n="settings.appearance.theme">主题</span>
+                <span class="settings-badge" data-i18n="common.live">实时</span>
+              </div>
+              <p class="settings-row-desc" data-i18n="settings.appearance.themeDesc">跟随系统，或强制深色 / 浅色。偏好保存在本机，立即生效。</p>
+            </div>
+            <div class="settings-row-control">
+              <div class="settings-seg" id="settingsThemeSeg" role="group" data-i18n-attr="aria-label" data-i18n="settings.appearance.theme" aria-label="主题">
+                <button type="button" class="settings-seg-btn" data-theme-pref="system" data-i18n="settings.appearance.themeSystem">跟随系统</button>
+                <button type="button" class="settings-seg-btn active" data-theme-pref="dark" data-i18n="settings.appearance.themeDark">深色</button>
+                <button type="button" class="settings-seg-btn" data-theme-pref="light" data-i18n="settings.appearance.themeLight">浅色</button>
+              </div>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <div class="settings-row-title">
+                <span data-i18n="settings.appearance.compact">紧凑布局</span>
+                <span class="settings-badge" data-i18n="common.live">实时</span>
+              </div>
+              <p class="settings-row-desc" data-i18n="settings.appearance.compactDesc">缩小顶栏间距，适合小屏或密集操作。</p>
+            </div>
+            <div class="settings-row-control">
+              <button type="button" class="settings-toggle" id="settingsCompactToggle" data-i18n-attr="aria-label" data-i18n="settings.appearance.compact" aria-label="紧凑布局" aria-pressed="false">
+                <span class="settings-toggle-knob"></span>
+              </button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <div class="settings-row-title">
+                <span data-i18n="settings.appearance.density">界面密度</span>
+                <span class="settings-badge" data-i18n="common.live">实时</span>
+              </div>
+              <p class="settings-row-desc" data-i18n="settings.appearance.densityDesc">调整字号与间距（舒适 / 紧凑 / 密集）。</p>
+            </div>
+            <div class="settings-row-control">
+              <div class="settings-seg" id="settingsDensitySeg" role="group" data-i18n-attr="aria-label" data-i18n="settings.appearance.density" aria-label="界面密度">
+                <button type="button" class="settings-seg-btn active" data-density-pref="comfortable" data-i18n="settings.appearance.densityComfortable">舒适</button>
+                <button type="button" class="settings-seg-btn" data-density-pref="compact" data-i18n="settings.appearance.densityCompact">紧凑</button>
+                <button type="button" class="settings-seg-btn" data-density-pref="dense" data-i18n="settings.appearance.densityDense">密集</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="settings-panel" id="settingsPanelLanguage" data-settings-panel="language" role="tabpanel">
           <h3 class="settings-panel-title" data-i18n="settings.tabs.language.label">语言</h3>
           <div class="settings-row">
             <div class="settings-row-text">
@@ -1621,10 +1701,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const btnSettings = document.getElementById('btnSettings');
     const btnSettingsClose = document.getElementById('btnSettingsClose');
     const btnSettingsDone = document.getElementById('btnSettingsDone');
+    const settingsNavAppearance = document.getElementById('settingsNavAppearance');
     const settingsNavLanguage = document.getElementById('settingsNavLanguage');
     const settingsNavAuth = document.getElementById('settingsNavAuth');
     const settingsNavConfig = document.getElementById('settingsNavConfig');
     const settingsNavUsers = document.getElementById('settingsNavUsers');
+    const settingsPanelAppearance = document.getElementById('settingsPanelAppearance');
     const settingsPanelLanguage = document.getElementById('settingsPanelLanguage');
     const settingsPanelAuth = document.getElementById('settingsPanelAuth');
     const settingsPanelConfig = document.getElementById('settingsPanelConfig');
@@ -1673,15 +1755,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
 
     function switchSettingsTab(name) {
-      const allowed = { language: 1, auth: 1, config: 1, users: 1 };
-      const which = allowed[name] ? name : 'language';
+      const allowed = { appearance: 1, language: 1, auth: 1, config: 1, users: 1 };
+      const which = allowed[name] ? name : 'appearance';
       const navs = {
+        appearance: settingsNavAppearance,
         language: settingsNavLanguage,
         auth: settingsNavAuth,
         config: settingsNavConfig,
         users: settingsNavUsers,
       };
       const panels = {
+        appearance: settingsPanelAppearance,
         language: settingsPanelLanguage,
         auth: settingsPanelAuth,
         config: settingsPanelConfig,
@@ -1699,6 +1783,91 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (panel) panel.classList.toggle('active', on);
       });
     }
+
+    const APPEARANCE_THEME_KEY = 'sensors-dcs.theme';
+    const APPEARANCE_COMPACT_KEY = 'sensors-dcs.compact';
+    const APPEARANCE_DENSITY_KEY = 'sensors-dcs.density';
+    const DEFAULT_APPEARANCE = { theme: 'dark', compact: false, density: 'comfortable' };
+    let appearancePrefs = Object.assign({}, DEFAULT_APPEARANCE);
+    let appearanceMedia = null;
+
+    function isThemePref(v) {
+      return v === 'system' || v === 'dark' || v === 'light';
+    }
+    function isDensityPref(v) {
+      return v === 'comfortable' || v === 'compact' || v === 'dense';
+    }
+    function readStoredAppearance() {
+      const out = Object.assign({}, DEFAULT_APPEARANCE);
+      try {
+        const theme = localStorage.getItem(APPEARANCE_THEME_KEY);
+        if (isThemePref(theme)) out.theme = theme;
+        const compact = localStorage.getItem(APPEARANCE_COMPACT_KEY);
+        if (compact === '1' || compact === 'true') out.compact = true;
+        if (compact === '0' || compact === 'false') out.compact = false;
+        const density = localStorage.getItem(APPEARANCE_DENSITY_KEY);
+        if (isDensityPref(density)) out.density = density;
+      } catch (e) {}
+      return out;
+    }
+    function persistAppearance(prefs) {
+      try {
+        localStorage.setItem(APPEARANCE_THEME_KEY, prefs.theme);
+        localStorage.setItem(APPEARANCE_COMPACT_KEY, prefs.compact ? '1' : '0');
+        localStorage.setItem(APPEARANCE_DENSITY_KEY, prefs.density);
+      } catch (e) {}
+    }
+    function resolveTheme(pref) {
+      if (pref === 'dark' || pref === 'light') return pref;
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) return 'light';
+      return 'dark';
+    }
+    function applyAppearance(prefs) {
+      const resolved = resolveTheme(prefs.theme);
+      const root = document.documentElement;
+      root.setAttribute('data-theme', resolved);
+      root.setAttribute('data-theme-pref', prefs.theme);
+      root.setAttribute('data-compact', prefs.compact ? '1' : '0');
+      root.setAttribute('data-density', prefs.density);
+      root.style.colorScheme = resolved;
+      return resolved;
+    }
+    function syncAppearanceControls() {
+      document.querySelectorAll('#settingsThemeSeg [data-theme-pref]').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-theme-pref') === appearancePrefs.theme);
+      });
+      document.querySelectorAll('#settingsDensitySeg [data-density-pref]').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-density-pref') === appearancePrefs.density);
+      });
+      const tog = document.getElementById('settingsCompactToggle');
+      if (tog) {
+        tog.classList.toggle('on', !!appearancePrefs.compact);
+        tog.setAttribute('aria-pressed', appearancePrefs.compact ? 'true' : 'false');
+      }
+    }
+    function setAppearancePrefs(partial) {
+      appearancePrefs = Object.assign({}, appearancePrefs, partial || {});
+      persistAppearance(appearancePrefs);
+      applyAppearance(appearancePrefs);
+      syncAppearanceControls();
+      bindAppearanceMedia();
+    }
+    function bindAppearanceMedia() {
+      if (appearanceMedia) {
+        try { appearanceMedia.removeEventListener('change', onAppearanceMediaChange); } catch (e) {}
+        appearanceMedia = null;
+      }
+      if (appearancePrefs.theme !== 'system' || !window.matchMedia) return;
+      appearanceMedia = window.matchMedia('(prefers-color-scheme: light)');
+      appearanceMedia.addEventListener('change', onAppearanceMediaChange);
+    }
+    function onAppearanceMediaChange() {
+      if (appearancePrefs.theme === 'system') applyAppearance(appearancePrefs);
+    }
+    appearancePrefs = readStoredAppearance();
+    applyAppearance(appearancePrefs);
+    syncAppearanceControls();
+    bindAppearanceMedia();
 
     function roleLabel(role) {
       if (role === 'admin') return t('settings.role_admin');
@@ -2149,7 +2318,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
     async function openSettings() {
       if (!settingsModal) return;
-      switchSettingsTab('language');
+      switchSettingsTab('appearance');
       settingsBodyOverflow = document.body.style.overflow;
       document.body.style.overflow = 'hidden';
       settingsModal.classList.add('show');
@@ -2184,6 +2353,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     if (settingsDialog) {
       settingsDialog.addEventListener('click', (e) => e.stopPropagation());
     }
+    if (settingsNavAppearance) settingsNavAppearance.addEventListener('click', () => switchSettingsTab('appearance'));
     if (settingsNavLanguage) settingsNavLanguage.addEventListener('click', () => switchSettingsTab('language'));
     if (settingsNavAuth) settingsNavAuth.addEventListener('click', () => switchSettingsTab('auth'));
     if (settingsNavConfig) {
@@ -2197,6 +2367,24 @@ PREVIEW_HTML = """<!DOCTYPE html>
         switchSettingsTab('users');
         await refreshSettingsAuth();
         await refreshSettingsUsers();
+      });
+    }
+    document.querySelectorAll('#settingsThemeSeg [data-theme-pref]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const pref = btn.getAttribute('data-theme-pref');
+        if (isThemePref(pref)) setAppearancePrefs({ theme: pref });
+      });
+    });
+    document.querySelectorAll('#settingsDensitySeg [data-density-pref]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const pref = btn.getAttribute('data-density-pref');
+        if (isDensityPref(pref)) setAppearancePrefs({ density: pref });
+      });
+    });
+    const settingsCompactToggle = document.getElementById('settingsCompactToggle');
+    if (settingsCompactToggle) {
+      settingsCompactToggle.addEventListener('click', () => {
+        setAppearancePrefs({ compact: !appearancePrefs.compact });
       });
     }
     if (settingsConfigPath) {
