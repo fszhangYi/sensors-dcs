@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Desktop packaging entry for sensors-dcs (Linux → Windows via Wine).
-# Skill: scheme-a-linux-to-windows-desktop
+# Desktop packaging entry for sensors-dcs (Linux → Windows via Wine, or native Linux).
+# Skills: scheme-a-linux-to-windows-desktop, scheme-a-linux-to-linux-desktop
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,10 +20,10 @@ usage() {
   cat <<'EOF'
 Usage: bash scripts/build-desktop.sh [options]
 
-Build a self-contained Windows desktop onedir under release/.
+Build a self-contained desktop onedir under release/.
 
 Options:
-  --target windows                Build target (default / only: windows)
+  --target windows|linux|native   windows = Wine (default); linux/native = host PyInstaller
   --skip-frontend                 Skip frontend build (default; UI is embedded)
   --no-delta                      Skip incremental delta.zip vs previous release
   -h, --help                      Show this help
@@ -37,20 +37,8 @@ Environment:
 Examples:
   ./build.sh
   ./build.sh --target windows
+  ./build.sh --target linux
   bash scripts/build-desktop.sh --target windows
-
-Output:
-  release/sensors-dcs-desktop-windows-x64-<UTC>/
-  release/sensors-dcs-desktop-windows-x64-<UTC>.zip
-  release/sensors-dcs-desktop-windows-x64-<UTC>-delta.zip   (if a prior release exists)
-
-Manual delta (without full rebuild):
-  bash scripts/build-delta.sh
-  bash scripts/build-delta.sh --baseline release/<old> --current release/<new>
-
-Prerequisites:
-  wine64 (or wine), curl, unzip, python3
-  ./sensors → hik-sensors checkout (symlink)
 EOF
 }
 
@@ -79,8 +67,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$TARGET" != "windows" ]]; then
-  echo "error: only --target windows is supported (scheme-a-linux-to-windows-desktop)" >&2
+if [[ "$TARGET" != "windows" && "$TARGET" != "linux" && "$TARGET" != "native" ]]; then
+  echo "error: --target must be windows, linux, or native" >&2
   exit 1
 fi
 
@@ -89,9 +77,11 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v wine64 >/dev/null 2>&1 && ! command -v wine >/dev/null 2>&1; then
-  echo "error: wine64/wine not found — install Wine (win64) first" >&2
-  exit 1
+if [[ "$TARGET" == "windows" ]]; then
+  if ! command -v wine64 >/dev/null 2>&1 && ! command -v wine >/dev/null 2>&1; then
+    echo "error: wine64/wine not found — install Wine (win64) first" >&2
+    exit 1
+  fi
 fi
 
 if [[ ! -d "$ROOT/sensors/src/sensors" ]]; then
@@ -108,7 +98,7 @@ if [[ ${#EXTRA[@]} -gt 0 ]]; then
   ARGS+=("${EXTRA[@]}")
 fi
 
-echo "==> sensors-dcs desktop build (Windows via Wine)"
+echo "==> sensors-dcs desktop build ($TARGET)"
 echo "    root:      $ROOT"
 echo "    target:    $TARGET"
 echo "    pip index: $PIP_INDEX_URL"

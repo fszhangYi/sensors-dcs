@@ -479,13 +479,140 @@ def build_windows(*, skip_frontend: bool = True, delta: bool = True) -> Path:
     return release
 
 
+def build_linux(*, skip_frontend: bool = True, delta: bool = True) -> Path:
+    del skip_frontend
+    if not (ROOT / "sensors" / "src" / "sensors").is_dir():
+        raise SystemExit(
+            "missing ./sensors symlink → hik-sensors src "
+            "(ln -sfn ~/autodl-tmp/sensors ./sensors)"
+        )
+
+    venv = ROOT / ".tools" / "linux-desktop-venv"
+    py = venv / "bin" / "python"
+    if not py.is_file():
+        _run([sys.executable, "-m", "venv", str(venv)])
+    env = os.environ.copy()
+    env["PIP_INDEX_URL"] = PIP_INDEX
+    env["PYTHONNOUSERSITE"] = "1"
+    _run([str(py), "-m", "pip", "install", "-U", "pip", "wheel", "-i", PIP_INDEX], env=env)
+    _run(
+        [str(py), "-m", "pip", "install", "-i", PIP_INDEX, "-r", str(ROOT / "requirements.txt")],
+        env=env,
+    )
+    _run(
+        [
+            str(py),
+            "-m",
+            "pip",
+            "install",
+            "-i",
+            PIP_INDEX,
+            "-r",
+            str(ROOT / "requirements-desktop.txt"),
+        ],
+        env=env,
+    )
+    # Hardware extras are optional on Linux hosts without RealSense/Elite wheels.
+    try:
+        _run(
+            [
+                str(py),
+                "-m",
+                "pip",
+                "install",
+                "-i",
+                PIP_INDEX,
+                "-r",
+                str(ROOT / "requirements-hardware.txt"),
+            ],
+            env=env,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"[linux] warn: hardware requirements install failed ({e}); continuing", flush=True)
+    _run([str(py), "-m", "pip", "install", "-i", PIP_INDEX, "pyinstaller"], env=env)
+
+    TMP_BASE.mkdir(parents=True, exist_ok=True)
+    dist = TMP_BASE / "sensors-dcs-dist-linux"
+    work = TMP_BASE / "sensors-dcs-work-linux"
+    if dist.exists():
+        shutil.rmtree(dist)
+    if work.exists():
+        shutil.rmtree(work)
+    dist.mkdir(parents=True)
+    work.mkdir(parents=True)
+
+    spec = ROOT / "packaging" / "sensors-dcs-desktop-linux.spec"
+    _run(
+        [
+            str(py),
+            "-m",
+            "PyInstaller",
+            "--noconfirm",
+            "--clean",
+            f"--distpath={dist}",
+            f"--workpath={work}",
+            str(spec),
+        ],
+        env=env,
+    )
+
+    built = dist / APP_EXE
+    if not built.is_dir():
+        raise SystemExit(f"PyInstaller output missing: {built}")
+
+    stamp = _utc_stamp()
+    release = ROOT / "release" / f"{APP_ID}-desktop-linux-x64-{stamp}"
+    if release.exists():
+        shutil.rmtree(release)
+    shutil.copytree(built, release)
+
+    info = {
+        "app_id": APP_ID,
+        "platform": "linux-x64",
+        "self_contained": True,
+        "requires_python_on_target": False,
+        "built_at": stamp,
+        "entry": APP_EXE,
+        "notes": "Built on Linux with native PyInstaller (scheme-a-linux-to-linux-desktop)",
+    }
+    (release / "BUILD_INFO.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
+    (release / "README.txt").write_text(
+        "\n".join(
+            [
+                "sensors-dcs desktop (Linux x64)",
+                "",
+                "1. Extract this folder",
+                "2. ./sensors-dcs            # headless backend",
+                "   ./sensors-dcs --ui       # open viz window/browser",
+                "   SENSORS_DCS_PORT=6006 ./sensors-dcs",
+                "3. Open http://127.0.0.1:<port>/",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    zip_path = Path(str(release) + ".zip")
+    if zip_path.exists():
+        zip_path.unlink()
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for path in release.rglob("*"):
+            if path.is_file():
+                zf.write(path, arcname=str(path.relative_to(release.parent)))
+    print(f"release: {release}")
+    print(f"zip: {zip_path}")
+    if delta:
+        _maybe_build_delta(release)
+    return release
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build sensors-dcs desktop packages")
     parser.add_argument(
         "--target",
-        choices=["windows"],
+        choices=["windows", "linux", "native"],
         default="windows",
-        help="windows = Wine cross-build (scheme-a-linux-to-windows-desktop)",
+        help="windows = Wine cross-build; linux/native = host PyInstaller onedir",
     )
     parser.add_argument("--skip-frontend", action="store_true", default=True)
     parser.add_argument(
@@ -494,8 +621,11 @@ def main() -> None:
         help="skip incremental delta.zip vs previous release",
     )
     args = parser.parse_args()
-    if args.target == "windows":
+    target = "linux" if args.target in ("linux", "native") else args.target
+    if target == "windows":
         build_windows(skip_frontend=args.skip_frontend, delta=not args.no_delta)
+    elif target == "linux":
+        build_linux(skip_frontend=args.skip_frontend, delta=not args.no_delta)
     else:
         raise SystemExit(f"unsupported target: {args.target}")
 
