@@ -86,6 +86,7 @@ class ApplyConfigBody(BaseModel):
 class ArmHomeSetBody(BaseModel):
     joints_rad: list[float] | None = None
     from_live: bool = False
+    duration_s: float | None = None
 
 
 class ArmHomeSaveBody(BaseModel):
@@ -1805,9 +1806,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
           </div>
           <p class="settings-msg" id="settingsConfigMsg"></p>
           <h3 class="settings-panel-title" style="margin-top:1rem;" data-i18n="settings.home_title">Home 关节角</h3>
-          <p class="hint" data-i18n="settings.home_hint">与 YAML home_joints_rad /「设为 home」同步；点「更新到 YAML」写入上方选中的配置文件（不重启）。</p>
+          <p class="hint" data-i18n="settings.home_hint">与 YAML home_joints_rad / home_duration_s /「设为 home」同步；回 Home 用独立时长，不与步进「到达」共用。</p>
           <div class="settings-config-row">
             <input type="text" id="settingsHomeJoints" data-i18n-placeholder="arm.abs_ph" placeholder="0.00,0.00,0.00,0.00,0.00,0.00" autocomplete="off" spellcheck="false" style="flex:1;min-width:12rem;" />
+          </div>
+          <div class="settings-config-row" style="margin-top:0.45rem;">
+            <label class="arm-abs-dur" data-i18n-title="settings.home_dur_hint" title="回 Home 到位时间 1–300×100ms（独立于步进）">
+              <span data-i18n="settings.home_dur">回 Home</span>
+              <input type="number" id="settingsHomeDur" min="1" max="300" step="1" value="200" />
+              <span data-i18n="arm.abs_dur_unit">×100ms</span>
+              <span id="settingsHomeDurVal">20.0s</span>
+            </label>
             <button type="button" class="settings-ghost-btn" id="btnSettingsHomeReload" data-i18n="settings.home_reload">同步</button>
             <button type="button" class="settings-primary-btn" id="btnSettingsHomeSave" data-i18n="settings.home_save">更新到 YAML</button>
           </div>
@@ -1978,16 +1987,44 @@ PREVIEW_HTML = """<!DOCTYPE html>
       appModalBody.textContent = body || '';
       appModal.classList.add('show');
     }
-    window.__armHome = window.__armHome || { configured: false, home_joints_rad: null };
+    window.__armHome = window.__armHome || { configured: false, home_joints_rad: null, home_duration_s: 20 };
     function formatHomeJointsCsv(joints) {
       if (!Array.isArray(joints) || joints.length < 6) return '';
       return joints.slice(0, 6).map((v) => Number(v).toFixed(4)).join(',');
     }
+    function homeDurationHundredMsFromState(st) {
+      const sec = Number((st && st.home_duration_s) != null ? st.home_duration_s : 20);
+      if (!Number.isFinite(sec)) return 200;
+      return Math.max(1, Math.min(300, Math.round(sec * 10)));
+    }
+    function homeDurationSecondsFromUi() {
+      const inp = document.getElementById('settingsHomeDur');
+      let n = inp ? Math.round(Number(inp.value)) : homeDurationHundredMsFromState(window.__armHome);
+      if (!Number.isFinite(n)) n = 200;
+      n = Math.max(1, Math.min(300, n));
+      return n * 0.1;
+    }
+    function updateSettingsHomeDurLabel() {
+      const inp = document.getElementById('settingsHomeDur');
+      const lab = document.getElementById('settingsHomeDurVal');
+      if (!inp) return;
+      let n = Math.round(Number(inp.value));
+      if (!Number.isFinite(n)) n = 200;
+      n = Math.max(1, Math.min(300, n));
+      if (String(inp.value) !== String(n)) inp.value = String(n);
+      if (lab) lab.textContent = (n * 0.1).toFixed(1) + 's';
+    }
     function syncSettingsHomeFromState(st) {
       const inp = document.getElementById('settingsHomeJoints');
-      if (!inp || document.activeElement === inp) return;
-      const joints = (st && st.home_joints_rad) || null;
-      inp.value = formatHomeJointsCsv(joints);
+      if (inp && document.activeElement !== inp) {
+        const joints = (st && st.home_joints_rad) || null;
+        inp.value = formatHomeJointsCsv(joints);
+      }
+      const durInp = document.getElementById('settingsHomeDur');
+      if (durInp && document.activeElement !== durInp) {
+        durInp.value = String(homeDurationHundredMsFromState(st));
+        updateSettingsHomeDurLabel();
+      }
     }
     async function refreshArmHomeState() {
       try {
@@ -2000,8 +2037,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
     }
     async function goArmHomeWithDuration(duration_s, progEl) {
-      const st = window.__armHome || {};
-      if (!st.configured || !Array.isArray(st.home_joints_rad) || st.home_joints_rad.length < 6) {
+      const st0 = window.__armHome || {};
+      if (!st0.configured || !Array.isArray(st0.home_joints_rad) || st0.home_joints_rad.length < 6) {
         const live = await refreshArmHomeState();
         if (!live.configured) {
           showAppModal(t('arm.home_bad_title'), live.error || t('arm.home_missing'));
@@ -2009,6 +2046,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
           return { ok: false, error: live.error || t('arm.home_missing') };
         }
       }
+      // Prefer dedicated home duration; never fall back to Infer step abs duration.
+      let dur = duration_s;
+      if (dur == null || !Number.isFinite(Number(dur))) {
+        const st = window.__armHome || {};
+        dur = Number(st.home_duration_s);
+        if (!Number.isFinite(dur)) dur = homeDurationSecondsFromUi();
+      }
+      dur = Math.max(0.1, Math.min(30, Number(dur)));
       const agentId = window.__armWriteAgentId || null;
       try {
         const r = await fetch('/api/arm/home/go', {
@@ -2016,18 +2061,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             agent_id: agentId,
-            duration_s: duration_s,
+            duration_s: dur,
           }),
         }).then((x) => x.json());
-        if (r && r.home) window.__armHome = r.home;
+        if (r && r.home) {
+          window.__armHome = r.home;
+          syncSettingsHomeFromState(r.home);
+        }
+        const usedDur = (r && r.duration_s != null) ? Number(r.duration_s) : dur;
         if (!r.ok) {
           showAppModal(t('arm.home_bad_title'), r.error || JSON.stringify(r));
           if (progEl) progEl.textContent = t('arm.home_fail', { error: r.error || JSON.stringify(r) });
         } else {
           if (progEl) {
-            progEl.textContent = t('arm.home_ok', {
-              dur: Number(duration_s != null ? duration_s : 10).toFixed(1),
-            });
+            progEl.textContent = t('arm.home_ok', { dur: Number(usedDur).toFixed(1) });
           }
           if (r) window.__armAbsRamp = r;
         }
@@ -2709,7 +2756,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             const autoHome = document.getElementById('infAutoHome');
             if (autoHome && autoHome.checked) {
               if (infPi05Hint) infPi05Hint.textContent = t('infer.hint_auto_home');
-              await goArmHomeWithDuration(infArmDurSeconds(), infArmProg);
+              await goArmHomeWithDuration(null, infArmProg);
             }
             return;
           }
@@ -2837,7 +2884,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (pi05LoopRunning) {
           await stopPi05Loop(t('infer.hint_loop_stopped', { n: pi05LoopStepN || 0 }));
         }
-        await goArmHomeWithDuration(infArmDurSeconds(), infArmProg);
+        await goArmHomeWithDuration(null, infArmProg);
       });
     }
     const infAutoHome = document.getElementById('infAutoHome');
@@ -3983,8 +4030,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     const settingsHomeMsg = document.getElementById('settingsHomeMsg');
     const settingsHomeJoints = document.getElementById('settingsHomeJoints');
+    const settingsHomeDur = document.getElementById('settingsHomeDur');
     const btnSettingsHomeReload = document.getElementById('btnSettingsHomeReload');
     const btnSettingsHomeSave = document.getElementById('btnSettingsHomeSave');
+    if (settingsHomeDur) {
+      settingsHomeDur.addEventListener('input', updateSettingsHomeDurLabel);
+      settingsHomeDur.addEventListener('change', updateSettingsHomeDurLabel);
+      updateSettingsHomeDurLabel();
+    }
     if (btnSettingsHomeReload) {
       btnSettingsHomeReload.addEventListener('click', async () => {
         const r = await refreshArmHomeState();
@@ -4005,11 +4058,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
           return;
         }
         const joints = parts.map((x) => Number(x));
+        const duration_s = homeDurationSecondsFromUi();
         try {
           const setR = await fetch('/api/arm/home/set', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ joints_rad: joints }),
+            body: JSON.stringify({ joints_rad: joints, duration_s: duration_s }),
           }).then((x) => x.json());
           if (!setR.ok) {
             setSettingsMsg(settingsHomeMsg, setR.error || 'set failed', true);
@@ -4017,6 +4071,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             return;
           }
           window.__armHome = setR;
+          syncSettingsHomeFromState(setR);
           const path = (settingsConfigPath && settingsConfigPath.value) || null;
           const saveR = await fetch('/api/arm/home/save', {
             method: 'POST',
@@ -5266,11 +5321,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         }
         if (absHome) {
           absHome.addEventListener('click', async () => {
-            let durN = absDur ? Math.round(Number(absDur.value)) : 100;
-            if (!Number.isFinite(durN)) durN = 100;
-            durN = Math.max(1, Math.min(300, durN));
-            const duration_s = durN * 0.1;
-            const r = await goArmHomeWithDuration(duration_s, absProg || runHint);
+            const r = await goArmHomeWithDuration(null, absProg || runHint);
             if (r && r.ok && box._applyArmUi) box._applyArmUi(true);
           });
         }
@@ -6138,6 +6189,7 @@ def create_viz_app(
             arm_home_set,
             joints_rad=body.joints_rad,
             from_live=bool(body.from_live),
+            duration_s=body.duration_s,
         )
 
     @app.post("/api/arm/home/save")

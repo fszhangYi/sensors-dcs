@@ -88,6 +88,8 @@ class DcsConfig(BaseModel):
     dry_run: bool | None = None
     # Absolute home joints for Collect/Infer Home button (rad). Optional.
     home_joints_rad: list[float] | None = None
+    # Separate ramp duration for Home (seconds). Step/LOOP abs duration must not share this.
+    home_duration_s: float = 20.0
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     record: RecordConfig = Field(default_factory=RecordConfig)
     gello_arm_sync: GelloArmSyncConfig = Field(default_factory=GelloArmSyncConfig)
@@ -113,6 +115,19 @@ class DcsConfig(BaseModel):
                 raise ValueError(f"home_joints_rad[{i}] is not finite")
             out.append(f)
         return out
+
+    @field_validator("home_duration_s", mode="before")
+    @classmethod
+    def _home_duration(cls, v: Any) -> float:
+        if v is None or v == "":
+            return 20.0
+        try:
+            f = float(v)
+        except (TypeError, ValueError) as e:
+            raise ValueError("home_duration_s must be a float (seconds)") from e
+        if f != f or f in (float("inf"), float("-inf")):
+            raise ValueError("home_duration_s must be finite")
+        return max(0.1, min(30.0, f))
 
     @field_validator("agents")
     @classmethod
@@ -194,6 +209,7 @@ def config_summary(cfg: DcsConfig) -> dict[str, Any]:
         "version": cfg.version,
         "dry_run": cfg.dry_run,
         "home_joints_rad": list(cfg.home_joints_rad) if cfg.home_joints_rad else None,
+        "home_duration_s": float(cfg.home_duration_s),
         "sensors_config": cfg.sensors_config,
         "runtime": cfg.runtime.model_dump(),
         "record": cfg.record.model_dump(),
@@ -226,23 +242,54 @@ def parse_home_joints(raw: Any) -> tuple[list[float] | None, str | None]:
     return out, None
 
 
-def upsert_home_joints_yaml(path: str | Path, joints: list[float]) -> Path:
-    """Insert or replace top-level ``home_joints_rad`` in a DCS YAML (preserves most text)."""
+def parse_home_duration_s(raw: Any, *, default: float = 20.0) -> float:
+    """Clamp Home ramp duration to 0.1–30s (matches abs ramp backend)."""
+    if raw is None or raw == "":
+        return float(default)
+    try:
+        f = float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+    if f != f or f in (float("inf"), float("-inf")):
+        return float(default)
+    return max(0.1, min(30.0, f))
+
+
+def upsert_home_yaml(
+    path: str | Path,
+    *,
+    joints: list[float] | None = None,
+    duration_s: float | None = None,
+) -> Path:
+    """Insert or replace top-level home_* keys in a DCS YAML (preserves most text)."""
     import re
 
     root = Path(path).resolve()
     if not root.is_file():
         raise FileNotFoundError(f"config not found: {root}")
-    joints6, err = parse_home_joints(joints)
-    if joints6 is None:
-        raise ValueError(err or "invalid home_joints_rad")
-    line = "home_joints_rad: [" + ", ".join(f"{x:.6g}" for x in joints6) + "]"
     text = root.read_text(encoding="utf-8")
-    if re.search(r"^home_joints_rad\s*:", text, flags=re.M):
-        text = re.sub(r"^home_joints_rad\s*:.*$", line, text, count=1, flags=re.M)
-    elif re.search(r"^agents\s*:", text, flags=re.M):
-        text = re.sub(r"^(agents\s*:)", line + "\n\n\\1", text, count=1, flags=re.M)
-    else:
-        text = text.rstrip() + "\n\n" + line + "\n"
+
+    def _upsert(key: str, line: str, blob: str) -> str:
+        if re.search(rf"^{re.escape(key)}\s*:", blob, flags=re.M):
+            return re.sub(rf"^{re.escape(key)}\s*:.*$", line, blob, count=1, flags=re.M)
+        if re.search(r"^agents\s*:", blob, flags=re.M):
+            return re.sub(r"^(agents\s*:)", line + "\n\n\\1", blob, count=1, flags=re.M)
+        return blob.rstrip() + "\n\n" + line + "\n"
+
+    if joints is not None:
+        joints6, err = parse_home_joints(joints)
+        if joints6 is None:
+            raise ValueError(err or "invalid home_joints_rad")
+        jline = "home_joints_rad: [" + ", ".join(f"{x:.6g}" for x in joints6) + "]"
+        text = _upsert("home_joints_rad", jline, text)
+    if duration_s is not None:
+        dur = parse_home_duration_s(duration_s)
+        dline = f"home_duration_s: {dur:g}"
+        text = _upsert("home_duration_s", dline, text)
     root.write_text(text, encoding="utf-8")
     return root
+
+
+# Back-compat alias
+def upsert_home_joints_yaml(path: str | Path, joints: list[float]) -> Path:
+    return upsert_home_yaml(path, joints=joints)

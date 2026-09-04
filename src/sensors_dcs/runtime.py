@@ -15,7 +15,13 @@ from sensors import SensorManager  # noqa: E402
 from sensors_dcs.agents import build_agent
 from sensors_dcs.agents.base import BaseAgent
 from sensors_dcs.agents.pi05_agent import Pi05ClientAgent
-from sensors_dcs.config import DcsConfig, config_summary, parse_home_joints, upsert_home_joints_yaml
+from sensors_dcs.config import (
+    DcsConfig,
+    config_summary,
+    parse_home_duration_s,
+    parse_home_joints,
+    upsert_home_yaml,
+)
 from sensors_dcs.frame import Frame
 from sensors_dcs.record import RecordController
 from sensors_dcs.viz import VizHub, create_viz_app
@@ -132,6 +138,9 @@ class Orchestrator:
         self._home_lock = threading.Lock()
         hj, _herr = parse_home_joints(getattr(cfg, "home_joints_rad", None))
         self._home_joints_rad: list[float] | None = hj
+        self._home_duration_s: float = parse_home_duration_s(
+            getattr(cfg, "home_duration_s", None), default=20.0
+        )
         self._home_source: str = "yaml" if hj is not None else "unset"
 
     def status(self) -> dict[str, Any]:
@@ -153,10 +162,12 @@ class Orchestrator:
         with self._home_lock:
             joints = list(self._home_joints_rad) if self._home_joints_rad is not None else None
             source = self._home_source
+            duration_s = float(self._home_duration_s)
         ok_joints, err = parse_home_joints(joints)
         return {
             "ok": err is None,
             "home_joints_rad": ok_joints,
+            "home_duration_s": duration_s,
             "source": source,
             "error": err,
             "configured": ok_joints is not None,
@@ -167,29 +178,44 @@ class Orchestrator:
         *,
         joints_rad: list[float] | None = None,
         from_live: bool = False,
+        duration_s: float | None = None,
     ) -> dict[str, Any]:
-        """Update in-memory home (from explicit joints or live arm read)."""
-        if from_live:
-            from sensors_dcs.agents.arm_agent import ArmAgent
+        """Update in-memory home (joints and/or Home ramp duration)."""
+        updates: dict[str, Any] = {}
+        if from_live or joints_rad is not None:
+            if from_live:
+                from sensors_dcs.agents.arm_agent import ArmAgent
 
-            readers = [a for a in self.agents.values() if isinstance(a, ArmAgent)]
-            if not readers:
-                return {"ok": False, "error": "no arm_read agent", **self.arm_home_status()}
-            live = self._joints6_from_ring(readers[0])
-            if live is None:
+                readers = [a for a in self.agents.values() if isinstance(a, ArmAgent)]
+                if not readers:
+                    return {"ok": False, "error": "no arm_read agent", **self.arm_home_status()}
+                live = self._joints6_from_ring(readers[0])
+                if live is None:
+                    return {
+                        "ok": False,
+                        "error": "no live arm joints; wait for robot · Read",
+                        **self.arm_home_status(),
+                    }
+                joints_rad = live
+            parsed, err = parse_home_joints(joints_rad)
+            if parsed is None:
                 return {
                     "ok": False,
-                    "error": "no live arm joints; wait for robot · Read",
+                    "error": err or "invalid home_joints_rad",
                     **self.arm_home_status(),
                 }
-            joints_rad = live
-        parsed, err = parse_home_joints(joints_rad)
-        if parsed is None:
-            return {"ok": False, "error": err or "invalid home_joints_rad", **self.arm_home_status()}
-        with self._home_lock:
-            self._home_joints_rad = list(parsed)
-            self._home_source = "live" if from_live else "set"
-        self.cfg = self.cfg.model_copy(update={"home_joints_rad": list(parsed)})
+            with self._home_lock:
+                self._home_joints_rad = list(parsed)
+                self._home_source = "live" if from_live else "set"
+            updates["home_joints_rad"] = list(parsed)
+        if duration_s is not None:
+            dur = parse_home_duration_s(duration_s)
+            with self._home_lock:
+                self._home_duration_s = dur
+            updates["home_duration_s"] = dur
+        if not updates:
+            return {"ok": False, "error": "nothing to update", **self.arm_home_status()}
+        self.cfg = self.cfg.model_copy(update=updates)
         return {"ok": True, **self.arm_home_status()}
 
     def save_arm_home_to_yaml(self, *, path: str | None = None) -> dict[str, Any]:
@@ -202,7 +228,11 @@ class Orchestrator:
             return {"ok": False, "error": st.get("error") or "home 未配置", **st}
         try:
             target = validate_dcs_config_file(path or str(default_dcs_config()))
-            upsert_home_joints_yaml(target, list(st["home_joints_rad"]))
+            upsert_home_yaml(
+                target,
+                joints=list(st["home_joints_rad"]),
+                duration_s=float(st["home_duration_s"]),
+            )
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "error": str(e), **self.arm_home_status()}
         with self._home_lock:
@@ -220,7 +250,11 @@ class Orchestrator:
         duration_s: float | None = None,
         agent_id: str | None = None,
     ) -> dict[str, Any]:
-        """Validate home joints then absolute-ramp via the same arm_command path."""
+        """Validate home joints then absolute-ramp via the same arm_command path.
+
+        Uses dedicated ``home_duration_s`` when ``duration_s`` is omitted — never the
+        Infer step / abs-send duration.
+        """
         st = self.arm_home_status()
         if not st.get("configured"):
             return {
@@ -228,7 +262,10 @@ class Orchestrator:
                 "error": st.get("error") or "home_joints_rad 未配置或格式错误",
                 **st,
             }
-        dur = 10.0 if duration_s is None else float(duration_s)
+        if duration_s is None:
+            dur = float(st["home_duration_s"])
+        else:
+            dur = parse_home_duration_s(duration_s)
         out = self.arm_command(
             agent_id=agent_id,
             joints_rad=list(st["home_joints_rad"]),
@@ -236,6 +273,7 @@ class Orchestrator:
         )
         out = dict(out)
         out["home"] = self.arm_home_status()
+        out["duration_s"] = dur
         return out
 
     def _pi05_agent(self, agent_id: str | None = None) -> Pi05ClientAgent | None:

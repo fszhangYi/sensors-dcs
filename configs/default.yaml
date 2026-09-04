@@ -7,8 +7,9 @@ sensors_config: ./sensors_default.yaml
 # true = 合成假数据；false = 真机（串口 + RealSense serial）
 dry_run: true
 
-# Optional: Home button target (6 joint angles, rad). Set via UI「设为 home」+ settings save.
+# Optional: Home target (6 joints rad) + ramp duration (s, 0.1–30). Independent of Infer step arrive.
 # home_joints_rad: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+# home_duration_s: 20
 
 runtime:
   control_host: "0.0.0.0"
@@ -29,6 +30,9 @@ gello_arm_sync:
 record:
   save_dir: D:\data_new
   episode_index: 5
+
+home_joints_rad: [0.0039, -0.3429, 0.975, -1.6104, 0.0013, -0.9739]
+home_duration_s: 20
 
 agents:
   - id: gello
