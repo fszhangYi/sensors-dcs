@@ -1,14 +1,15 @@
 # Embody login page + cookie session for sensors-dcs
 
-日期：2026-09-03
+日期：2026-09-03（2026-09-04：主页设置弹窗 / 用户管理）
 
 按 `embody-login-page` + companion `cookie-session-auth` 接到嵌入式 FastAPI 壳：
 
 | 路径 | 行为 |
 |------|------|
 | `/login` | Embody 风格登录页（grid/orb/scan、玻璃卡、语言 pill）；启动默认打开此页 |
-| `/` | 需登录时 302 → `/login?from=/`；登录后默认「数据后处理」Tab |
+| `/` | 需登录时 302 → `/login?from=/`；登录后默认 **主页** Tab |
 | `/api/auth/*` | status / me / login / logout（公开） |
+| `/api/users*` | **仅 admin**：列表 / 创建 / 更新 / 删除 |
 | 其它 `/api/*`、`/ws` | 鉴权开启时需 Cookie |
 
 YAML / boot 失败时仍走同一套 UI（`create_error_app` → `create_viz_app`）：
@@ -17,11 +18,17 @@ YAML / boot 失败时仍走同一套 UI（`create_error_app` → `create_viz_app
 - `collect_ok=false`：锁定「数据采集」Tab，横幅展示错误
 - 「数据后处理」仍可用（离线三步）
 
+主页 **设置** 弹窗：
+
+- **鉴权**：当前会话状态、用户/角色、退出登录
+- **用户管理**（admin）：列表、角色、启用、改密、删除、添加账号（角色 `admin` / `operator` / `guest`）
+
 实现：
 
-- `auth_session.py` — opaque session、`sensors_dcs_session` HttpOnly Cookie  
-- `users_store.py` — `user_data_dir/configs/users.json` + PBKDF2  
+- `auth_session.py` — opaque session、`sensors_dcs_session` HttpOnly Cookie、`request_is_admin`
+- `users_store.py` — `user_data_dir/configs/users.json` + PBKDF2 CRUD  
 - `login_page.py` — LOGIN_HTML  
+- `viz.py` — Settings modal + `/api/users*`  
 
 环境变量：
 

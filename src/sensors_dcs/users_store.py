@@ -107,12 +107,20 @@ def bootstrap_admin(username: str, password: str) -> dict[str, Any]:
             if str(row.get("username") or "") == u:
                 row["password_hash"] = ph
                 row["role"] = "admin"
+                row["enabled"] = True
                 found = True
                 break
         if not found:
-            _users.append({"username": u, "password_hash": ph, "role": "admin"})
+            _users.append(
+                {
+                    "username": u,
+                    "password_hash": ph,
+                    "role": "admin",
+                    "enabled": True,
+                }
+            )
         _save_file(path, _users)
-        return {"username": u, "role": "admin"}
+        return {"username": u, "role": "admin", "enabled": True}
 
 
 def list_users_public() -> list[dict[str, Any]]:
@@ -121,10 +129,29 @@ def list_users_public() -> list[dict[str, Any]]:
             {
                 "username": str(u.get("username") or ""),
                 "role": str(u.get("role") or "guest"),
+                "enabled": bool(u.get("enabled", True)),
             }
             for u in _users
             if u.get("username")
         ]
+
+
+def find_user(username: str) -> dict[str, Any] | None:
+    u = (username or "").strip()
+    with _lock:
+        for row in _users:
+            if str(row.get("username") or "") == u:
+                return {
+                    "username": u,
+                    "role": str(row.get("role") or "guest"),
+                    "enabled": bool(row.get("enabled", True)),
+                }
+    return None
+
+
+def _normalize_role(role: str) -> str:
+    r = (role or "guest").strip().lower()
+    return r if r in VALID_ROLES else "guest"
 
 
 def verify_login(username: str, password: str) -> dict[str, Any] | None:
@@ -133,6 +160,8 @@ def verify_login(username: str, password: str) -> dict[str, Any] | None:
         for row in _users:
             if str(row.get("username") or "") != u:
                 continue
+            if not bool(row.get("enabled", True)):
+                return None
             if verify_password(password or "", str(row.get("password_hash") or "")):
                 return {
                     "username": u,
@@ -141,11 +170,79 @@ def verify_login(username: str, password: str) -> dict[str, Any] | None:
     return None
 
 
+def create_user(username: str, password: str, role: str = "operator") -> dict[str, Any]:
+    u = (username or "").strip()
+    if not u:
+        raise ValueError("username required")
+    if not password:
+        raise ValueError("password required")
+    if len(u) > 64:
+        raise ValueError("username too long")
+    with _lock:
+        if any(str(row.get("username") or "") == u for row in _users):
+            raise ValueError("username already exists")
+        row = {
+            "username": u,
+            "role": _normalize_role(role),
+            "enabled": True,
+            "password_hash": _pbkdf2_hash(password),
+        }
+        _users.append(row)
+        path = _users_path or users_config_path()
+        _save_file(path, _users)
+        return {"username": u, "role": row["role"], "enabled": True}
+
+
+def update_user(
+    username: str,
+    *,
+    role: str | None = None,
+    enabled: bool | None = None,
+    password: str | None = None,
+) -> dict[str, Any]:
+    u = (username or "").strip()
+    with _lock:
+        for i, row in enumerate(_users):
+            if str(row.get("username") or "") != u:
+                continue
+            if role is not None:
+                row["role"] = _normalize_role(role)
+            if enabled is not None:
+                row["enabled"] = bool(enabled)
+            if password:
+                row["password_hash"] = _pbkdf2_hash(password)
+            _users[i] = row
+            path = _users_path or users_config_path()
+            _save_file(path, _users)
+            return {
+                "username": u,
+                "role": str(row.get("role") or "guest"),
+                "enabled": bool(row.get("enabled", True)),
+            }
+    raise ValueError("user not found")
+
+
+def delete_user(username: str) -> None:
+    u = (username or "").strip()
+    with _lock:
+        before = len(_users)
+        _users[:] = [row for row in _users if str(row.get("username") or "") != u]
+        if len(_users) == before:
+            raise ValueError("user not found")
+        if not _users:
+            raise ValueError("cannot delete last user")
+        admins = [row for row in _users if str(row.get("role") or "") == "admin"]
+        if not admins:
+            raise ValueError("cannot delete last admin")
+        path = _users_path or users_config_path()
+        _save_file(path, _users)
+
+
 def is_admin(username: str | None) -> bool:
     if not username:
         return False
     with _lock:
         for row in _users:
             if str(row.get("username") or "") == username:
-                return str(row.get("role") or "") == "admin"
+                return bool(row.get("enabled", True)) and str(row.get("role") or "") == "admin"
     return False

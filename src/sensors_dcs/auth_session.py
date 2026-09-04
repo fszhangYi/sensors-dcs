@@ -14,6 +14,7 @@ from sensors_dcs.users_store import (
     auth_bootstrap_path,
     bootstrap_admin,
     init_users,
+    is_admin,
     list_users_public,
     verify_login,
 )
@@ -220,6 +221,15 @@ def request_profile(cookie_header: str | None) -> dict[str, Any] | None:
     if not auth_enabled():
         return None
     return session_profile(parse_session_cookie(cookie_header))
+
+
+def request_is_admin(cookie_header: str | None) -> bool:
+    if not auth_enabled():
+        return False
+    prof = request_profile(cookie_header)
+    if not prof:
+        return False
+    return is_admin(str(prof.get("username") or ""))
 
 
 def is_authenticated(cookie_header: str | None) -> bool:

@@ -61,6 +61,18 @@ class AuthLoginBody(BaseModel):
     password: str = ""
 
 
+class UserCreateBody(BaseModel):
+    username: str = ""
+    password: str = ""
+    role: str = "operator"
+
+
+class UserUpdateBody(BaseModel):
+    role: str | None = None
+    enabled: bool | None = None
+    password: str | None = None
+
+
 class GelloArmSyncBody(BaseModel):
     enabled: bool
     gello_agent_id: str | None = None
@@ -205,10 +217,29 @@ PREVIEW_HTML = """<!DOCTYPE html>
       color: #fff;
     }
     header #btnExit:disabled { opacity: 0.45; cursor: not-allowed; }
+    header #btnSettings {
+      flex-shrink: 0;
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--chrome);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.85rem;
+      font-weight: 550;
+      padding: 0.45rem 1.15rem;
+      border-radius: 999px;
+      cursor: pointer;
+      margin-top: 0.15rem;
+      transition: border-color var(--motion-fast) var(--motion-ease), background var(--motion-fast) var(--motion-ease);
+    }
+    header #btnSettings:hover {
+      border-color: var(--accent);
+      background: var(--accent-dim);
+    }
     header .header-actions {
       display: flex;
-      flex-direction: column;
-      align-items: flex-end;
+      flex-direction: row;
+      align-items: center;
       gap: 0.45rem;
       flex-shrink: 0;
     }
@@ -239,6 +270,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
       background: linear-gradient(90deg, var(--spark-dim), var(--accent-dim));
       border-color: rgba(61, 214, 198, 0.4);
     }
+    .settings-lang-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 0.85rem;
+      align-items: center;
+    }
+    .settings-lang-row > span { color: var(--muted); min-width: 5rem; }
     html[lang='en'] header p { max-width: 42rem; }
     main {
       flex: 1;
@@ -690,6 +728,149 @@ PREVIEW_HTML = """<!DOCTYPE html>
       padding: 0.4rem 1rem; border-radius: 999px; border: 1px solid var(--accent);
       background: var(--accent-dim); color: var(--text); cursor: pointer; font: inherit; font-weight: 550;
     }
+    .settings-modal.modal-card {
+      max-width: 40rem;
+      width: min(40rem, calc(100vw - 2rem));
+      max-height: min(88vh, 40rem);
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      overflow: hidden;
+    }
+    .settings-modal .settings-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+    }
+    .settings-modal .settings-head h3 { margin: 0; }
+    .settings-modal .settings-close {
+      border-color: var(--border);
+      background: var(--chrome);
+      color: var(--muted);
+      padding: 0.28rem 0.7rem;
+    }
+    .settings-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+    }
+    .settings-nav button {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: 0.8rem;
+      font-weight: 550;
+      padding: 0.32rem 0.85rem;
+      border-radius: 999px;
+      cursor: pointer;
+    }
+    .settings-nav button.active {
+      color: var(--text);
+      border-color: var(--accent);
+      background: var(--accent-dim);
+    }
+    .settings-body {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      display: grid;
+      gap: 0.75rem;
+    }
+    .settings-panel { display: none; gap: 0.65rem; }
+    .settings-panel.active { display: grid; }
+    .settings-panel .hint {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.8rem;
+      line-height: 1.45;
+    }
+    .settings-kv {
+      display: grid;
+      gap: 0.35rem;
+      font-size: 0.85rem;
+    }
+    .settings-kv div {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem 0.75rem;
+      align-items: baseline;
+    }
+    .settings-kv span { color: var(--muted); min-width: 5rem; }
+    .settings-kv strong { color: var(--accent); font-weight: 600; }
+    .settings-users-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+    .settings-users-table th,
+    .settings-users-table td {
+      text-align: left;
+      padding: 0.4rem 0.35rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    .settings-users-table th { color: var(--muted); font-weight: 550; }
+    .settings-users-table select,
+    .settings-users-table input[type="password"],
+    .settings-add input,
+    .settings-add select {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--input-bg);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.8rem;
+      padding: 0.28rem 0.45rem;
+      border-radius: 8px;
+      max-width: 9rem;
+    }
+    .settings-users-table button,
+    .settings-add button,
+    .settings-actions button {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--chrome);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.78rem;
+      font-weight: 550;
+      padding: 0.28rem 0.65rem;
+      border-radius: 999px;
+      cursor: pointer;
+    }
+    .settings-users-table button:hover,
+    .settings-add button:hover,
+    .settings-actions button:hover {
+      border-color: var(--accent);
+      background: var(--accent-dim);
+    }
+    .settings-users-table button:disabled,
+    .settings-add button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    .settings-add {
+      display: grid;
+      gap: 0.5rem;
+      padding-top: 0.35rem;
+      border-top: 1px solid var(--border);
+    }
+    .settings-add-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      align-items: center;
+    }
+    .settings-msg {
+      margin: 0;
+      font-size: 0.8rem;
+      color: var(--spark);
+      min-height: 1.2em;
+    }
+    .settings-msg.err { color: var(--danger); }
     .cam-section {
       min-width: 0;
       min-height: 0;
@@ -761,14 +942,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <p data-i18n="header.subtitle">主页介绍软件；「数据采集」录制写盘；「数据后处理」等价于 export-timeline → filter-timeline → export-hik-dataset。</p>
     </div>
     <div class="header-actions">
-      <div class="lang-switch" data-i18n-title="lang.title" title="界面语言 / Language">
-        <button type="button" class="lang-btn active" data-locale="zh" data-i18n="lang.zh">中文</button>
-        <button type="button" class="lang-btn" data-locale="en" data-i18n="lang.en">EN</button>
-      </div>
-      <div style="display:flex;gap:0.4rem;align-items:center;">
-        <button type="button" id="btnLogout" data-i18n="header.logout" style="appearance:none;border:1px solid var(--border);background:var(--chrome);color:var(--text);font:inherit;font-size:0.85rem;font-weight:550;padding:0.45rem 1.05rem;border-radius:999px;cursor:pointer;">退出登录</button>
-        <button type="button" class="danger" id="btnExit" data-i18n="header.exit">安全退出</button>
-      </div>
+      <button type="button" id="btnSettings" data-i18n="home.cta_settings">设置</button>
+      <button type="button" class="danger" id="btnExit" data-i18n="header.exit">安全退出</button>
     </div>
   </header>
   <nav class="tabs" role="tablist">
@@ -807,12 +982,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <ul class="home-list">
             <li data-i18n="home.tips_1">dry_run=true 用合成数据联调 UI；真机请设 dry_run=false 并保证驱动 / 串口 / 相机可用。</li>
             <li data-i18n="home.tips_2">YAML 或传感器 open 失败时，本页与后处理仍可用，「数据采集」会被锁定并显示错误横幅。</li>
-            <li data-i18n="home.tips_3">右上角可切换中 / EN；「安全退出」会停录制、关传感器并结束进程。</li>
+            <li data-i18n="home.tips_3">右上角「设置」可切换语言、退出登录与管理账号；「安全退出」会停录制、关传感器并结束进程。</li>
           </ul>
         </section>
         <section class="pp-card home-cta">
           <h2 data-i18n="home.cta_title">开始使用</h2>
-          <p data-i18n="home.cta_body">从下方进入采集或后处理 Tab。</p>
+          <p data-i18n="home.cta_body">从下方进入采集或后处理；右上角「设置」可切换语言与管理账号。</p>
           <div class="pp-actions">
             <button type="button" class="primary" id="btnHomeCollect" data-i18n="home.cta_collect">进入数据采集</button>
             <button type="button" id="btnHomePost" data-i18n="home.cta_post">进入数据后处理</button>
@@ -957,6 +1132,75 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <h3 id="appModalTitle" data-i18n="modal.default_title">提示</h3>
       <p id="appModalBody"></p>
       <button type="button" id="appModalOk" data-i18n="modal.ok">知道了</button>
+    </div>
+  </div>
+  <div class="modal-backdrop" id="settingsModal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="modal-card settings-modal">
+      <div class="settings-head">
+        <h3 id="settingsTitle" data-i18n="settings.title">设置</h3>
+        <button type="button" class="settings-close" id="btnSettingsClose" data-i18n="settings.close">关闭</button>
+      </div>
+      <div class="settings-nav" role="tablist">
+        <button type="button" class="active" id="settingsNavAuth" data-settings-tab="auth" data-i18n="settings.nav_auth">鉴权</button>
+        <button type="button" id="settingsNavUsers" data-settings-tab="users" data-i18n="settings.nav_users" hidden>用户管理</button>
+      </div>
+      <div class="settings-body">
+        <div class="settings-panel active" id="settingsPanelAuth" data-settings-panel="auth">
+          <p class="hint" data-i18n="settings.auth_hint">Cookie 会话鉴权（HttpOnly）。关闭鉴权请设环境变量 SENSORS_DCS_AUTH_DISABLED=1。</p>
+          <div class="settings-kv">
+            <div><span data-i18n="settings.auth_status">状态</span><strong id="settingsAuthStatus">—</strong></div>
+            <div><span data-i18n="settings.auth_user">当前用户</span><strong id="settingsAuthUser">—</strong></div>
+            <div><span data-i18n="settings.auth_role">角色</span><strong id="settingsAuthRole">—</strong></div>
+            <div class="settings-lang-row">
+              <span data-i18n="settings.lang_label">界面语言</span>
+              <div class="lang-switch" data-i18n-title="lang.title" title="界面语言 / Language">
+                <button type="button" class="lang-btn active" data-locale="zh" data-i18n="lang.zh">中文</button>
+                <button type="button" class="lang-btn" data-locale="en" data-i18n="lang.en">EN</button>
+              </div>
+            </div>
+          </div>
+          <div class="settings-actions">
+            <button type="button" id="btnSettingsLogout" data-i18n="settings.logout">退出登录</button>
+            <button type="button" id="btnSettingsRefreshAuth" data-i18n="settings.refresh">刷新</button>
+          </div>
+          <p class="settings-msg" id="settingsAuthMsg"></p>
+        </div>
+        <div class="settings-panel" id="settingsPanelUsers" data-settings-panel="users">
+          <p class="hint" data-i18n="settings.users_hint">仅管理员可管理本地账号（写入用户数据目录 configs/users.json，勿提交仓库）。</p>
+          <div id="settingsUsersNonAdmin" hidden>
+            <p class="hint" data-i18n="settings.users_need_admin">当前账号无管理员权限。</p>
+          </div>
+          <div id="settingsUsersAdmin">
+            <table class="settings-users-table">
+              <thead>
+                <tr>
+                  <th data-i18n="settings.col_user">用户</th>
+                  <th data-i18n="settings.col_role">角色</th>
+                  <th data-i18n="settings.col_enabled">启用</th>
+                  <th data-i18n="settings.col_password">新密码</th>
+                  <th data-i18n="settings.col_actions">操作</th>
+                </tr>
+              </thead>
+              <tbody id="settingsUsersBody"></tbody>
+            </table>
+            <div class="settings-add">
+              <strong data-i18n="settings.invite">添加用户</strong>
+              <p class="hint" data-i18n="settings.invite_desc">创建本地账号并写入 users.json。</p>
+              <div class="settings-add-grid">
+                <input type="text" id="settingsNewUser" data-i18n-placeholder="settings.new_user_ph" placeholder="用户名" autocomplete="off" />
+                <input type="password" id="settingsNewPass" data-i18n-placeholder="settings.new_pass_ph" placeholder="密码" autocomplete="new-password" />
+                <select id="settingsNewRole">
+                  <option value="operator" data-i18n="settings.role_operator">操作员</option>
+                  <option value="admin" data-i18n="settings.role_admin">管理员</option>
+                  <option value="guest" data-i18n="settings.role_guest">访客</option>
+                </select>
+                <button type="button" id="btnSettingsAddUser" data-i18n="settings.add_btn">添加</button>
+              </div>
+            </div>
+          </div>
+          <p class="settings-msg" id="settingsUsersMsg"></p>
+        </div>
+      </div>
     </div>
   </div>
   <script>
@@ -1320,6 +1564,293 @@ PREVIEW_HTML = """<!DOCTYPE html>
     // Default landing tab after login: home
     switchTab('home');
 
+    // ---- settings modal (auth + users) ----
+    const settingsModal = document.getElementById('settingsModal');
+    const btnSettings = document.getElementById('btnSettings');
+    const btnSettingsClose = document.getElementById('btnSettingsClose');
+    const settingsNavAuth = document.getElementById('settingsNavAuth');
+    const settingsNavUsers = document.getElementById('settingsNavUsers');
+    const settingsPanelAuth = document.getElementById('settingsPanelAuth');
+    const settingsPanelUsers = document.getElementById('settingsPanelUsers');
+    const settingsAuthStatus = document.getElementById('settingsAuthStatus');
+    const settingsAuthUser = document.getElementById('settingsAuthUser');
+    const settingsAuthRole = document.getElementById('settingsAuthRole');
+    const settingsAuthMsg = document.getElementById('settingsAuthMsg');
+    const settingsUsersMsg = document.getElementById('settingsUsersMsg');
+    const settingsUsersBody = document.getElementById('settingsUsersBody');
+    const settingsUsersAdmin = document.getElementById('settingsUsersAdmin');
+    const settingsUsersNonAdmin = document.getElementById('settingsUsersNonAdmin');
+    let settingsMe = null;
+    let settingsBusy = false;
+
+    function setSettingsMsg(el, text, isErr) {
+      if (!el) return;
+      el.textContent = text || '';
+      el.classList.toggle('err', !!isErr);
+    }
+
+    function switchSettingsTab(name) {
+      const which = name === 'users' ? 'users' : 'auth';
+      if (settingsNavAuth) settingsNavAuth.classList.toggle('active', which === 'auth');
+      if (settingsNavUsers) settingsNavUsers.classList.toggle('active', which === 'users');
+      if (settingsPanelAuth) settingsPanelAuth.classList.toggle('active', which === 'auth');
+      if (settingsPanelUsers) settingsPanelUsers.classList.toggle('active', which === 'users');
+    }
+
+    function roleLabel(role) {
+      if (role === 'admin') return t('settings.role_admin');
+      if (role === 'operator') return t('settings.role_operator');
+      return t('settings.role_guest');
+    }
+
+    async function refreshSettingsAuth() {
+      setSettingsMsg(settingsAuthMsg, '');
+      try {
+        const j = await fetch('/api/auth/me', { credentials: 'same-origin' }).then((r) => r.json());
+        settingsMe = j;
+        const required = !!j.authRequired;
+        const authed = !!j.authenticated;
+        if (settingsAuthStatus) {
+          settingsAuthStatus.textContent = !required
+            ? t('settings.auth_off')
+            : (authed ? t('settings.auth_on') : t('settings.auth_needed'));
+        }
+        const user = j.user || {};
+        if (settingsAuthUser) {
+          settingsAuthUser.textContent = required
+            ? (user.username || t('settings.auth_anonymous'))
+            : t('settings.auth_na');
+        }
+        if (settingsAuthRole) {
+          settingsAuthRole.textContent = required
+            ? (user.role ? roleLabel(user.role) : '—')
+            : t('settings.auth_na');
+        }
+        const isAdmin = required && authed && user.role === 'admin';
+        if (settingsNavUsers) settingsNavUsers.hidden = !required;
+        if (settingsUsersAdmin) settingsUsersAdmin.hidden = !isAdmin;
+        if (settingsUsersNonAdmin) settingsUsersNonAdmin.hidden = !required || isAdmin;
+        const btnLogout = document.getElementById('btnSettingsLogout');
+        if (btnLogout) btnLogout.style.display = required ? '' : 'none';
+        return j;
+      } catch (e) {
+        setSettingsMsg(settingsAuthMsg, String(e), true);
+        return null;
+      }
+    }
+
+    async function refreshSettingsUsers() {
+      setSettingsMsg(settingsUsersMsg, '');
+      if (!settingsUsersBody) return;
+      if (!settingsMe || !settingsMe.authRequired || !(settingsMe.user && settingsMe.user.role === 'admin')) {
+        settingsUsersBody.innerHTML = '';
+        return;
+      }
+      try {
+        const r = await fetch('/api/users', { credentials: 'same-origin', cache: 'no-store' });
+        const j = await r.json();
+        if (!r.ok || !j.ok) {
+          setSettingsMsg(settingsUsersMsg, j.error || ('HTTP ' + r.status), true);
+          return;
+        }
+        const meName = (settingsMe.user && settingsMe.user.username) || '';
+        settingsUsersBody.innerHTML = '';
+        (j.users || []).forEach((row) => {
+          const tr = document.createElement('tr');
+          const tdUser = document.createElement('td');
+          tdUser.textContent = row.username || '';
+          const tdRole = document.createElement('td');
+          const sel = document.createElement('select');
+          ['operator', 'admin', 'guest'].forEach((role) => {
+            const opt = document.createElement('option');
+            opt.value = role;
+            opt.textContent = roleLabel(role);
+            if (role === row.role) opt.selected = true;
+            sel.appendChild(opt);
+          });
+          sel.disabled = settingsBusy;
+          sel.addEventListener('change', () => patchUser(row.username, { role: sel.value }));
+          tdRole.appendChild(sel);
+          const tdEn = document.createElement('td');
+          const chk = document.createElement('input');
+          chk.type = 'checkbox';
+          chk.checked = row.enabled !== false;
+          chk.disabled = settingsBusy || row.username === meName;
+          chk.addEventListener('change', () => patchUser(row.username, { enabled: chk.checked }));
+          tdEn.appendChild(chk);
+          const tdPw = document.createElement('td');
+          const inp = document.createElement('input');
+          inp.type = 'password';
+          inp.placeholder = t('settings.reset_pass_ph');
+          inp.autocomplete = 'new-password';
+          tdPw.appendChild(inp);
+          const tdAct = document.createElement('td');
+          const btnReset = document.createElement('button');
+          btnReset.type = 'button';
+          btnReset.textContent = t('settings.reset_pass');
+          btnReset.addEventListener('click', () => {
+            const pw = inp.value || '';
+            if (!pw) {
+              setSettingsMsg(settingsUsersMsg, t('settings.need_password'), true);
+              return;
+            }
+            patchUser(row.username, { password: pw }).then(() => { inp.value = ''; });
+          });
+          const btnDel = document.createElement('button');
+          btnDel.type = 'button';
+          btnDel.textContent = t('settings.delete');
+          btnDel.disabled = row.username === meName;
+          btnDel.addEventListener('click', () => {
+            if (!confirm(t('settings.confirm_delete', { user: row.username }))) return;
+            deleteUser(row.username);
+          });
+          tdAct.appendChild(btnReset);
+          tdAct.appendChild(document.createTextNode(' '));
+          tdAct.appendChild(btnDel);
+          tr.appendChild(tdUser);
+          tr.appendChild(tdRole);
+          tr.appendChild(tdEn);
+          tr.appendChild(tdPw);
+          tr.appendChild(tdAct);
+          settingsUsersBody.appendChild(tr);
+        });
+      } catch (e) {
+        setSettingsMsg(settingsUsersMsg, String(e), true);
+      }
+    }
+
+    async function patchUser(username, patch) {
+      if (settingsBusy) return;
+      settingsBusy = true;
+      setSettingsMsg(settingsUsersMsg, t('settings.saving'));
+      try {
+        const r = await fetch('/api/users/' + encodeURIComponent(username), {
+          method: 'PUT',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        });
+        const j = await r.json();
+        if (!r.ok || !j.ok) {
+          setSettingsMsg(settingsUsersMsg, j.error || ('HTTP ' + r.status), true);
+        } else {
+          setSettingsMsg(settingsUsersMsg, t('settings.saved'));
+        }
+        await refreshSettingsUsers();
+      } catch (e) {
+        setSettingsMsg(settingsUsersMsg, String(e), true);
+      } finally {
+        settingsBusy = false;
+      }
+    }
+
+    async function deleteUser(username) {
+      if (settingsBusy) return;
+      settingsBusy = true;
+      setSettingsMsg(settingsUsersMsg, t('settings.saving'));
+      try {
+        const r = await fetch('/api/users/' + encodeURIComponent(username), {
+          method: 'DELETE',
+          credentials: 'same-origin',
+        });
+        const j = await r.json();
+        if (!r.ok || !j.ok) {
+          setSettingsMsg(settingsUsersMsg, j.error || ('HTTP ' + r.status), true);
+        } else {
+          setSettingsMsg(settingsUsersMsg, t('settings.deleted'));
+        }
+        await refreshSettingsUsers();
+      } catch (e) {
+        setSettingsMsg(settingsUsersMsg, String(e), true);
+      } finally {
+        settingsBusy = false;
+      }
+    }
+
+    async function openSettings() {
+      if (!settingsModal) return;
+      switchSettingsTab('auth');
+      settingsModal.classList.add('show');
+      await refreshSettingsAuth();
+      await refreshSettingsUsers();
+    }
+
+    function closeSettings() {
+      if (settingsModal) settingsModal.classList.remove('show');
+    }
+
+    if (btnSettings) btnSettings.addEventListener('click', () => openSettings());
+    if (btnSettingsClose) btnSettingsClose.addEventListener('click', closeSettings);
+    if (settingsModal) {
+      settingsModal.addEventListener('click', (e) => {
+        if (e.target === settingsModal) closeSettings();
+      });
+    }
+    if (settingsNavAuth) settingsNavAuth.addEventListener('click', () => switchSettingsTab('auth'));
+    if (settingsNavUsers) {
+      settingsNavUsers.addEventListener('click', async () => {
+        switchSettingsTab('users');
+        await refreshSettingsAuth();
+        await refreshSettingsUsers();
+      });
+    }
+    const btnSettingsRefreshAuth = document.getElementById('btnSettingsRefreshAuth');
+    if (btnSettingsRefreshAuth) {
+      btnSettingsRefreshAuth.addEventListener('click', async () => {
+        await refreshSettingsAuth();
+        await refreshSettingsUsers();
+      });
+    }
+    const btnSettingsLogout = document.getElementById('btnSettingsLogout');
+    if (btnSettingsLogout) {
+      btnSettingsLogout.addEventListener('click', async () => {
+        try {
+          await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+        } catch (e) {}
+        location.href = '/login';
+      });
+    }
+    const btnSettingsAddUser = document.getElementById('btnSettingsAddUser');
+    if (btnSettingsAddUser) {
+      btnSettingsAddUser.addEventListener('click', async () => {
+        if (settingsBusy) return;
+        const nameEl = document.getElementById('settingsNewUser');
+        const passEl = document.getElementById('settingsNewPass');
+        const roleEl = document.getElementById('settingsNewRole');
+        const username = (nameEl && nameEl.value || '').trim();
+        const password = (passEl && passEl.value) || '';
+        const role = (roleEl && roleEl.value) || 'operator';
+        if (!username || !password) {
+          setSettingsMsg(settingsUsersMsg, t('settings.need_credentials'), true);
+          return;
+        }
+        settingsBusy = true;
+        setSettingsMsg(settingsUsersMsg, t('settings.saving'));
+        try {
+          const r = await fetch('/api/users', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password, role }),
+          });
+          const j = await r.json();
+          if (!r.ok || !j.ok) {
+            setSettingsMsg(settingsUsersMsg, j.error || ('HTTP ' + r.status), true);
+          } else {
+            setSettingsMsg(settingsUsersMsg, t('settings.added'));
+            if (nameEl) nameEl.value = '';
+            if (passEl) passEl.value = '';
+            if (roleEl) roleEl.value = 'operator';
+            await refreshSettingsUsers();
+          }
+        } catch (e) {
+          setSettingsMsg(settingsUsersMsg, String(e), true);
+        } finally {
+          settingsBusy = false;
+        }
+      });
+    }
+
     fetch('/api/status', { credentials: 'same-origin' }).then((r) => r.json()).then((j) => {
       const ok = j.collect_ok !== false && !j.boot_error;
       applyCollectGate(ok, j);
@@ -1466,19 +1997,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
       loadPpForm(j);
       fillEpisodeSelect(j.episodes || []);
     }).catch(() => loadPpForm({}));
-    const btnLogout = document.getElementById('btnLogout');
-    if (btnLogout) {
-      btnLogout.addEventListener('click', async () => {
-        try {
-          await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
-        } catch (e) {}
-        location.href = '/login';
-      });
-      // Hide logout when auth disabled
-      fetch('/api/auth/me', { credentials: 'same-origin' }).then((r) => r.json()).then((j) => {
-        if (!j.authRequired) btnLogout.style.display = 'none';
-      }).catch(() => {});
-    }
     const btnExit = document.getElementById('btnExit');
     if (btnExit) {
       btnExit.addEventListener('click', async () => {
@@ -2390,6 +2908,98 @@ def create_viz_app(
         resp = JSONResponse({"ok": True})
         resp.headers["Set-Cookie"] = cookie_header_clear()
         return resp
+
+    def _admin_or_error(request: Request) -> tuple[dict[str, Any] | None, JSONResponse | None]:
+        from sensors_dcs.auth_session import request_is_admin
+
+        if not auth_enabled():
+            return None, JSONResponse(
+                {"ok": False, "error": "auth disabled"}, status_code=403
+            )
+        cookie = request.headers.get("cookie")
+        prof = request_profile(cookie)
+        if not prof:
+            return None, JSONResponse(
+                {
+                    "ok": False,
+                    "error": "unauthorized",
+                    "authRequired": True,
+                    "loginPath": "/login",
+                },
+                status_code=401,
+            )
+        if not request_is_admin(cookie):
+            return None, JSONResponse(
+                {"ok": False, "error": "admin required"}, status_code=403
+            )
+        return prof, None
+
+    @app.get("/api/users")
+    async def users_list(request: Request) -> JSONResponse:
+        from sensors_dcs.users_store import list_users_public
+
+        _prof, err = _admin_or_error(request)
+        if err is not None:
+            return err
+        return JSONResponse({"ok": True, "users": list_users_public()})
+
+    @app.post("/api/users")
+    async def users_create(request: Request, req: UserCreateBody) -> JSONResponse:
+        from sensors_dcs.users_store import create_user
+
+        _prof, err = _admin_or_error(request)
+        if err is not None:
+            return err
+        try:
+            user = create_user(req.username, req.password, req.role)
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        return JSONResponse({"ok": True, "user": user})
+
+    @app.put("/api/users/{username}")
+    async def users_update(
+        username: str, request: Request, req: UserUpdateBody
+    ) -> JSONResponse:
+        from sensors_dcs.users_store import update_user
+
+        prof, err = _admin_or_error(request)
+        if err is not None:
+            return err
+        if (
+            prof
+            and username == prof.get("username")
+            and req.enabled is False
+        ):
+            return JSONResponse(
+                {"ok": False, "error": "cannot disable yourself"}, status_code=400
+            )
+        try:
+            user = update_user(
+                username,
+                role=req.role,
+                enabled=req.enabled,
+                password=req.password,
+            )
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        return JSONResponse({"ok": True, "user": user})
+
+    @app.delete("/api/users/{username}")
+    async def users_delete(username: str, request: Request) -> JSONResponse:
+        from sensors_dcs.users_store import delete_user
+
+        prof, err = _admin_or_error(request)
+        if err is not None:
+            return err
+        if prof and username == prof.get("username"):
+            return JSONResponse(
+                {"ok": False, "error": "cannot delete yourself"}, status_code=400
+            )
+        try:
+            delete_user(username)
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        return JSONResponse({"ok": True})
 
     @app.get("/api/status")
     async def status() -> dict[str, Any]:
