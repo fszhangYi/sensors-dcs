@@ -14,6 +14,7 @@ from sensors import SensorManager  # noqa: E402
 
 from sensors_dcs.agents import build_agent
 from sensors_dcs.agents.base import BaseAgent
+from sensors_dcs.agents.pi05_agent import Pi05ClientAgent
 from sensors_dcs.config import DcsConfig, config_summary
 from sensors_dcs.frame import Frame
 from sensors_dcs.record import RecordController
@@ -30,8 +31,11 @@ class Orchestrator:
         self.agents: dict[str, BaseAgent] = {}
         known = self.manager.ids()
         for acfg in cfg.agents:
+            if acfg.type == "pi05":
+                self.agents[acfg.id] = build_agent(acfg, pi05_defaults=cfg.pi05)
+                continue
             try:
-                sensor = self.manager.get(acfg.sensor_id)
+                sensor = self.manager.get(acfg.sensor_id or "")
             except KeyError as e:
                 raise KeyError(
                     f"agent {acfg.id!r} sensor_id={acfg.sensor_id!r} not in "
@@ -41,6 +45,9 @@ class Orchestrator:
                     f"configs/robot_write.yaml + sensors_robot_write.yaml)."
                 ) from e
             self.agents[acfg.id] = build_agent(acfg, sensor)
+        for agent in self.agents.values():
+            if isinstance(agent, Pi05ClientAgent):
+                agent.bind_peers(self.agents)
         self.hub = VizHub()
         self.recorder = RecordController(
             cfg.record,
@@ -133,7 +140,59 @@ class Orchestrator:
             "gello_arm_sync": self.gello_arm_sync_status(),
             "gello_arm_teleop": self.gello_arm_teleop_status(),
             "arm_abs_ramp": self.arm_abs_ramp_status(),
+            "pi05": self.pi05_status(),
         }
+
+    def _pi05_agent(self, agent_id: str | None = None) -> Pi05ClientAgent | None:
+        if agent_id:
+            a = self.agents.get(agent_id)
+            return a if isinstance(a, Pi05ClientAgent) else None
+        for a in self.agents.values():
+            if isinstance(a, Pi05ClientAgent):
+                return a
+        return None
+
+    def pi05_status(self, agent_id: str | None = None) -> dict[str, Any]:
+        agent = self._pi05_agent(agent_id)
+        if agent is None:
+            return {
+                "ok": False,
+                "configured": False,
+                "error": "no pi05 agent in config",
+                "connected": False,
+                "running": False,
+            }
+        return {"configured": True, **agent.status_payload(), "ok": True}
+
+    def pi05_connect(
+        self,
+        *,
+        host: str | None = None,
+        port: int | None = None,
+        agent_id: str | None = None,
+    ) -> dict[str, Any]:
+        agent = self._pi05_agent(agent_id)
+        if agent is None:
+            return {"ok": False, "configured": False, "error": "no pi05 agent in config"}
+        return agent.connect(host=host, port=port)
+
+    def pi05_disconnect(self, *, agent_id: str | None = None) -> dict[str, Any]:
+        agent = self._pi05_agent(agent_id)
+        if agent is None:
+            return {"ok": False, "configured": False, "error": "no pi05 agent in config"}
+        return agent.disconnect()
+
+    def pi05_set_prompt(self, prompt: str, *, agent_id: str | None = None) -> dict[str, Any]:
+        agent = self._pi05_agent(agent_id)
+        if agent is None:
+            return {"ok": False, "configured": False, "error": "no pi05 agent in config"}
+        return agent.set_prompt(prompt)
+
+    def pi05_set_run(self, enabled: bool, *, agent_id: str | None = None) -> dict[str, Any]:
+        agent = self._pi05_agent(agent_id)
+        if agent is None:
+            return {"ok": False, "configured": False, "error": "no pi05 agent in config"}
+        return agent.set_run(enabled)
 
     def start(self) -> None:
         for agent in self.agents.values():
@@ -151,6 +210,12 @@ class Orchestrator:
         self.set_gello_arm_sync(enabled=False)
         self.cancel_arm_abs_ramp()
         self.set_gripper_gello_sync(enabled=False)
+        for a in self.agents.values():
+            if isinstance(a, Pi05ClientAgent):
+                try:
+                    a.disconnect()
+                except Exception:  # noqa: BLE001
+                    pass
         self._stop.set()
         # Finish any open episode before tearing down agents
         if self.recorder.status().get("state") == "recording":
@@ -1612,6 +1677,11 @@ class Orchestrator:
             gello_arm_sync_status=self.gello_arm_sync_status,
             gello_arm_teleop=self.set_gello_arm_teleop,
             gello_arm_teleop_status=self.gello_arm_teleop_status,
+            pi05_connect=self.pi05_connect,
+            pi05_disconnect=self.pi05_disconnect,
+            pi05_status=self.pi05_status,
+            pi05_set_prompt=self.pi05_set_prompt,
+            pi05_set_run=self.pi05_set_run,
             shutdown=self.request_shutdown,
             boot_box=boot_box,
             postprocess_save_dir=str(self.recorder.save_dir),

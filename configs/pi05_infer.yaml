@@ -1,0 +1,59 @@
+# sensors-dcs — Infer / pi05 client (cameras + arm read + gripper; no gello required)
+# Start external serve separately: pi05_jax_sft scripts/serve.sh
+version: 1
+site: dcs-pi05-infer
+
+sensors_config: ./sensors_full_cell_plus.yaml
+dry_run: true
+
+runtime:
+  control_host: "0.0.0.0"
+  control_port: 7010
+  viz_host: "0.0.0.0"
+  viz_port: 7011
+  viz_hz: 5
+  console_hz: 5
+
+pi05:
+  host: "127.0.0.1"
+  port: 5000
+  prompt: ""
+  camera_map:
+    top: cam-middle
+    chest: cam-left
+    wrist2: cam-right
+
+record:
+  save_dir: ./data_pi05
+  episode_index: 0
+
+agents:
+  - id: cam-left
+    type: realsense
+    sensor_id: rs-left
+    hz: 15
+    buffer_frames: 2
+  - id: cam-right
+    type: realsense
+    sensor_id: rs-right
+    hz: 15
+    buffer_frames: 2
+  - id: cam-middle
+    type: realsense
+    sensor_id: rs-middle
+    hz: 15
+    buffer_frames: 2
+  - id: arm-read
+    type: arm
+    sensor_id: arm-elite
+    hz: 50
+    buffer_frames: 32
+  - id: gripper-read
+    type: gripper_read
+    sensor_id: gripper-dh
+    hz: 50
+    buffer_frames: 32
+  - id: pi05
+    type: pi05
+    hz: 5
+    buffer_frames: 8
