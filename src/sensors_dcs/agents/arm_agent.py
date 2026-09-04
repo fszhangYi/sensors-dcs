@@ -71,6 +71,12 @@ class ArmAgent(BaseAgent):
             "dry_run": dry,
             "synth": bool(sample.get("synth")),
         }
+        try:
+            from sensors_dcs.arm_pose import cartesian_payload
+
+            payload.update(cartesian_payload(joints if isinstance(joints, list) else None))
+        except Exception:  # noqa: BLE001
+            payload["cartesian_xyzrpy"] = None
         return Frame(
             sensor_id=self.sensor_id,
             agent_id=self.agent_id,

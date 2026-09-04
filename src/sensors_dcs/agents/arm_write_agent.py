@@ -165,6 +165,16 @@ class ArmWriteAgent(BaseAgent):
             ),
             "mode": "write_gated",
         }
+        # Pose from measured feedback when available; else last commanded joints.
+        pose_joints = snap.get("feedback_joints_rad") or snap.get("joints_rad")
+        try:
+            from sensors_dcs.arm_pose import cartesian_payload
+
+            payload.update(
+                cartesian_payload(pose_joints if isinstance(pose_joints, list) else None)
+            )
+        except Exception:  # noqa: BLE001
+            payload["cartesian_xyzrpy"] = None
         return Frame(
             sensor_id=self.sensor_id,
             agent_id=self.agent_id,

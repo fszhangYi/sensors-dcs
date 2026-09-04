@@ -35,6 +35,8 @@ class ArmCommandBody(BaseModel):
     disarm: bool = False
     stop: bool = False
     joints_rad: list[float] | None = None
+    duration_s: float | None = None
+    cancel_abs_ramp: bool = False
     jog_joint: int | None = None
     delta_rad: float | None = None
     delta_deg: float | None = None
@@ -699,6 +701,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
     .agent-vals .jv b { color: var(--text); font-weight: 600; }
     .agent-vals .jv .cal { color: var(--accent); }
     .agent-vals .jv .raw { color: var(--spark); }
+    .agent-pose {
+      display: flex; flex-wrap: wrap; gap: 0.35rem 0.55rem; align-items: center;
+      margin-top: 0.35rem;
+      font-variant-numeric: tabular-nums; font-size: 0.8rem;
+    }
+    .agent-pose[hidden] { display: none !important; }
+    .agent-pose .pose-tag {
+      color: var(--muted); font-size: 0.72rem; margin-right: 0.15rem;
+    }
+    .agent-pose .jv {
+      background: var(--input-bg); border: 1px solid var(--border); border-radius: 8px;
+      padding: 0.2rem 0.45rem; color: var(--muted);
+    }
+    .agent-pose .jv b { color: var(--text); font-weight: 600; }
     .agent-bars { display: none; }
     .content-row {
       flex: 1;
@@ -784,11 +800,26 @@ PREVIEW_HTML = """<!DOCTYPE html>
       display: flex; flex-wrap: wrap; gap: 0.4rem 0.55rem; align-items: center;
       margin-top: 0.35rem;
     }
+    .arm-cmd .arm-abs-label {
+      cursor: pointer;
+      user-select: none;
+      border-bottom: 1px dashed color-mix(in srgb, var(--muted) 55%, transparent);
+    }
+    .arm-cmd .arm-abs-label:hover { color: var(--accent, #3dd6c6); }
     .arm-cmd .arm-abs-row input[type="text"] {
       flex: 1 1 16rem; min-width: 12rem;
       font-family: ui-monospace, Consolas, monospace; font-size: 0.78rem;
     }
-    .arm-cmd .arm-abs-limit { color: var(--muted); font-size: 0.72rem; }
+    .arm-cmd .arm-abs-dur {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      color: var(--muted); font-size: 0.72rem;
+    }
+    .arm-cmd .arm-abs-dur input[type="range"] {
+      width: 7.5rem; vertical-align: middle;
+    }
+    .arm-cmd .arm-abs-prog {
+      width: 100%; color: var(--muted); font-size: 0.72rem; margin-top: 0.15rem;
+    }
     .arm-cmd .cmd-hint { color: var(--muted); font-size: 0.75rem; }
     .arm-cmd .arm-sync-prog,
     .arm-cmd .arm-teleop-prog {
@@ -3323,6 +3354,25 @@ PREVIEW_HTML = """<!DOCTYPE html>
       return r.toFixed(3) + ' rad / ' + (r * 180 / Math.PI).toFixed(1) + '°';
     }
 
+    function fmtMeters(v) {
+      if (v == null || !Number.isFinite(Number(v))) return '—';
+      return Number(v).toFixed(4) + ' m';
+    }
+
+    function cartesianItemsFromPose(xyzrpy) {
+      if (!Array.isArray(xyzrpy) || xyzrpy.length < 6) return [];
+      const labs = ['x', 'y', 'z', 'rx', 'ry', 'rz'];
+      const items = [];
+      for (let i = 0; i < 6; i++) {
+        const v = xyzrpy[i];
+        items.push({
+          lab: labs[i],
+          calText: i < 3 ? fmtMeters(v) : fmtRad(v),
+        });
+      }
+      return items;
+    }
+
     function ensureValsRoot(card) {
       let root = card.querySelector('.agent-vals');
       if (!root) {
@@ -3331,6 +3381,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const bars = card.querySelector('.agent-bars');
         if (bars) bars.insertAdjacentElement('afterend', root);
         else card.appendChild(root);
+      }
+      return root;
+    }
+
+    function ensurePoseRoot(card) {
+      let root = card.querySelector('.agent-pose');
+      if (!root) {
+        root = document.createElement('div');
+        root.className = 'agent-pose';
+        root.hidden = true;
+        const vals = ensureValsRoot(card);
+        vals.insertAdjacentElement('afterend', root);
       }
       return root;
     }
@@ -3354,19 +3416,38 @@ PREVIEW_HTML = """<!DOCTYPE html>
       root.innerHTML = html || '<span class="jv">—</span>';
     }
 
+    function renderPoseRow(card, xyzrpy) {
+      const poseRoot = ensurePoseRoot(card);
+      const items = cartesianItemsFromPose(xyzrpy);
+      if (!items.length) {
+        poseRoot.hidden = true;
+        poseRoot.innerHTML = '';
+        return;
+      }
+      let html = '<span class="pose-tag" title="' + t('arm.pose_tcp') + '">' + t('arm.pose_fk') + '</span>';
+      for (const it of items) {
+        html += '<span class="jv"><b>' + it.lab + '</b> ' + it.calText + '</span>';
+      }
+      poseRoot.innerHTML = html;
+      poseRoot.hidden = false;
+    }
+
         function renderArmRead(card, frame, hzText) {
       card.querySelector('h2').textContent = 'robot · Read';
       card.querySelector('.k-kind').textContent = frame.kind;
       card.querySelector('.k-seq').textContent = String(frame.seq);
       card.querySelector('.k-hz').textContent = hzText;
       card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
-      const joints = (frame.payload && frame.payload.joints_rad) || [];
+      const p = frame.payload || {};
+      const joints = p.joints_rad || [];
       window.__armReadJoints = joints;
+      window.__armReadCartesian = p.cartesian_xyzrpy || null;
       window.__armReadAgentId = frame.agent_id;
       const root = ensureValsRoot(card);
       const cmd = card.querySelector('.grip-cmd');
       if (cmd) cmd.remove();
       renderJointVals(root, joints.map((v, i) => ({ lab: 'j' + i, cal: v })));
+      renderPoseRow(card, p.cartesian_xyzrpy);
     }
 
     function renderGello(card, frame, hzText) {
@@ -3551,7 +3632,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const p = frame.payload || {};
       const n = Math.max(1, Number(p.num_joints) || 6);
       // Prefer live arm-read joints for display (safety: show measured pose).
-      const fb = (window.__armReadJoints && window.__armReadJoints.length)
+      const usingRead = !!(window.__armReadJoints && window.__armReadJoints.length);
+      const fb = usingRead
         ? window.__armReadJoints
         : (p.feedback_joints_rad || p.command_joints_rad || []);
       const root = ensureValsRoot(card);
@@ -3566,6 +3648,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         });
       }
       renderJointVals(root, items);
+      const poseSrc = (usingRead && window.__armReadCartesian)
+        ? window.__armReadCartesian
+        : p.cartesian_xyzrpy;
+      renderPoseRow(card, poseSrc);
       let box = card.querySelector('.arm-cmd');
       if (!box) {
         box = document.createElement('div');
@@ -3596,11 +3682,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
           '<div class="arm-teleop-prog">摇操：空闲（gello 不控臂）</div>' +
           jogHtml +
           '<div class="arm-abs-row">' +
-            '<label data-i18n="arm.abs_label">joints</label>' +
+            '<label class="arm-abs-label" data-i18n="arm.abs_label" data-i18n-title="arm.abs_label_tip" title="双击填入当前关节角">joints</label>' +
             '<input type="text" class="arm-abs-input" data-i18n-placeholder="arm.abs_ph" placeholder="0.00,0.00,0.00,0.00,0.00,0.00" autocomplete="off" spellcheck="false" />' +
             '<button type="button" class="arm-abs-send" data-i18n="arm.abs_send">下发</button>' +
-            '<span class="arm-abs-limit" data-i18n="arm.abs_limit">|Δ| ≤ —°</span>' +
+            '<label class="arm-abs-dur">' +
+              '<span data-i18n="arm.abs_dur">到达</span>' +
+              '<input type="range" class="arm-abs-dur-range" min="1" max="30" step="1" value="10" />' +
+              '<span class="arm-abs-dur-val">10s</span>' +
+            '</label>' +
           '</div>' +
+          '<div class="arm-abs-prog" data-i18n="arm.abs_idle">绝对下发：空闲</div>' +
           '<span class="cmd-hint">须先有 robot·Read；Arm →「同步」对齐 →「摇操」跟随；解除后 gello 不再控臂</span>';
         card.appendChild(box);
         applyDomI18n(box);
@@ -3616,18 +3707,46 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const teleopProg = box.querySelector('.arm-teleop-prog');
         const absInput = box.querySelector('.arm-abs-input');
         const absSend = box.querySelector('.arm-abs-send');
-        const absLimit = box.querySelector('.arm-abs-limit');
-        box._maxDeltaDeg = 15;
+        const absLabel = box.querySelector('.arm-abs-label');
+        const absDur = box.querySelector('.arm-abs-dur-range');
+        const absDurVal = box.querySelector('.arm-abs-dur-val');
+        const absProg = box.querySelector('.arm-abs-prog');
+        const fillAbsFromRead = () => {
+          const ref = window.__armReadJoints;
+          if (!Array.isArray(ref) || ref.length < 6) {
+            runHint.textContent = t('arm.need_read');
+            return false;
+          }
+          const vals = [];
+          for (let i = 0; i < 6; i++) {
+            const v = Number(ref[i]);
+            if (!Number.isFinite(v)) {
+              runHint.textContent = t('arm.need_read');
+              return false;
+            }
+            vals.push(v.toFixed(4));
+          }
+          if (absInput) absInput.value = vals.join(',');
+          runHint.textContent = t('arm.abs_filled');
+          return true;
+        };
+        if (absLabel) {
+          absLabel.addEventListener('dblclick', (e) => {
+            e.preventDefault();
+            fillAbsFromRead();
+          });
+        }
         const updateDeltaLabel = () => {
           deltaVal.textContent = Number(delta.value).toFixed(1) + '°';
         };
-        const updateAbsLimitLabel = () => {
-          if (absLimit) {
-            absLimit.textContent = t('arm.abs_limit', { deg: Number(box._maxDeltaDeg).toFixed(1) });
+        const updateAbsDurLabel = () => {
+          if (absDurVal && absDur) {
+            absDurVal.textContent = Number(absDur.value).toFixed(0) + 's';
           }
         };
         delta.addEventListener('input', updateDeltaLabel);
-        updateAbsLimitLabel();
+        if (absDur) absDur.addEventListener('input', updateAbsDurLabel);
+        updateAbsDurLabel();
         const postArm = async (body) => {
           const r = await fetch('/api/arm/command', {
             method: 'POST',
@@ -3639,22 +3758,31 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const setJogEnabled = (on) => {
           box.querySelectorAll('.arm-minus, .arm-plus').forEach((b) => { b.disabled = !on; });
           if (absInput) absInput.disabled = !on;
+          if (absDur) absDur.disabled = !on;
           if (absSend) absSend.disabled = !on;
         };
         box._applyArmUi = (armed) => {
           const hasRead = Array.isArray(window.__armReadJoints) && window.__armReadJoints.length > 0;
           const sync = window.__gelloArmSync || {};
           const teleop = window.__gelloArmTeleop || {};
+          const absRamp = window.__armAbsRamp || {};
           const syncing = !!sync.enabled;
           const teleoping = !!teleop.enabled;
+          const absRamping = !!absRamp.enabled;
           armedTag.textContent = !hasRead ? 'need read' : (armed ? 'armed' : 'idle');
-          setJogEnabled(!!armed && hasRead && !syncing && !teleoping);
-          armBtn.disabled = !hasRead || syncing || teleoping;
-          syncBtn.disabled = !hasRead || teleoping;
+          setJogEnabled(!!armed && hasRead && !syncing && !teleoping && !absRamping);
+          if (absRamping && absSend) {
+            absSend.disabled = false;
+            absSend.textContent = t('arm.abs_cancel');
+          } else if (absSend) {
+            absSend.textContent = t('arm.abs_send');
+          }
+          armBtn.disabled = !hasRead || syncing || teleoping || absRamping;
+          syncBtn.disabled = !hasRead || teleoping || absRamping;
           syncBtn.textContent = syncing ? t('arm.unsync') : t('arm.sync');
           syncBtn.classList.toggle('arm-sync-on', syncing);
           syncBtn.dataset.enabled = syncing ? '1' : '0';
-          teleopBtn.disabled = !hasRead || syncing;
+          teleopBtn.disabled = !hasRead || syncing || absRamping;
           teleopBtn.textContent = teleoping ? t('arm.unteelop') : t('arm.teleop');
           teleopBtn.classList.toggle('arm-teleop-on', teleoping);
           teleopBtn.dataset.enabled = teleoping ? '1' : '0';
@@ -3674,6 +3802,27 @@ PREVIEW_HTML = """<!DOCTYPE html>
             syncProg.textContent = String(sync.message);
           } else {
             syncProg.textContent = 'gello→arm：空闲（完成后 gello 不控臂）';
+          }
+          if (absProg) {
+            const hz = Number(absRamp.hz) || 5;
+            if (absRamp.phase === 'ramping' && absRamp.ramp_n) {
+              const left = Math.max(0, (Number(absRamp.ramp_n) - Number(absRamp.ramp_index || 0)) / hz);
+              absProg.textContent =
+                t('arm.abs_ramping', {
+                  i: absRamp.ramp_index || 0,
+                  n: absRamp.ramp_n,
+                  left: left.toFixed(1),
+                  dur: Number(absRamp.duration_s || 0).toFixed(0),
+                });
+            } else if (absRamp.phase === 'completed') {
+              absProg.textContent = absRamp.message || t('arm.abs_done');
+            } else if (absRamp.phase === 'error' && absRamp.last_error) {
+              absProg.textContent = t('arm.abs_fail', { error: absRamp.last_error });
+            } else if (absRamp.message) {
+              absProg.textContent = String(absRamp.message);
+            } else {
+              absProg.textContent = t('arm.abs_idle');
+            }
           }
           if (teleop.phase === 'teleop' || teleoping) {
             teleopProg.textContent = teleop.message || (
@@ -3815,6 +3964,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
         });
         if (absSend) {
           absSend.addEventListener('click', async () => {
+            const absRamp = window.__armAbsRamp || {};
+            if (absRamp.enabled) {
+              try {
+                const r = await postArm({ cancel_abs_ramp: true });
+                runHint.textContent = r.ok
+                  ? t('arm.abs_cancelled')
+                  : t('arm.abs_fail', { error: r.error || JSON.stringify(r) });
+              } catch (e) {
+                runHint.textContent = t('arm.abs_err', { error: e });
+              }
+              return;
+            }
             const raw = ((absInput && absInput.value) || '').trim();
             const parts = raw.split(/[,\\s;]+/).filter(Boolean);
             if (parts.length !== 6) {
@@ -3831,28 +3992,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
               runHint.textContent = t('arm.need_read');
               return;
             }
-            const maxDeg = Number(box._maxDeltaDeg);
-            const maxRad = (Number.isFinite(maxDeg) && maxDeg > 0 ? maxDeg : 15) * Math.PI / 180;
-            let worst = 0;
-            let worstI = 0;
-            for (let i = 0; i < 6; i++) {
-              const d = Math.abs(joints[i] - Number(ref[i]));
-              if (d > worst) { worst = d; worstI = i; }
-            }
-            if (worst > maxRad + 1e-9) {
-              runHint.textContent = t('arm.abs_delta', {
-                joint: worstI,
-                deg: (worst * 180 / Math.PI).toFixed(2),
-                max: (maxRad * 180 / Math.PI).toFixed(1),
-              });
-              return;
-            }
+            const duration_s = absDur ? Number(absDur.value) : 10;
             try {
-              const r = await postArm({ joints_rad: joints });
+              const r = await postArm({ joints_rad: joints, duration_s: duration_s });
               runHint.textContent = r.ok
-                ? t('arm.abs_ok')
+                ? t('arm.abs_ok', { dur: Number(duration_s).toFixed(0) })
                 : t('arm.abs_fail', { error: r.error || JSON.stringify(r) });
               if (r.armed === false) box._applyArmUi(false);
+              if (r.ok) {
+                window.__armAbsRamp = r;
+                if (box._applyArmUi) box._applyArmUi(true);
+              }
             } catch (e) {
               runHint.textContent = t('arm.abs_err', { error: e });
             }
@@ -3861,13 +4011,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
         box._applyArmUi(false);
       }
       if (box && box._applyArmUi) {
-        if (p.max_delta_deg != null && Number.isFinite(Number(p.max_delta_deg))) {
-          box._maxDeltaDeg = Number(p.max_delta_deg);
-        }
-        const absLimitLive = box.querySelector('.arm-abs-limit');
-        if (absLimitLive) {
-          absLimitLive.textContent = t('arm.abs_limit', { deg: Number(box._maxDeltaDeg || 15).toFixed(1) });
-        }
         box._applyArmUi(!!p.armed);
         const rows = box.querySelectorAll('.arm-jog-row');
         rows.forEach((row) => {
@@ -3977,6 +4120,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (prevT.phase === 'teleop' && curT.phase === 'error' && curT.last_error) {
           showAppModal(t('arm.teleop_modal_off'), curT.last_error);
         }
+      }
+      if (msg.arm_abs_ramp) {
+        window.__armAbsRamp = msg.arm_abs_ramp;
       }
       frames.forEach((frame) => {
         const ar = agentRates[frame.agent_id] || {};
@@ -4566,6 +4712,8 @@ def create_viz_app(
             disarm=bool(req.disarm),
             stop=bool(req.stop),
             joints_rad=req.joints_rad,
+            duration_s=req.duration_s,
+            cancel_abs_ramp=bool(req.cancel_abs_ramp),
             jog_joint=req.jog_joint,
             delta_rad=req.delta_rad,
             delta_deg=req.delta_deg,

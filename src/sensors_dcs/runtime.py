@@ -103,6 +103,24 @@ class Orchestrator:
         self._arm_teleop_last_t_wall: float | None = None
         self._arm_teleop_rate_limited = False
         self._arm_teleop_hz = 50.0
+        # Timed absolute joints ramp (UI: duration slider 1–30s @ ramp_hz).
+        self._abs_ramp_lock = threading.Lock()
+        self._abs_ramp_stop = threading.Event()
+        self._abs_ramp_thread: threading.Thread | None = None
+        self._abs_ramp_enabled = False
+        self._abs_ramp_phase = "idle"
+        self._abs_ramp_index = 0
+        self._abs_ramp_n = 0
+        self._abs_ramp_duration_s = 0.0
+        self._abs_ramp_hz = 5.0
+        self._abs_ramp_arm_id: str | None = None
+        self._abs_ramp_writer_id: str | None = None
+        self._abs_ramp_last_ok: bool | None = None
+        self._abs_ramp_last_error: str | None = None
+        self._abs_ramp_last_message: str | None = None
+        self._abs_ramp_write_count = 0
+        self._abs_ramp_last_t_wall: float | None = None
+        self._abs_ramp_target_joints: list[float] | None = None
 
     def status(self) -> dict[str, Any]:
         return {
@@ -114,6 +132,7 @@ class Orchestrator:
             "gripper_gello_sync": self.gripper_gello_sync_status(),
             "gello_arm_sync": self.gello_arm_sync_status(),
             "gello_arm_teleop": self.gello_arm_teleop_status(),
+            "arm_abs_ramp": self.arm_abs_ramp_status(),
         }
 
     def start(self) -> None:
@@ -130,6 +149,7 @@ class Orchestrator:
     def stop(self) -> None:
         self.set_gello_arm_teleop(enabled=False)
         self.set_gello_arm_sync(enabled=False)
+        self.cancel_arm_abs_ramp()
         self.set_gripper_gello_sync(enabled=False)
         self._stop.set()
         # Finish any open episode before tearing down agents
@@ -197,6 +217,7 @@ class Orchestrator:
             "gripper_gello_sync": self.gripper_gello_sync_status(),
             "gello_arm_sync": self.gello_arm_sync_status(),
             "gello_arm_teleop": self.gello_arm_teleop_status(),
+            "arm_abs_ramp": self.arm_abs_ramp_status(),
         }
 
     @staticmethod
@@ -596,8 +617,9 @@ class Orchestrator:
     ) -> dict[str, Any]:
         """Start/stop one-shot gello→arm alignment. After finish, gello does not command arm."""
         if enabled:
-            # Sync wins: stop teleop before starting alignment.
+            # Sync wins: stop teleop + abs ramp before starting alignment.
             self.set_gello_arm_teleop(enabled=False)
+            self.cancel_arm_abs_ramp(message="因同步开始取消绝对下发")
         if not enabled:
             self._arm_sync_stop.set()
             th = self._arm_sync_thread
@@ -963,6 +985,9 @@ class Orchestrator:
                 self._arm_teleop_last_t_wall = time.time()
             return {"ok": True, **self.gello_arm_teleop_status()}
 
+        # Teleop wins over absolute ramp.
+        self.cancel_arm_abs_ramp(message="因摇操开始取消绝对下发")
+
         resolved = self._resolve_gello_arm_agents(
             gello_agent_id=gello_agent_id,
             arm_agent_id=arm_agent_id,
@@ -1186,6 +1211,252 @@ class Orchestrator:
             initialize=initialize,
         )
 
+    def arm_abs_ramp_status(self) -> dict[str, Any]:
+        with self._abs_ramp_lock:
+            return {
+                "enabled": self._abs_ramp_enabled,
+                "phase": self._abs_ramp_phase,
+                "ramp_index": self._abs_ramp_index,
+                "ramp_n": self._abs_ramp_n,
+                "duration_s": self._abs_ramp_duration_s,
+                "hz": self._abs_ramp_hz,
+                "arm_agent_id": self._abs_ramp_arm_id,
+                "arm_write_agent_id": self._abs_ramp_writer_id,
+                "last_ok": self._abs_ramp_last_ok,
+                "last_error": self._abs_ramp_last_error,
+                "message": self._abs_ramp_last_message,
+                "write_count": self._abs_ramp_write_count,
+                "last_t_wall": self._abs_ramp_last_t_wall,
+                "target_joints": (
+                    list(self._abs_ramp_target_joints)
+                    if self._abs_ramp_target_joints is not None
+                    else None
+                ),
+            }
+
+    def cancel_arm_abs_ramp(self, *, message: str | None = None) -> dict[str, Any]:
+        """Stop a running absolute timed ramp (no-op if idle)."""
+        self._abs_ramp_stop.set()
+        th = self._abs_ramp_thread
+        if th is not None and th.is_alive() and th is not threading.current_thread():
+            th.join(timeout=2.0)
+        with self._abs_ramp_lock:
+            was = self._abs_ramp_enabled or self._abs_ramp_phase == "ramping"
+            self._abs_ramp_enabled = False
+            self._abs_ramp_thread = None
+            if was or self._abs_ramp_phase == "ramping":
+                self._abs_ramp_phase = "idle"
+                self._abs_ramp_last_ok = True
+                self._abs_ramp_last_error = None
+                self._abs_ramp_last_message = message or "绝对下发已取消"
+                self._abs_ramp_last_t_wall = time.time()
+        return {"ok": True, **self.arm_abs_ramp_status()}
+
+    def start_arm_abs_ramp(
+        self,
+        *,
+        joints_rad: list[float],
+        duration_s: float = 10.0,
+        agent_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Timed linear ramp from live arm read → target joints (like gello→arm sync)."""
+        from sensors_dcs.agents.arm_agent import ArmAgent
+        from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
+
+        if self._arm_teleop_enabled:
+            return {
+                "ok": False,
+                "error": "gello→arm teleop active; 解除摇操 before absolute ramp",
+                **self.gello_arm_teleop_status(),
+            }
+        if self._arm_sync_enabled:
+            return {
+                "ok": False,
+                "error": "gello→arm sync active; cancel sync before absolute ramp",
+                **self.gello_arm_sync_status(),
+            }
+
+        readers = [a for a in self.agents.values() if isinstance(a, ArmAgent)]
+        writers = [a for a in self.agents.values() if isinstance(a, ArmWriteAgent)]
+        if not writers:
+            return {"ok": False, "error": "no arm_write agent in config"}
+        if not readers:
+            return {
+                "ok": False,
+                "error": "arm_write requires a paired arm (read) agent",
+            }
+
+        writer: ArmWriteAgent
+        if agent_id:
+            found = self.agents.get(agent_id)
+            if not isinstance(found, ArmWriteAgent):
+                return {"ok": False, "error": f"agent {agent_id!r} is not arm_write"}
+            writer = found
+        else:
+            writer = writers[0]
+
+        reader = readers[0]
+        for cand in readers:
+            if cand.sensor_id == writer.sensor_id:
+                reader = cand
+                break
+
+        armed = bool(getattr(writer.sensor, "armed", False))
+        if not armed:
+            fr = writer.ring.latest.get()
+            if fr is not None:
+                armed = bool(fr.payload.get("armed"))
+        if not armed:
+            return {"ok": False, "error": "arm_write not armed; click Arm before absolute ramp"}
+
+        try:
+            q_star = [float(x) for x in joints_rad]
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "joints_rad must be 6 floats"}
+        if len(q_star) != 6 or any(not (x == x) for x in q_star):  # NaN check
+            return {"ok": False, "error": "joints_rad must be exactly 6 finite values"}
+
+        qa0 = self._joints6_from_ring(reader)
+        if qa0 is None:
+            return {
+                "ok": False,
+                "error": "no live arm read joints; refuse absolute ramp without current pose",
+            }
+
+        dur = float(duration_s)
+        if not (dur == dur):  # NaN
+            dur = 10.0
+        dur = max(1.0, min(30.0, dur))
+        hz = float(getattr(self.cfg.gello_arm_sync, "ramp_hz", 5.0) or 5.0)
+        hz = max(0.1, hz)
+        n = max(1, int(round(dur * hz)))
+
+        dmax, ji = self._delta_max_joint(qa0, q_star)
+        step = dmax / n
+        max_delta = float(getattr(writer.sensor, "max_delta_rad", 0.0) or 0.0)
+        if max_delta > 0 and step > max_delta + 1e-12:
+            need_s = (dmax / max_delta) / hz
+            return {
+                "ok": False,
+                "error": (
+                    f"ramp step ≈{step:.4f} rad (joint {ji}) exceeds driver max_delta="
+                    f"{max_delta:.4f} rad at {dur:g}s×{hz:g}Hz; "
+                    f"increase duration to ≥{need_s:.1f}s (max 30)"
+                ),
+                "delta_max": dmax,
+                "worst_joint": ji,
+                "ramp_n": n,
+                "duration_s": dur,
+            }
+
+        # Replace any in-flight abs ramp.
+        self._abs_ramp_stop.set()
+        th_old = self._abs_ramp_thread
+        if th_old is not None and th_old.is_alive():
+            th_old.join(timeout=2.0)
+
+        with self._abs_ramp_lock:
+            self._abs_ramp_enabled = True
+            self._abs_ramp_phase = "ramping"
+            self._abs_ramp_index = 0
+            self._abs_ramp_n = n
+            self._abs_ramp_duration_s = dur
+            self._abs_ramp_hz = hz
+            self._abs_ramp_arm_id = reader.agent_id
+            self._abs_ramp_writer_id = writer.agent_id
+            self._abs_ramp_last_ok = None
+            self._abs_ramp_last_error = None
+            self._abs_ramp_last_message = (
+                f"绝对下发开始：{dur:g}s @ {hz:g}Hz × {n} 点"
+            )
+            self._abs_ramp_write_count = 0
+            self._abs_ramp_last_t_wall = time.time()
+            self._abs_ramp_target_joints = list(q_star)
+
+        self._abs_ramp_stop.clear()
+        self._abs_ramp_thread = threading.Thread(
+            target=self._arm_abs_ramp_loop,
+            name="arm-abs-ramp",
+            args=(reader.agent_id, writer.agent_id, list(qa0), list(q_star), n, hz),
+            daemon=True,
+        )
+        self._abs_ramp_thread.start()
+        return {"ok": True, **self.arm_abs_ramp_status()}
+
+    def _arm_abs_ramp_loop(
+        self,
+        arm_id: str,
+        writer_id: str,
+        qa0: list[float],
+        q_star: list[float],
+        n: int,
+        hz: float,
+    ) -> None:
+        from sensors_dcs.agents.arm_agent import ArmAgent
+        from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
+
+        period = 1.0 / max(0.1, float(hz))
+        path = self._interp_path(qa0, q_star, n)
+        final_error: str | None = None
+        final_message: str | None = None
+        completed = False
+
+        try:
+            reader = self.agents.get(arm_id)
+            writer = self.agents.get(writer_id)
+            if not isinstance(reader, ArmAgent) or not isinstance(writer, ArmWriteAgent):
+                final_error = "abs ramp agents missing"
+            else:
+                for k, qk in enumerate(path, start=1):
+                    if self._abs_ramp_stop.is_set() or self._stop.is_set():
+                        final_message = "绝对下发已取消"
+                        break
+                    ref = self._joints6_from_ring(reader) or (
+                        path[k - 2] if k >= 2 else qa0
+                    )
+                    result = writer.command(
+                        joints_rad=list(qk), reference_joints_rad=list(ref)
+                    )
+                    with self._abs_ramp_lock:
+                        self._abs_ramp_index = k
+                        self._abs_ramp_write_count += 1
+                        self._abs_ramp_last_ok = bool(result.get("ok"))
+                        self._abs_ramp_last_error = result.get("error")
+                        self._abs_ramp_last_t_wall = time.time()
+                        if not result.get("ok"):
+                            self._abs_ramp_last_message = (
+                                f"ramp write failed at {k}/{n}: {result.get('error')}"
+                            )
+                    if not result.get("ok"):
+                        final_error = str(result.get("error") or "ramp write failed")
+                        break
+                    self._abs_ramp_stop.wait(period)
+                else:
+                    completed = True
+                    final_message = f"绝对下发完成：{n} 点已写入"
+        except Exception as e:  # noqa: BLE001
+            final_error = str(e)
+
+        with self._abs_ramp_lock:
+            self._abs_ramp_enabled = False
+            self._abs_ramp_thread = None
+            if completed:
+                self._abs_ramp_phase = "completed"
+                self._abs_ramp_last_ok = True
+                self._abs_ramp_last_error = None
+                self._abs_ramp_last_message = final_message
+            elif final_error:
+                self._abs_ramp_phase = "error"
+                self._abs_ramp_last_ok = False
+                self._abs_ramp_last_error = final_error
+                self._abs_ramp_last_message = final_error
+            else:
+                self._abs_ramp_phase = "idle"
+                self._abs_ramp_last_ok = True
+                self._abs_ramp_last_error = None
+                self._abs_ramp_last_message = final_message or "绝对下发已取消"
+            self._abs_ramp_last_t_wall = time.time()
+
     def arm_command(
         self,
         *,
@@ -1194,11 +1465,13 @@ class Orchestrator:
         disarm: bool = False,
         stop: bool = False,
         joints_rad: list[float] | None = None,
+        duration_s: float | None = None,
+        cancel_abs_ramp: bool = False,
         jog_joint: int | None = None,
         delta_rad: float | None = None,
         delta_deg: float | None = None,
     ) -> dict[str, Any]:
-        """Dispatch arm/disarm/jog to ``arm_write``; jog is always relative to ``arm`` read."""
+        """Dispatch arm/disarm/jog to ``arm_write``; absolute joints use timed ramp."""
         import math
 
         from sensors_dcs.agents.arm_agent import ArmAgent
@@ -1242,6 +1515,9 @@ class Orchestrator:
             except (TypeError, ValueError):
                 return None
 
+        if cancel_abs_ramp:
+            return self.cancel_arm_abs_ramp()
+
         if arm:
             base = _read_joints()
             if base is None:
@@ -1252,9 +1528,10 @@ class Orchestrator:
             return agent.command(arm=True)
 
         if disarm or stop:
-            # Always kill teleop + alignment write loops before disarm/estop.
+            # Always kill teleop + alignment + abs ramp before disarm/estop.
             self.set_gello_arm_teleop(enabled=False)
             self.set_gello_arm_sync(enabled=False)
+            self.cancel_arm_abs_ramp(message="因 Disarm/Estop 取消绝对下发")
             return agent.command(disarm=bool(disarm or stop), stop=True)
 
         if self._arm_teleop_enabled:
@@ -1269,6 +1546,13 @@ class Orchestrator:
                 "ok": False,
                 "error": "gello→arm sync active; cancel sync before jog",
                 **self.gello_arm_sync_status(),
+            }
+
+        if self._abs_ramp_enabled:
+            return {
+                "ok": False,
+                "error": "absolute ramp active; cancel or wait before jog",
+                **self.arm_abs_ramp_status(),
             }
 
         if jog_joint is not None:
@@ -1293,13 +1577,12 @@ class Orchestrator:
             return agent.command(joints_rad=target, reference_joints_rad=base)
 
         if joints_rad is not None:
-            base = _read_joints()
-            if base is None:
-                return {
-                    "ok": False,
-                    "error": "no live arm read joints; refuse absolute command without current pose",
-                }
-            return agent.command(joints_rad=list(joints_rad), reference_joints_rad=base)
+            dur = 10.0 if duration_s is None else float(duration_s)
+            return self.start_arm_abs_ramp(
+                joints_rad=list(joints_rad),
+                duration_s=dur,
+                agent_id=agent.agent_id,
+            )
 
         return {"ok": False, "error": "arm, disarm/stop, joints_rad, or jog_joint required"}
 
