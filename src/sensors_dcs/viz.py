@@ -571,6 +571,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     #tab-post.active,
     #tab-home.active { overflow-y: auto; }
+    /* Collect/Infer: allow scroll so chrome (esp. Infer pi05 panel) cannot crush sensors. */
+    #tab-collect.active,
+    #tab-infer.active {
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+    .content-row {
+      flex: 1 1 auto;
+      min-height: 22rem;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      align-items: stretch;
+    }
     #tab-sensors.active {
       gap: 0;
       overflow: hidden;
@@ -724,6 +738,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       font-size: 0.82rem;
     }
     .inf-pi05-panel {
+      flex-shrink: 0;
       margin: 0 0 0.65rem;
       padding: 0.55rem 0.65rem;
       border: 1px solid var(--border);
@@ -753,7 +768,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     #infPi05Prompt { flex: 1; min-width: 12rem; }
     .inf-pi05-out {
       margin: 0;
-      max-height: 10rem;
+      max-height: 6rem;
       overflow: auto;
       font-size: 0.75rem;
       line-height: 1.35;
@@ -791,14 +806,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .agent-pose .jv b { color: var(--text); font-weight: 600; }
     .agent-bars { display: none; }
-    .content-row {
-      flex: 1;
-      min-height: 0;
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 0.75rem;
-      align-items: stretch;
-    }
     #agents, #infAgents {
       min-width: 0;
       min-height: 0;
@@ -4564,45 +4571,48 @@ PREVIEW_HTML = """<!DOCTYPE html>
         window.__armAbsRamp = msg.arm_abs_ramp;
       }
       frames.forEach((frame) => {
-        const ar = agentRates[frame.agent_id] || {};
-        const hzText = updateBackHz(
-          frame.agent_id,
-          frame,
-          ar.hz_target,
-          ar.hz_meas,
-          msg.t_wall,
-        );
-        if (frame.kind === 'realsense') {
-          const slot = pickCamSlot(frame, usedSlots);
-          if (slot) {
-            usedSlots.add(slot);
-            renderCamSlot(slot, frame, hzText);
+        try {
+          const ar = agentRates[frame.agent_id] || {};
+          const hzText = updateBackHz(
+            frame.agent_id,
+            frame,
+            ar.hz_target,
+            ar.hz_meas,
+            msg.t_wall,
+          );
+          if (frame.kind === 'realsense') {
+            const slot = pickCamSlot(frame, usedSlots);
+            if (slot) {
+              usedSlots.add(slot);
+              renderCamSlot(slot, frame, hzText);
+            }
+            return;
           }
-          return;
+          ['collect', 'infer'].forEach((scope) => {
+            // Shared YAML: Collect hides pi05; Infer hides gello.
+            if (scope === 'collect' && frame.kind === 'pi05') return;
+            if (scope === 'infer' && frame.kind === 'gello') return;
+            const card = ensureStateCard(frame.agent_id, scope);
+            if (!card) return;
+            if (frame.kind === 'gripper_read') {
+              renderGripperRead(card, frame, hzText);
+            } else if (frame.kind === 'gripper_write') {
+              renderGripperWrite(card, frame, hzText);
+            } else if (frame.kind === 'arm_write') {
+              renderArmWrite(card, frame, hzText);
+            } else if (frame.kind === 'arm_read') {
+              renderArmRead(card, frame, hzText);
+            } else if (frame.kind === 'pi05') {
+              if (scope !== 'infer') return;
+              renderPi05(card, frame, hzText);
+            } else {
+              if (scope === 'infer') return;
+              renderGello(card, frame, hzText);
+            }
+          });
+        } catch (e) {
+          /* one bad agent frame must not block cameras / other cards */
         }
-        ['collect', 'infer'].forEach((scope) => {
-          // Shared YAML: Collect hides pi05; Infer hides gello.
-          if (scope === 'collect' && frame.kind === 'pi05') return;
-          if (scope === 'infer' && frame.kind === 'gello') return;
-          const card = ensureStateCard(frame.agent_id, scope);
-          if (!card) return;
-          if (frame.kind === 'gripper_read') {
-            renderGripperRead(card, frame, hzText);
-          } else if (frame.kind === 'gripper_write') {
-            renderGripperWrite(card, frame, hzText);
-          } else if (frame.kind === 'arm_write') {
-            renderArmWrite(card, frame, hzText);
-          } else if (frame.kind === 'arm_read') {
-            renderArmRead(card, frame, hzText);
-          } else if (frame.kind === 'pi05') {
-            if (scope !== 'infer') return;
-            renderPi05(card, frame, hzText);
-          } else {
-            // gello / unknown — Collect only until Infer grows a dedicated renderer (P2 pi05).
-            if (scope === 'infer') return;
-            renderGello(card, frame, hzText);
-          }
-        });
       });
 
       const rawText = JSON.stringify(msg, (k, v) => {
