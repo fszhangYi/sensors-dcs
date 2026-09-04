@@ -24,24 +24,27 @@ def auth_off_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 
 def test_fs_roots_and_children(auth_off_client: TestClient) -> None:
+    from sensors_dcs.paths import project_root
+
     roots = auth_off_client.get("/api/fs/roots").json()
     assert roots["ok"] is True
-    assert "configs" in roots["roots"]
+    assert "workspace" in roots["roots"]
+    assert Path(roots["roots"]["workspace"]).resolve() == project_root().resolve().parent
 
     kids = auth_off_client.get(
         "/api/fs/children",
-        params={"root": "configs", "path": roots["roots"]["configs"]},
+        params={"root": "workspace", "path": roots["roots"]["workspace"]},
     ).json()
     assert kids["ok"] is True
     names = {e["name"] for e in kids["entries"]}
-    assert "gello_only.yaml" in names or any(n.endswith(".yaml") for n in names)
+    assert project_root().name in names
 
 
 def test_runtime_config_get(auth_off_client: TestClient) -> None:
     j = auth_off_client.get("/api/runtime/config").json()
     assert j["ok"] is True
     assert j["path"].endswith("gello_only.yaml")
-    assert "configs" in j["roots"]
+    assert "workspace" in j["roots"]
 
 
 def test_apply_config_validates(auth_off_client: TestClient, tmp_path: Path, monkeypatch) -> None:

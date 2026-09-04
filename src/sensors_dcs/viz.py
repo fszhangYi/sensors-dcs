@@ -1803,7 +1803,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       columns: [],
       activePath: '',
       draft: '',
-      rootKey: 'configs',
+      rootKey: 'workspace',
       rootPath: '',
       pathKind: 'file',
     };
@@ -2027,7 +2027,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
 
     async function fetchFsChildren(rootKey, path, rootPath) {
-      const qs = new URLSearchParams({ root: rootKey || 'configs' });
+      const qs = new URLSearchParams({ root: rootKey || 'workspace' });
       if (path) qs.set('path', path);
       if (rootPath) qs.set('rootPath', rootPath);
       const r = await fetch('/api/fs/children?' + qs.toString(), { credentials: 'same-origin', cache: 'no-store' });
@@ -2136,31 +2136,26 @@ PREVIEW_HTML = """<!DOCTYPE html>
         await refreshSettingsConfig();
       }
       const seed = (settingsConfigPath && settingsConfigPath.value) || (settingsConfigCurrent && settingsConfigCurrent.textContent) || '';
-      let rootKey = 'configs';
-      let rootPath = settingsRoots.configs || settingsRoots.workspace || '';
-      if (settingsRoots.autodl && seed && seed.indexOf('/root/autodl-tmp') === 0) {
-        rootKey = 'autodl';
-        rootPath = settingsRoots.autodl;
-      } else if (settingsRoots.user && seed && seed.indexOf(settingsRoots.user) === 0) {
+      // Sandbox root = parent of project root (settingsRoots.workspace). Do not
+      // shrink it to the seed file's parent — that only drives cascade focus.
+      let rootKey = 'workspace';
+      let rootPath = settingsRoots.workspace || '';
+      if (settingsRoots.user && seed && seed.indexOf(settingsRoots.user) === 0) {
         rootKey = 'user';
         rootPath = settingsRoots.user;
-      } else if (settingsRoots.workspace && seed && seed.indexOf(settingsRoots.workspace) === 0) {
-        rootKey = 'workspace';
-        rootPath = settingsRoots.workspace;
-      } else if (settingsRoots.home && seed && seed.indexOf(settingsRoots.home) === 0) {
+      } else if (settingsRoots.home && seed && seed.indexOf(settingsRoots.home) === 0
+                 && !(settingsRoots.workspace && seed.indexOf(settingsRoots.workspace) === 0)) {
         rootKey = 'home';
         rootPath = settingsRoots.home;
-      }
-      // Prefer browsing from parent of current file when possible.
-      let browseAnchor = rootPath;
-      if (seed) {
-        const slash = seed.lastIndexOf('/');
-        const bslash = seed.lastIndexOf('\\\\');
-        const cut = Math.max(slash, bslash);
-        if (cut > 0) browseAnchor = seed.slice(0, cut);
+      } else if (settingsRoots.workspace) {
+        rootKey = 'workspace';
+        rootPath = settingsRoots.workspace;
+      } else if (settingsRoots.configs) {
+        rootKey = 'configs';
+        rootPath = settingsRoots.configs;
       }
       pathPicker.rootKey = rootKey;
-      pathPicker.rootPath = browseAnchor || rootPath;
+      pathPicker.rootPath = rootPath;
       pathPicker.pathKind = 'file';
       pathPicker.draft = seed || pathPicker.rootPath;
       pathPicker.activePath = pathPicker.draft;
@@ -3546,7 +3541,7 @@ def create_viz_app(
 
     @app.get("/api/fs/children")
     async def fs_children(
-        root: str = "configs",
+        root: str = "workspace",
         path: str = "",
         rootPath: str | None = None,
     ) -> JSONResponse:

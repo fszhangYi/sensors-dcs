@@ -10,15 +10,21 @@ from sensors_dcs.paths import project_root, user_data_dir
 
 
 def default_roots() -> dict[str, Path]:
+    """Browse sandboxes for the path picker.
+
+    Primary ``workspace`` is the **parent of the project root** so sibling
+    trees (other repos / shared configs) are visible one level up.
+    """
+    proj = project_root().resolve()
+    parent = proj.parent.resolve()
     roots: dict[str, Path] = {
-        "configs": (project_root() / "configs").resolve(),
+        "workspace": parent,
+        "configs": (proj / "configs").resolve(),
         "user": (user_data_dir() / "configs").resolve(),
-        "workspace": project_root().resolve(),
-        "home": Path.home().resolve(),
     }
-    autodl = Path("/root/autodl-tmp")
-    if autodl.is_dir():
-        roots["autodl"] = autodl.resolve()
+    home = Path.home().resolve()
+    if home != parent:
+        roots["home"] = home
     return roots
 
 
