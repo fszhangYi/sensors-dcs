@@ -22,6 +22,18 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         super().end_headers()
 
+    def do_GET(self) -> None:  # noqa: N802
+        path = self.path.split("?", 1)[0]
+        if path in ("/api/health", "/health"):
+            body = b'{"ok":true,"service":"iframe-guest"}\n'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        super().do_GET()
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
