@@ -119,7 +119,7 @@ class Pi05ClientAgent(BaseAgent):
             hz=hz,
             buffer_frames=buffer_frames,
         )
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._host = str(host or "127.0.0.1")
         self._port = int(port)
         self._prompt = str(prompt or "")
@@ -170,10 +170,18 @@ class Pi05ClientAgent(BaseAgent):
                 "camera_map": dict(self._camera_map),
             }
 
+    @staticmethod
+    def _normalize_host(host: str) -> str:
+        h = (host or "").strip() or "127.0.0.1"
+        # Bind-all addresses are not valid connect targets.
+        if h in {"0.0.0.0", "::", "[::]"}:
+            return "127.0.0.1"
+        return h
+
     def connect(self, host: str | None = None, port: int | None = None) -> dict[str, Any]:
         with self._lock:
             if host is not None:
-                self._host = str(host).strip() or self._host
+                self._host = self._normalize_host(str(host))
             if port is not None:
                 self._port = int(port)
             self._close_sock_unlocked()
@@ -185,9 +193,13 @@ class Pi05ClientAgent(BaseAgent):
                 sock.close()
                 self._connected = False
                 self._last_ok = False
-                self._last_error = f"connect failed: {e}"
+                self._last_error = (
+                    f"connect failed: {e}  "
+                    f"(start serve on {self._host}:{self._port}, e.g. "
+                    f"python3 tools/pi05_fake_serve/serve.py --port {self._port})"
+                )
                 return {"ok": False, "error": self._last_error, **self.status_payload()}
-            sock.settimeout(30.0)
+            sock.settimeout(None)  # idle until Step; serve also waits indefinitely
             self._sock = sock
             self._connected = True
             self._last_error = None
@@ -287,13 +299,14 @@ class Pi05ClientAgent(BaseAgent):
         )
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, *, join_timeout: float = 2.0, close_sensor: bool = True) -> None:
+        del close_sensor  # no hik sensor
         self._stop.set()
         with self._lock:
             self._close_sock_unlocked()
             self._connected = False
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=2.0)
+            self._thread.join(timeout=max(0.05, float(join_timeout)))
         self._thread = None
 
     def read_frame(self) -> Frame:

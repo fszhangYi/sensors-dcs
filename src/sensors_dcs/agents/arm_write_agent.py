@@ -49,16 +49,21 @@ class ArmWriteAgent(BaseAgent):
             "result": None,
         }
 
-    def stop(self) -> None:
-        """Stop loop; attempt disarm if sensor supports it."""
-        try:
-            if hasattr(self.sensor, "disarm"):
-                self.sensor.disarm(stop=True)  # type: ignore[attr-defined]
-        except Exception:  # noqa: BLE001
-            pass
+    def stop(self, *, join_timeout: float = 2.0, close_sensor: bool = True) -> None:
+        """Stop loop; attempt disarm if sensor supports it.
+
+        ``close_sensor=False`` (process shutdown) skips disarm — SDK/serial
+        calls can hang and block Ctrl+C / safe exit.
+        """
+        if close_sensor:
+            try:
+                if hasattr(self.sensor, "disarm"):
+                    self.sensor.disarm(stop=True)  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
         self._stop.set()
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=2.0)
+            self._thread.join(timeout=max(0.05, float(join_timeout)))
         self._thread = None
 
     def command(

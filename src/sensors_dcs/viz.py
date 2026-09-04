@@ -766,6 +766,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     #infPi05Host { width: 9rem; }
     #infPi05Prompt { flex: 1; min-width: 12rem; }
+    #infPi05Status.st-live { color: var(--ok, #3dcc91); }
+    #infPi05Status.st-offline { color: var(--muted); }
+    #infPi05Status.st-error { color: var(--danger, #e07070); }
+    #infPi05Status.st-connecting { color: var(--warn, #d4a017); }
+    #infPi05Panel button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
     .inf-pi05-out {
       margin: 0;
       max-height: 6rem;
@@ -1283,13 +1291,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
     <p class="inf-banner" data-i18n="infer.banner">推理页（与采集共用录制后端；首版不控臂）。</p>
     <div class="inf-pi05-panel" id="infPi05Panel">
       <div class="inf-pi05-row">
+        <span data-i18n="infer.status_label">Serve：</span>
+        <strong id="infPi05Status" class="st-offline">未连接</strong>
         <label for="infPi05Host" data-i18n="infer.host">Host</label>
         <input type="text" id="infPi05Host" value="127.0.0.1" autocomplete="off" spellcheck="false" />
         <label for="infPi05Port" data-i18n="infer.port">Port</label>
         <input type="number" id="infPi05Port" value="5000" min="1" max="65535" step="1" />
         <button type="button" class="primary" id="infPi05Connect" data-i18n="infer.connect">连接</button>
-        <button type="button" id="infPi05Disconnect" data-i18n="infer.disconnect">断开</button>
-        <button type="button" class="primary" id="infPi05Step" data-i18n="infer.step">询问一步</button>
+        <button type="button" id="infPi05Disconnect" data-i18n="infer.disconnect" disabled>断开</button>
+        <button type="button" class="primary" id="infPi05Step" data-i18n="infer.step" disabled>询问一步</button>
       </div>
       <div class="inf-pi05-row">
         <label for="infPi05Prompt" data-i18n="infer.prompt">Prompt</label>
@@ -2034,11 +2044,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const infPi05Prompt = document.getElementById('infPi05Prompt');
     const infPi05Hint = document.getElementById('infPi05Hint');
     const infPi05Out = document.getElementById('infPi05Out');
+    const infPi05Status = document.getElementById('infPi05Status');
     const infPi05Connect = document.getElementById('infPi05Connect');
     const infPi05Disconnect = document.getElementById('infPi05Disconnect');
     const infPi05Step = document.getElementById('infPi05Step');
     const infPi05PromptApply = document.getElementById('infPi05PromptApply');
     const LS_PI05 = 'dcs.inf.pi05';
+    let pi05StepBusy = false;
     function loadPi05Form() {
       try {
         const raw = localStorage.getItem(LS_PI05);
@@ -2077,27 +2089,51 @@ PREVIEW_HTML = """<!DOCTYPE html>
       };
       return JSON.stringify(slim, null, 2);
     }
+    function setPi05StatusEl(kind, text) {
+      if (!infPi05Status) return;
+      infPi05Status.classList.remove('st-live', 'st-offline', 'st-error', 'st-connecting');
+      infPi05Status.classList.add(kind || 'st-offline');
+      infPi05Status.textContent = text;
+    }
     function applyPi05PanelFromPayload(p) {
       if (!infPi05Hint) return;
-      if (p && p.configured === false) {
+      const configured = !(p && p.configured === false);
+      const connected = !!(p && p.connected);
+      if (!configured) {
+        setPi05StatusEl('st-offline', t('infer.status_unconfigured'));
         infPi05Hint.textContent = t('infer.hint_unconfigured');
+        if (infPi05Connect) infPi05Connect.disabled = true;
+        if (infPi05Disconnect) infPi05Disconnect.disabled = true;
         if (infPi05Step) infPi05Step.disabled = true;
+        if (infPi05Host) infPi05Host.disabled = true;
+        if (infPi05Port) infPi05Port.disabled = true;
         if (infPi05Out) infPi05Out.textContent = formatPi05Out(p);
         return;
       }
-      if (infPi05Step) infPi05Step.disabled = !(p && p.connected);
-      if (p && p.connected) {
-        infPi05Hint.textContent = t('infer.hint_connected');
+      if (infPi05Host) infPi05Host.disabled = connected;
+      if (infPi05Port) infPi05Port.disabled = connected;
+      if (infPi05Connect) infPi05Connect.disabled = connected;
+      if (infPi05Disconnect) infPi05Disconnect.disabled = !connected;
+      if (infPi05Step) infPi05Step.disabled = !connected || pi05StepBusy;
+      if (connected) {
+        const host = (p && p.host) || ((infPi05Host && infPi05Host.value) || '127.0.0.1');
+        const port = (p && p.port != null) ? p.port : ((infPi05Port && infPi05Port.value) || '5000');
+        setPi05StatusEl('st-live', t('infer.status_connected', { host: host, port: port }));
+        infPi05Hint.textContent = (p && p.error && p.ok === false)
+          ? String(p.error)
+          : t('infer.hint_connected');
       } else if (p && p.error) {
+        setPi05StatusEl('st-error', t('infer.status_error'));
         infPi05Hint.textContent = String(p.error);
       } else {
+        setPi05StatusEl('st-offline', t('infer.status_disconnected'));
         infPi05Hint.textContent = t('infer.hint_idle');
       }
       if (infPi05Out) infPi05Out.textContent = formatPi05Out(p);
-      if (p && p.host && infPi05Host && document.activeElement !== infPi05Host) {
+      if (p && p.host && infPi05Host && document.activeElement !== infPi05Host && !connected) {
         infPi05Host.value = p.host;
       }
-      if (p && p.port != null && infPi05Port && document.activeElement !== infPi05Port) {
+      if (p && p.port != null && infPi05Port && document.activeElement !== infPi05Port && !connected) {
         infPi05Port.value = String(p.port);
       }
       if (p && p.prompt != null && infPi05Prompt && document.activeElement !== infPi05Prompt) {
@@ -2118,23 +2154,35 @@ PREVIEW_HTML = """<!DOCTYPE html>
     loadPi05Form();
     fetch('/api/pi05/status').then((r) => r.json()).then(applyPi05PanelFromPayload).catch(() => {});
     if (infPi05Connect) {
-      infPi05Connect.addEventListener('click', () => postPi05('/api/pi05/connect', {
-        host: (infPi05Host && infPi05Host.value) || '127.0.0.1',
-        port: Number((infPi05Port && infPi05Port.value) || 5000),
-      }));
+      infPi05Connect.addEventListener('click', async () => {
+        setPi05StatusEl('st-connecting', t('infer.status_connecting'));
+        if (infPi05Connect) infPi05Connect.disabled = true;
+        try {
+          await postPi05('/api/pi05/connect', {
+            host: (infPi05Host && infPi05Host.value) || '127.0.0.1',
+            port: Number((infPi05Port && infPi05Port.value) || 5000),
+          });
+        } catch (e) {
+          setPi05StatusEl('st-error', t('infer.status_error'));
+          if (infPi05Hint) infPi05Hint.textContent = String(e);
+          if (infPi05Connect) infPi05Connect.disabled = false;
+        }
+      });
     }
     if (infPi05Disconnect) {
       infPi05Disconnect.addEventListener('click', () => postPi05('/api/pi05/disconnect', {}));
     }
     if (infPi05Step) {
       infPi05Step.addEventListener('click', async () => {
+        pi05StepBusy = true;
         infPi05Step.disabled = true;
         if (infPi05Hint) infPi05Hint.textContent = t('infer.hint_stepping');
         try {
           await postPi05('/api/pi05/step', {});
         } finally {
+          pi05StepBusy = false;
           const st = await fetch('/api/pi05/status').then((x) => x.json()).catch(() => ({}));
-          if (infPi05Step) infPi05Step.disabled = !(st && st.connected);
+          applyPi05PanelFromPayload(st);
         }
       });
     }

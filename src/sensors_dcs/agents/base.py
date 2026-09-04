@@ -56,11 +56,13 @@ class BaseAgent(ABC):
         )
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, *, join_timeout: float = 2.0, close_sensor: bool = True) -> None:
         self._stop.set()
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=2.0)
+            self._thread.join(timeout=max(0.05, float(join_timeout)))
         self._thread = None
+        if not close_sensor:
+            return
         try:
             self.sensor.close()
         except Exception:  # noqa: BLE001

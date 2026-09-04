@@ -156,6 +156,7 @@ def main(argv: list[str] | None = None) -> None:
             port=port,
             open_ui=open_ui,
             attach_server=lambda s: shutdown_box.__setitem__("server", s),
+            on_signal=_error_shutdown,
         )
         return
 
@@ -224,10 +225,17 @@ def main(argv: list[str] | None = None) -> None:
             port=port,
             open_ui=open_ui,
             attach_server=lambda s: shutdown_box.__setitem__("server", s),
+            on_signal=_shutdown,
         )
     finally:
+        # Safe-exit already schedules os._exit; skip a second blocking stop.
+        if getattr(orch, "_shutdown_requested", False):
+            return
         if not orch._stop.is_set():
-            orch.stop()
+            try:
+                orch.stop(for_shutdown=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"[sensors-dcs] final stop: {e}", flush=True)
 
 
 if __name__ == "__main__":

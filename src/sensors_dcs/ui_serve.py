@@ -94,19 +94,50 @@ def serve_app_blocking(
     port: int = 7011,
     open_ui: bool = True,
     attach_server: Any | None = None,
+    on_signal: Any | None = None,
 ) -> None:
     """Run uvicorn until SIGINT/SIGTERM; optionally open webview/browser.
 
     ``attach_server`` if callable is invoked with the ``uvicorn.Server`` once
     created (so the app can request a clean exit via ``server.should_exit``).
+    ``on_signal`` if callable is invoked on SIGINT/SIGTERM (e.g. orchestrator
+    ``request_shutdown``) so agent teardown / ``os._exit`` runs even when
+    webview blocks the main thread.
     """
+    import os
+
     config = uvicorn.Config(app, host=host, port=port, log_level="info", access_log=False)
     server = uvicorn.Server(config)
     if callable(attach_server):
         attach_server(server)
 
+    sig_hits = {"n": 0}
+
+    def _force_exit_soon(delay: float, code: int = 1) -> None:
+        def _run() -> None:
+            time.sleep(delay)
+            if not server.should_exit:
+                return
+            # Still here → something blocked after should_exit (webview / join / close).
+            print("[sensors-dcs] force process exit (shutdown stuck)", flush=True)
+            os._exit(code)
+
+        threading.Thread(target=_run, name="sensors-dcs-force-exit", daemon=True).start()
+
     def _handle_sig(*_args: object) -> None:
+        sig_hits["n"] += 1
         server.should_exit = True
+        print(
+            f"[sensors-dcs] signal received (#{sig_hits['n']}) — shutting down…",
+            flush=True,
+        )
+        if callable(on_signal):
+            try:
+                on_signal()
+            except Exception as e:  # noqa: BLE001
+                print(f"[sensors-dcs] on_signal failed: {e}", flush=True)
+        # First hit: give cleanup a couple seconds; second hit: exit ASAP.
+        _force_exit_soon(2.0 if sig_hits["n"] == 1 else 0.1, code=1)
 
     signal.signal(signal.SIGINT, _handle_sig)
     signal.signal(signal.SIGTERM, _handle_sig)
@@ -148,17 +179,37 @@ def serve_app_blocking(
         if not opened:
             webbrowser.open(url)
             try:
-                while thread.is_alive():
+                while thread.is_alive() and not server.should_exit:
                     time.sleep(0.5)
             except KeyboardInterrupt:
                 server.should_exit = True
+                if callable(on_signal):
+                    try:
+                        on_signal()
+                    except Exception:  # noqa: BLE001
+                        pass
+                _force_exit_soon(2.0, code=1)
         else:
+            # webview window closed — tear down backend too (not just uvicorn flag).
             server.should_exit = True
+            if callable(on_signal):
+                try:
+                    on_signal()
+                except Exception as e:  # noqa: BLE001
+                    print(f"[sensors-dcs] webview close on_signal failed: {e}", flush=True)
+            else:
+                _force_exit_soon(2.0, code=1)
     else:
         try:
-            while thread.is_alive():
+            while thread.is_alive() and not server.should_exit:
                 time.sleep(0.5)
         except KeyboardInterrupt:
             server.should_exit = True
+            if callable(on_signal):
+                try:
+                    on_signal()
+                except Exception:  # noqa: BLE001
+                    pass
+            _force_exit_soon(2.0, code=1)
 
     thread.join(timeout=3.0)

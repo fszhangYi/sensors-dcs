@@ -47,11 +47,12 @@ class GripperWriteAgent(BaseAgent):
             "result": None,
         }
 
-    def stop(self) -> None:
+    def stop(self, *, join_timeout: float = 2.0, close_sensor: bool = True) -> None:
         """Stop loop only — do not close shared gripper sensor (read agent owns lifecycle)."""
+        del close_sensor
         self._stop.set()
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=2.0)
+            self._thread.join(timeout=max(0.05, float(join_timeout)))
         self._thread = None
 
     def command(

@@ -174,13 +174,26 @@ class Orchestrator:
         agent = self._pi05_agent(agent_id)
         if agent is None:
             return {"ok": False, "configured": False, "error": "no pi05 agent in config"}
-        return agent.connect(host=host, port=port)
+        out = agent.connect(host=host, port=port)
+        if out.get("ok"):
+            print(
+                f"[sensors-dcs] pi05 connected → {out.get('host')}:{out.get('port')}",
+                flush=True,
+            )
+        else:
+            print(
+                f"[sensors-dcs] pi05 connect failed: {out.get('error')}",
+                flush=True,
+            )
+        return out
 
     def pi05_disconnect(self, *, agent_id: str | None = None) -> dict[str, Any]:
         agent = self._pi05_agent(agent_id)
         if agent is None:
             return {"ok": False, "configured": False, "error": "no pi05 agent in config"}
-        return agent.disconnect()
+        out = agent.disconnect()
+        print("[sensors-dcs] pi05 disconnected", flush=True)
+        return out
 
     def pi05_set_prompt(self, prompt: str, *, agent_id: str | None = None) -> dict[str, Any]:
         agent = self._pi05_agent(agent_id)
@@ -192,7 +205,19 @@ class Orchestrator:
         agent = self._pi05_agent(agent_id)
         if agent is None:
             return {"ok": False, "configured": False, "error": "no pi05 agent in config"}
-        return agent.step()
+        print("[sensors-dcs] pi05 step → gathering sensors / querying serve…", flush=True)
+        out = agent.step()
+        if out.get("ok"):
+            ns = out.get("next_state")
+            lat = out.get("latency_ms")
+            print(
+                f"[sensors-dcs] pi05 step ok  latency_ms={lat}  "
+                f"next_state={ns}  term={out.get('term_flag')} reject={out.get('reject_flag')}",
+                flush=True,
+            )
+        else:
+            print(f"[sensors-dcs] pi05 step failed: {out.get('error')}", flush=True)
+        return out
 
     def start(self) -> None:
         for agent in self.agents.values():
@@ -205,28 +230,59 @@ class Orchestrator:
         )
         self._console_thread.start()
 
-    def stop(self) -> None:
-        self.set_gello_arm_teleop(enabled=False)
-        self.set_gello_arm_sync(enabled=False)
-        self.cancel_arm_abs_ramp()
-        self.set_gripper_gello_sync(enabled=False)
+    def stop(self, *, for_shutdown: bool = False) -> None:
+        # Stop viz/console first so the terminal stops "pushing" immediately.
+        self._stop.set()
+        self._arm_teleop_stop.set()
+        self._arm_sync_stop.set()
+        self._sync_stop.set()
+        self._abs_ramp_stop.set()
+
         for a in self.agents.values():
             if isinstance(a, Pi05ClientAgent):
                 try:
                     a.disconnect()
                 except Exception:  # noqa: BLE001
                     pass
-        self._stop.set()
+
+        if for_shutdown:
+            # Do not join teleop/sync threads or take their locks — a stuck
+            # sensor.write holding a lock used to block forever here, so
+            # os._exit never ran and agents kept sampling.
+            if self.recorder.status().get("state") == "recording":
+                try:
+                    self.recorder.stop(timeout=1.0, async_flush=True)
+                except Exception:  # noqa: BLE001
+                    pass
+            join_t = 0.25
+            for agent in list(self.agents.values()):
+                try:
+                    agent.stop(join_timeout=join_t, close_sensor=False)
+                except TypeError:
+                    try:
+                        agent.stop()
+                    except Exception:  # noqa: BLE001
+                        pass
+                except Exception:  # noqa: BLE001
+                    pass
+            print("[sensors-dcs] agents signaled stop (shutdown)", flush=True)
+            return
+
+        self.set_gello_arm_teleop(enabled=False)
+        self.set_gello_arm_sync(enabled=False)
+        self.cancel_arm_abs_ramp()
+        self.set_gripper_gello_sync(enabled=False)
         # Finish any open episode before tearing down agents
         if self.recorder.status().get("state") == "recording":
             try:
                 self.recorder.stop(timeout=30.0)
             except Exception:  # noqa: BLE001
                 pass
+        join_t = 2.0
         if self._viz_thread and self._viz_thread.is_alive():
-            self._viz_thread.join(timeout=2.0)
+            self._viz_thread.join(timeout=join_t)
         if self._console_thread and self._console_thread.is_alive():
-            self._console_thread.join(timeout=2.0)
+            self._console_thread.join(timeout=join_t)
         # Stop writers before readers so shared sensors disarm then close once.
         from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
         from sensors_dcs.agents.gripper_write_agent import GripperWriteAgent
@@ -238,21 +294,61 @@ class Orchestrator:
         ]
         readers = [a for a in self.agents.values() if a not in writers]
         for agent in writers + readers:
-            agent.stop()
-        self.manager.close_all()
+            try:
+                agent.stop(join_timeout=join_t, close_sensor=True)
+            except TypeError:
+                # Older agents without kwargs.
+                agent.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            self.manager.close_all()
+        except Exception:  # noqa: BLE001
+            pass
 
     def request_shutdown(self) -> dict[str, Any]:
-        """UI/API safe exit: stop agents (close sensors) then signal uvicorn."""
-        try:
-            self.stop()
-        except Exception as e:  # noqa: BLE001
-            return {"ok": False, "error": str(e)}
+        """UI/API safe exit: stop publishing immediately, then force process exit.
+
+        Sensor ``close()`` / teleop locks can hang under bad HW/SDK; never block
+        the HTTP handler on that. ``os._exit`` is scheduled independently of
+        teardown so a stuck ``stop()`` cannot keep the process alive.
+        """
+        import os
+
+        if getattr(self, "_shutdown_requested", False):
+            return {"ok": True, "message": "shutdown already requested"}
+        self._shutdown_requested = True
+
+        # Kill console/viz output immediately (before any join/lock).
+        self._stop.set()
+        self._arm_teleop_stop.set()
+        self._arm_sync_stop.set()
+        self._sync_stop.set()
+        self._abs_ramp_stop.set()
+        print("[sensors-dcs] shutdown requested — stopping publishers…", flush=True)
+
         hook = getattr(self, "_uvicorn_exit", None)
         if callable(hook):
             try:
                 hook()
             except Exception as e:  # noqa: BLE001
-                return {"ok": False, "error": f"stopped agents but exit failed: {e}"}
+                print(f"[sensors-dcs] uvicorn exit signal failed: {e}", flush=True)
+
+        def _force_exit() -> None:
+            time.sleep(1.0)
+            print("[sensors-dcs] exiting", flush=True)
+            os._exit(0)
+
+        def _cleanup() -> None:
+            try:
+                self.stop(for_shutdown=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"[sensors-dcs] shutdown cleanup error: {e}", flush=True)
+            print("[sensors-dcs] cleanup done — exiting", flush=True)
+            os._exit(0)
+
+        threading.Thread(target=_force_exit, name="sensors-dcs-force-exit", daemon=True).start()
+        threading.Thread(target=_cleanup, name="sensors-dcs-shutdown", daemon=True).start()
         return {"ok": True, "message": "shutdown requested"}
 
     def _viz_payload(self) -> dict[str, Any]:
@@ -1699,9 +1795,8 @@ class Orchestrator:
         self._uvicorn_exit = lambda: setattr(self._server, "should_exit", True)
 
         def _handle_sig(*_args: object) -> None:
-            self._stop.set()
-            if self._server is not None:
-                self._server.should_exit = True
+            print("[sensors-dcs] signal — requesting shutdown…", flush=True)
+            self.request_shutdown()
 
         try:
             signal.signal(signal.SIGINT, _handle_sig)
@@ -1744,8 +1839,11 @@ class Orchestrator:
                 time.sleep(0.2)
         finally:
             if not self._stop.is_set():
-                self.stop()
+                try:
+                    self.stop(for_shutdown=True)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[sensors-dcs] final stop: {e}", flush=True)
             if self._server is not None:
                 self._server.should_exit = True
-            server_thread.join(timeout=5.0)
+            server_thread.join(timeout=2.0)
             print("[sensors-dcs] stopped", flush=True)
