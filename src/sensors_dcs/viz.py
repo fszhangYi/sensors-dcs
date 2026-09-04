@@ -3049,7 +3049,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (src.trim) ppTrim.value = src.trim;
       if (src.materialize != null) ppMaterialize.checked = !!src.materialize;
       if (src.allow_invalid != null) ppAllowInvalid.checked = !!src.allow_invalid;
-      if (src.episode) ppEpisode.value = src.episode;
+      // Do not restore episode path on boot — leave empty until the user picks one
+      // on the Postprocess tab (avoids home-page manifest modals from stale LS).
+      ppEpisode.value = '';
       window._ppSavedMaster = src.master || (defaults && defaults.master) || '';
       // Prefer launch-pwd camera-map from server; skip stale AppData/user-data seeds.
       let map = src.camera_map || '';
@@ -3096,6 +3098,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
     }
 
+    function isPostTabActive() {
+      return !!(tabPost && tabPost.classList.contains('active'));
+    }
+
+    function showManifestBadModal(detail) {
+      // Only surface on Postprocess — never on Home / Collect / Sensors.
+      if (!isPostTabActive()) return;
+      showAppModal(t('pp.manifest_bad_title'), detail || t('pp.manifest_bad'));
+    }
+
     async function inspectSelectedEpisode(path, opts) {
       const silent = opts && opts.silent;
       const want = (path || '').trim();
@@ -3114,7 +3126,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           fillMasterSelect(j.master_candidates || [], prefer);
           if (!silent) {
             const detail = [j.error, j.note].filter(Boolean).join('\\n');
-            showAppModal(t('pp.manifest_bad_title'), detail || t('pp.manifest_bad'));
+            showManifestBadModal(detail || t('pp.manifest_bad'));
           }
           return j;
         }
@@ -3126,7 +3138,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       } catch (e) {
         fillMasterSelect([]);
         if (!silent) {
-          showAppModal(t('pp.manifest_bad_title'), String(e));
+          showManifestBadModal(String(e));
         }
         return null;
       }
@@ -3229,18 +3241,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       loadPpForm(j);
       fillEpisodeSelect(j.episodes || []);
       fillMasterSelect([]);
-      const ep = (ppEpisode.value || '').trim();
-      if (ep) {
-        ppEpisodeSelect.value = ep;
-        if (ppEpisodeSelect.value !== ep) ppEpisodeSelect.value = '';
-        inspectSelectedEpisode(ep, { silent: true }).then((info) => {
-          if (info && !info.ok) {
-            // Restored path from localStorage — surface once if still bad.
-            const detail = [info.error, info.note].filter(Boolean).join('\\n');
-            showAppModal(t('pp.manifest_bad_title'), detail || t('pp.manifest_bad'));
-          }
-        });
-      }
+      // Episode path stays empty until the user selects one on Postprocess.
     }).catch(() => {
       loadPpForm({});
       fillMasterSelect([]);
