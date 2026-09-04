@@ -793,8 +793,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
         </section>
 
         <section class="pp-card">
-          <h2 data-i18n="pp.step1">1 · export-timeline</h2>
-          <p class="pp-hint" data-i18n="pp.step1_hint">sensors-dcs export-timeline -e … --align asof --master cam-left --master-hz 5</p>
+          <h2 data-i18n="pp.align_title">对齐参数（Step 1 → hik）</h2>
+          <p class="pp-hint" data-i18n="pp.align_hint">master-hz 作用于 export-timeline 下采样；一键三步 / 快速采集转 hik_dataset 时都读这里，不是写死 5。</p>
           <div class="pp-row">
             <label for="ppAlign">align</label>
             <select id="ppAlign">
@@ -808,6 +808,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <label for="ppMasterHz">master-hz</label>
             <input type="number" id="ppMasterHz" value="5" step="0.1" min="0.1" />
           </div>
+        </section>
+
+        <section class="pp-card">
+          <h2 data-i18n="pp.step1">1 · export-timeline</h2>
+          <p class="pp-hint" data-i18n="pp.step1_hint">sensors-dcs export-timeline -e … --align / --master / --master-hz（见上方对齐参数）</p>
           <div class="pp-actions">
             <button type="button" id="btnPpExport" data-i18n="pp.run1">运行 Step 1</button>
           </div>
@@ -839,7 +844,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
         <section class="pp-card">
           <h2 data-i18n="pp.step3">3 · export-hik-dataset</h2>
-          <p class="pp-hint" data-i18n="pp.step3_hint">--camera-map …\\hik_camera_map.yaml</p>
+          <p class="pp-hint" data-i18n="pp.step3_hint">--camera-map …\\hik_camera_map.yaml；若尚未对齐，请先跑 Step1（master-hz 见上方）或一键三步</p>
           <div class="pp-row">
             <label for="ppCameraMap">camera-map</label>
             <input type="text" class="wide" id="ppCameraMap" data-i18n-placeholder="pp.camera_map_ph" placeholder="路径到 hik_camera_map.yaml" />
