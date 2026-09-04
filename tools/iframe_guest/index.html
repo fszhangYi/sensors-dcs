@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>iframe guest probe · 6008</title>
+  <style>
+    :root {
+      --bg: #0b1018;
+      --text: #e7ecf3;
+      --muted: #8b9bb4;
+      --accent: #3dd6c6;
+      --border: rgba(58, 77, 102, 0.75);
+      --panel: rgba(18, 26, 38, 0.92);
+    }
+    html[data-theme="light"] {
+      --bg: #c5d0df;
+      --text: #152033;
+      --muted: #3d4f66;
+      --accent: #0f766e;
+      --border: rgba(45, 62, 86, 0.22);
+      --panel: rgba(196, 208, 222, 0.94);
+    }
+    body {
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px;
+      box-sizing: border-box;
+    }
+    .card {
+      max-width: 36rem;
+      padding: 16px 18px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--panel);
+    }
+    h1 { margin: 0 0 8px; font-size: 1.15rem; }
+    .muted { color: var(--muted); font-size: 0.85rem; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin: 10px 0;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(248, 113, 113, 0.45);
+      color: #fecaca;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .badge[hidden] { display: none !important; }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #f87171;
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.35; }
+    }
+    code { color: var(--accent); }
+    #settingsBox[hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>iframe guest probe</h1>
+    <p class="muted">Minimal sensors-view-compatible guest on port <code>6008</code>.</p>
+    <div class="badge" id="iframeBadge" hidden>
+      <span class="dot" aria-hidden="true"></span>
+      <span>iframe</span>
+    </div>
+    <p>Framed: <strong id="framedVal">—</strong></p>
+    <p>Locale: <strong id="localeVal">—</strong></p>
+    <p>Theme pref: <strong id="themeVal">—</strong></p>
+    <div id="settingsBox">
+      <p class="muted">Standalone settings (hidden when framed):</p>
+      <button type="button" id="btnZh">中文</button>
+      <button type="button" id="btnEn">EN</button>
+      <button type="button" id="btnDark">Dark</button>
+      <button type="button" id="btnLight">Light</button>
+    </div>
+  </div>
+  <script>
+    const SOURCE = 'sensors-view';
+    const HOST_SOURCE = 'sensors-view-host';
+    const VERSION = 1;
+    let locale = 'zh';
+    let theme = 'dark';
+
+    function isFramed() {
+      try { return window.self !== window.top; }
+      catch (e) { return true; }
+    }
+
+    function render() {
+      const framed = isFramed();
+      document.getElementById('framedVal').textContent = framed ? 'yes' : 'no';
+      document.getElementById('localeVal').textContent = locale;
+      document.getElementById('themeVal').textContent = theme;
+      document.getElementById('iframeBadge').hidden = !framed;
+      document.getElementById('settingsBox').hidden = framed;
+      const resolved = theme === 'system'
+        ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+        : theme;
+      document.documentElement.setAttribute('data-theme', resolved);
+      document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en';
+    }
+
+    function applyPrefs(prefs) {
+      if (!prefs) return;
+      if (prefs.locale === 'zh' || prefs.locale === 'en') locale = prefs.locale;
+      if (prefs.theme === 'dark' || prefs.theme === 'light' || prefs.theme === 'system') theme = prefs.theme;
+      render();
+    }
+
+    function qsPrefs() {
+      const out = {};
+      try {
+        const q = new URLSearchParams(location.search);
+        const loc = (q.get('locale') || q.get('lang') || '').toLowerCase();
+        if (loc === 'zh' || loc === 'en') out.locale = loc;
+        const th = (q.get('theme') || '').toLowerCase();
+        if (th === 'dark' || th === 'light' || th === 'system') out.theme = th;
+      } catch (e) {}
+      return out;
+    }
+
+    function postToHost(payload) {
+      if (!isFramed()) return;
+      try {
+        parent.postMessage({ source: SOURCE, version: VERSION, ...payload }, '*');
+      } catch (e) {}
+    }
+
+    window.addEventListener('message', (event) => {
+      if (!isFramed()) return;
+      const data = event.data;
+      if (!data || data.source !== HOST_SOURCE) return;
+      if (data.type === 'embed-prefs' || data.type === 'appearance') {
+        applyPrefs({ locale: data.locale, theme: data.theme });
+      } else if (data.type === 'embed-locale') {
+        applyPrefs({ locale: data.locale });
+      } else if (data.type === 'embed-theme') {
+        applyPrefs({ theme: data.theme });
+      }
+    });
+
+    document.getElementById('btnZh').onclick = () => applyPrefs({ locale: 'zh' });
+    document.getElementById('btnEn').onclick = () => applyPrefs({ locale: 'en' });
+    document.getElementById('btnDark').onclick = () => applyPrefs({ theme: 'dark' });
+    document.getElementById('btnLight').onclick = () => applyPrefs({ theme: 'light' });
+
+    applyPrefs(qsPrefs());
+    render();
+    if (isFramed()) {
+      postToHost({ type: 'embed-ready' });
+      postToHost({ type: 'embed-request-prefs' });
+    }
+  </script>
+</body>
+</html>

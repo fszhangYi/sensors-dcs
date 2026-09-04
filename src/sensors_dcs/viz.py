@@ -100,7 +100,19 @@ PREVIEW_HTML = """<!DOCTYPE html>
   <script>
   (function () {
     try {
+      var framed = false;
+      try { framed = window.self !== window.top; } catch (e) { framed = true; }
       var theme = localStorage.getItem('sensors-dcs.theme') || 'dark';
+      var localeHint = null;
+      if (framed) {
+        try {
+          var q = new URLSearchParams(location.search);
+          var loc = (q.get('locale') || q.get('lang') || '').toLowerCase();
+          if (loc === 'zh' || loc === 'en') localeHint = loc;
+          var th = (q.get('theme') || '').toLowerCase();
+          if (th === 'system' || th === 'dark' || th === 'light') theme = th;
+        } catch (e) {}
+      }
       if (theme !== 'system' && theme !== 'dark' && theme !== 'light') theme = 'dark';
       var compact = localStorage.getItem('sensors-dcs.compact');
       var density = localStorage.getItem('sensors-dcs.density') || 'comfortable';
@@ -116,6 +128,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       root.setAttribute('data-compact', (compact === '1' || compact === 'true') ? '1' : '0');
       root.setAttribute('data-density', density);
       root.style.colorScheme = resolved;
+      if (localeHint) root.lang = localeHint === 'zh' ? 'zh-CN' : 'en';
+      if (framed) root.setAttribute('data-embed', '1');
     } catch (e) {}
   })();
   </script>
@@ -265,6 +279,33 @@ PREVIEW_HTML = """<!DOCTYPE html>
       align-items: center;
       gap: 0.45rem;
       flex-shrink: 0;
+    }
+    .iframe-embed-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(248, 113, 113, 0.45);
+      color: #fecaca;
+      background: rgba(80, 20, 28, 0.45);
+      font-size: 0.72rem;
+      font-weight: 650;
+    }
+    .iframe-embed-badge[hidden] { display: none !important; }
+    .iframe-embed-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #f87171;
+      animation: iframe-pulse 1.2s ease-in-out infinite;
+    }
+    @keyframes iframe-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.35; }
+    }
+    html[data-embed='1'] #btnSettings,
+    html[data-embed='1'] #btnExit {
+      display: none !important;
     }
     html[lang='en'] header p { max-width: 42rem; }
     main {
@@ -992,6 +1033,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
       </div>
     </div>
     <div class="header-actions">
+      <div class="iframe-embed-badge" id="iframeEmbedBadge" hidden title="iframe">
+        <span class="iframe-embed-dot" aria-hidden="true"></span>
+        <span data-i18n="embed.iframe">iframe</span>
+      </div>
       <button type="button" class="settings-gear-btn" id="btnSettings" aria-haspopup="dialog" data-i18n-attr="aria-label" data-i18n="common.settings" aria-label="设置">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" stroke-width="1.8"/>
@@ -1469,10 +1514,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
       });
       document.title = t('meta.title');
     }
-    function setLocale(loc) {
+    function setLocale(loc, opts) {
       if (loc !== 'zh' && loc !== 'en') return;
+      const persist = !opts || opts.persist !== false;
       currentLocale = loc;
-      try { localStorage.setItem(LS_LOCALE, loc); } catch (e) {}
+      if (persist) {
+        try { localStorage.setItem(LS_LOCALE, loc); } catch (e) {}
+      }
       document.documentElement.lang = loc === 'zh' ? 'zh-CN' : 'en';
       document.querySelectorAll('.settings-seg-btn[data-locale]').forEach((btn) => {
         btn.classList.toggle('active', btn.getAttribute('data-locale') === loc);
@@ -1735,7 +1783,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     let collectOk = true;
 
     const SENSORS_EMBED_URL_KEY = 'sensors-dcs.sensorsEmbedUrl';
-    const DEFAULT_SENSORS_EMBED_URL = 'https://uu658526-m86b-7fdc269f.weste.seetacloud.com:8443/';
+    const DEFAULT_SENSORS_EMBED_URL = 'http://127.0.0.1:6008/';
     let sensorsEmbed = {
       url: DEFAULT_SENSORS_EMBED_URL,
       reachability: 'unknown',
@@ -2174,9 +2222,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         tog.setAttribute('aria-pressed', appearancePrefs.compact ? 'true' : 'false');
       }
     }
-    function setAppearancePrefs(partial) {
+    function setAppearancePrefs(partial, opts) {
+      const persist = !opts || opts.persist !== false;
       appearancePrefs = Object.assign({}, appearancePrefs, partial || {});
-      persistAppearance(appearancePrefs);
+      if (persist) persistAppearance(appearancePrefs);
       applyAppearance(appearancePrefs);
       syncAppearanceControls();
       bindAppearanceMedia();
@@ -2201,6 +2250,58 @@ PREVIEW_HTML = """<!DOCTYPE html>
     applyAppearance(appearancePrefs);
     syncAppearanceControls();
     bindAppearanceMedia();
+
+    (function bootGuestEmbed() {
+      function isFramed() {
+        try { return window.self !== window.top; }
+        catch (e) { return true; }
+      }
+      const badge = document.getElementById('iframeEmbedBadge');
+      const framed = isFramed();
+      if (badge) badge.hidden = !framed;
+      if (!framed) {
+        document.documentElement.removeAttribute('data-embed');
+        return;
+      }
+      document.documentElement.setAttribute('data-embed', '1');
+      const closeSettingsFn = typeof closeSettings === 'function' ? closeSettings : null;
+      if (closeSettingsFn) closeSettingsFn();
+      function qsPrefs() {
+        const out = {};
+        try {
+          const q = new URLSearchParams(location.search);
+          const loc = (q.get('locale') || q.get('lang') || '').toLowerCase();
+          if (loc === 'zh' || loc === 'en') out.locale = loc;
+          const th = (q.get('theme') || '').toLowerCase();
+          if (th === 'dark' || th === 'light' || th === 'system') out.theme = th;
+        } catch (e) {}
+        return out;
+      }
+      function applyHostPrefs(prefs) {
+        if (!prefs) return;
+        if (prefs.locale === 'zh' || prefs.locale === 'en') setLocale(prefs.locale, { persist: false });
+        if (prefs.theme === 'dark' || prefs.theme === 'light' || prefs.theme === 'system') {
+          setAppearancePrefs({ theme: prefs.theme }, { persist: false });
+        }
+      }
+      applyHostPrefs(qsPrefs());
+      window.addEventListener('message', (event) => {
+        const data = event.data;
+        if (!data || typeof data !== 'object') return;
+        if (data.source !== 'sensors-view-host') return;
+        if (data.type === 'embed-prefs' || data.type === 'appearance') {
+          applyHostPrefs({ locale: data.locale, theme: data.theme });
+        } else if (data.type === 'embed-locale') {
+          applyHostPrefs({ locale: data.locale });
+        } else if (data.type === 'embed-theme') {
+          applyHostPrefs({ theme: data.theme });
+        }
+      });
+      try {
+        parent.postMessage({ source: 'sensors-view', version: 1, type: 'embed-ready' }, '*');
+        parent.postMessage({ source: 'sensors-view', version: 1, type: 'embed-request-prefs' }, '*');
+      } catch (e) {}
+    })();
 
     function roleLabel(role) {
       if (role === 'admin') return t('settings.role_admin');
@@ -2658,6 +2759,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
 
     async function openSettings() {
+      if (document.documentElement.getAttribute('data-embed') === '1') return;
       if (!settingsModal) return;
       switchSettingsTab('appearance');
       settingsBodyOverflow = document.body.style.overflow;
