@@ -766,6 +766,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     #infPi05Host { width: 9rem; }
     #infPi05Prompt { flex: 1; min-width: 12rem; }
+    #infArmJoints {
+      flex: 1;
+      min-width: 14rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.8rem;
+    }
     #infPi05Status.st-live { color: var(--ok, #3dcc91); }
     #infPi05Status.st-offline { color: var(--muted); }
     #infPi05Status.st-error { color: var(--danger, #e07070); }
@@ -1288,7 +1294,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     </div>
 
     <div class="tab-panel" id="tab-infer" role="tabpanel">
-    <p class="inf-banner" data-i18n="infer.banner">推理页（与采集共用录制后端；首版不控臂）。</p>
+    <p class="inf-banner" data-i18n="infer.banner">推理页与采集共用录制；可手动下发 joints（询问一步回填 next_state）。</p>
     <div class="inf-pi05-panel" id="infPi05Panel">
       <div class="inf-pi05-row">
         <span data-i18n="infer.status_label">Serve：</span>
@@ -1300,6 +1306,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
         <button type="button" class="primary" id="infPi05Connect" data-i18n="infer.connect">连接</button>
         <button type="button" id="infPi05Disconnect" data-i18n="infer.disconnect" disabled>断开</button>
         <button type="button" class="primary" id="infPi05Step" data-i18n="infer.step" disabled>询问一步</button>
+        <label for="infArmJoints" class="arm-abs-label" data-i18n="arm.abs_label" data-i18n-title="infer.joints_tip" title="询问一步后回填 next_state；下发前 6 个数为 joints_rad">joints</label>
+        <input type="text" id="infArmJoints" class="inf-arm-joints" data-i18n-placeholder="arm.abs_ph" placeholder="0.00,0.00,0.00,0.00,0.00,0.00" autocomplete="off" spellcheck="false" />
+        <button type="button" id="infArmSend" data-i18n="arm.abs_send">下发</button>
+        <label class="arm-abs-dur">
+          <span data-i18n="arm.abs_dur">到达</span>
+          <input type="range" id="infArmDur" min="1" max="30" step="1" value="10" />
+          <span id="infArmDurVal">10s</span>
+        </label>
+      </div>
+      <div class="inf-pi05-row">
+        <span class="hint" id="infArmProg" data-i18n="arm.abs_idle">绝对下发：空闲</span>
       </div>
       <div class="inf-pi05-row">
         <label for="infPi05Prompt" data-i18n="infer.prompt">Prompt</label>
@@ -2049,6 +2066,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const infPi05Disconnect = document.getElementById('infPi05Disconnect');
     const infPi05Step = document.getElementById('infPi05Step');
     const infPi05PromptApply = document.getElementById('infPi05PromptApply');
+    const infArmJoints = document.getElementById('infArmJoints');
+    const infArmSend = document.getElementById('infArmSend');
+    const infArmDur = document.getElementById('infArmDur');
+    const infArmDurVal = document.getElementById('infArmDurVal');
+    const infArmProg = document.getElementById('infArmProg');
     const LS_PI05 = 'dcs.inf.pi05';
     let pi05StepBusy = false;
     function loadPi05Form() {
@@ -2094,6 +2116,26 @@ PREVIEW_HTML = """<!DOCTYPE html>
       infPi05Status.classList.remove('st-live', 'st-offline', 'st-error', 'st-connecting');
       infPi05Status.classList.add(kind || 'st-offline');
       infPi05Status.textContent = text;
+    }
+    function fillInfArmJointsFromNextState(nextState) {
+      if (!infArmJoints || !Array.isArray(nextState) || nextState.length < 1) return false;
+      const vals = [];
+      for (let i = 0; i < nextState.length; i++) {
+        const v = Number(nextState[i]);
+        if (!Number.isFinite(v)) return false;
+        vals.push(v.toFixed(4));
+      }
+      infArmJoints.value = vals.join(',');
+      return true;
+    }
+    function updateInfArmDurLabel() {
+      if (infArmDurVal && infArmDur) {
+        infArmDurVal.textContent = Number(infArmDur.value).toFixed(0) + 's';
+      }
+    }
+    if (infArmDur) {
+      infArmDur.addEventListener('input', updateInfArmDurLabel);
+      updateInfArmDurLabel();
     }
     function applyPi05PanelFromPayload(p) {
       if (!infPi05Hint) return;
@@ -2151,6 +2193,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (infPi05Hint && r.error && !r.ok) infPi05Hint.textContent = r.error;
       return r;
     }
+    async function postInfArm(body) {
+      const agentId = window.__armWriteAgentId || null;
+      const r = await fetch('/api/arm/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(agentId ? { agent_id: agentId, ...body } : body),
+      }).then((x) => x.json());
+      return r;
+    }
     loadPi05Form();
     fetch('/api/pi05/status').then((r) => r.json()).then(applyPi05PanelFromPayload).catch(() => {});
     if (infPi05Connect) {
@@ -2178,7 +2229,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
         infPi05Step.disabled = true;
         if (infPi05Hint) infPi05Hint.textContent = t('infer.hint_stepping');
         try {
-          await postPi05('/api/pi05/step', {});
+          const r = await postPi05('/api/pi05/step', {});
+          if (r && r.ok && fillInfArmJointsFromNextState(r.next_state)) {
+            if (infPi05Hint) infPi05Hint.textContent = t('infer.joints_filled');
+            if (infArmProg) infArmProg.textContent = t('infer.joints_filled');
+          }
         } finally {
           pi05StepBusy = false;
           const st = await fetch('/api/pi05/status').then((x) => x.json()).catch(() => ({}));
@@ -2190,6 +2245,56 @@ PREVIEW_HTML = """<!DOCTYPE html>
       infPi05PromptApply.addEventListener('click', () => postPi05('/api/pi05/prompt', {
         prompt: (infPi05Prompt && infPi05Prompt.value) || '',
       }));
+    }
+    if (infArmSend) {
+      infArmSend.addEventListener('click', async () => {
+        const absRamp = window.__armAbsRamp || {};
+        if (absRamp.enabled) {
+          try {
+            const r = await postInfArm({ cancel_abs_ramp: true });
+            if (infArmProg) {
+              infArmProg.textContent = r.ok
+                ? t('arm.abs_cancelled')
+                : t('arm.abs_fail', { error: r.error || JSON.stringify(r) });
+            }
+          } catch (e) {
+            if (infArmProg) infArmProg.textContent = t('arm.abs_err', { error: e });
+          }
+          return;
+        }
+        const raw = ((infArmJoints && infArmJoints.value) || '').trim();
+        const parts = raw.split(/[,\s;]+/).filter(Boolean);
+        if (parts.length < 6) {
+          if (infArmProg) infArmProg.textContent = t('arm.abs_need6');
+          return;
+        }
+        const joints = parts.slice(0, 6).map((x) => Number(x));
+        if (joints.some((v) => !Number.isFinite(v))) {
+          if (infArmProg) infArmProg.textContent = t('arm.abs_bad');
+          return;
+        }
+        const ref = window.__armReadJoints;
+        if (!Array.isArray(ref) || ref.length < 6) {
+          if (infArmProg) infArmProg.textContent = t('arm.need_read');
+          return;
+        }
+        if (!window.__armWriteAgentId) {
+          if (infArmProg) infArmProg.textContent = t('infer.arm_need_writer');
+          return;
+        }
+        const duration_s = infArmDur ? Number(infArmDur.value) : 10;
+        try {
+          const r = await postInfArm({ joints_rad: joints, duration_s: duration_s });
+          if (infArmProg) {
+            infArmProg.textContent = r.ok
+              ? t('arm.abs_ok', { dur: Number(duration_s).toFixed(0) })
+              : t('arm.abs_fail', { error: r.error || JSON.stringify(r) });
+          }
+          if (r.ok) window.__armAbsRamp = r;
+        } catch (e) {
+          if (infArmProg) infArmProg.textContent = t('arm.abs_err', { error: e });
+        }
+      });
     }
 
     // ---- tabs + postprocess ----
@@ -4105,6 +4210,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       card.querySelector('.k-seq').textContent = String(frame.seq);
       card.querySelector('.k-hz').textContent = hzText;
       card.querySelector('.k-dry').textContent = String(!!(frame.payload && frame.payload.dry_run));
+      window.__armWriteAgentId = frame.agent_id;
       const p = frame.payload || {};
       const n = Math.max(1, Number(p.num_joints) || 6);
       // Prefer live arm-read joints for display (safety: show measured pose).
@@ -4617,6 +4723,25 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
       if (msg.arm_abs_ramp) {
         window.__armAbsRamp = msg.arm_abs_ramp;
+        const sendBtn = document.getElementById('infArmSend');
+        const prog = document.getElementById('infArmProg');
+        const absRamp = msg.arm_abs_ramp;
+        if (sendBtn) {
+          sendBtn.textContent = absRamp.enabled ? t('arm.abs_cancel') : t('arm.abs_send');
+        }
+        if (prog && absRamp.enabled) {
+          prog.textContent = t('arm.abs_ramping', {
+            i: absRamp.ramp_index != null ? absRamp.ramp_index : 0,
+            n: absRamp.ramp_n != null ? absRamp.ramp_n : 0,
+            left: absRamp.duration_s != null
+              ? Math.max(0, Number(absRamp.duration_s) * (1 - (Number(absRamp.ramp_index || 0) / Math.max(1, Number(absRamp.ramp_n || 1))))).toFixed(0)
+              : '—',
+            dur: absRamp.duration_s != null ? Number(absRamp.duration_s).toFixed(0) : '—',
+          });
+        } else if (prog && absRamp.phase === 'idle' && absRamp.last_message) {
+          /* keep last send hint unless idle after completion */
+        }
+      }
       }
       frames.forEach((frame) => {
         try {
