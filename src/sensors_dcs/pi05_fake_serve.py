@@ -55,7 +55,13 @@ def _ts() -> str:
     return datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
 
-def handle_client(conn: socket.socket, addr: tuple, *, jitter: float) -> None:
+def handle_client(
+    conn: socket.socket,
+    addr: tuple,
+    *,
+    jitter: float,
+    term_every: int,
+) -> None:
     global _active_clients, _total_steps
     with _clients_lock:
         _active_clients += 1
@@ -121,21 +127,12 @@ def handle_client(conn: socket.socket, addr: tuple, *, jitter: float) -> None:
 
             next_state = [
                 robot_state[i] + random.uniform(-jitter, jitter) for i in range(6)
-            ] + [max(0.0, min(1.0, robot_state[6] + random.uniform(-0.05, 0.05)))]
-            if random.random() < 0.25:
-                next_state = [
-                    random.uniform(-0.5, 0.5),
-                    random.uniform(-0.5, 0.5),
-                    random.uniform(0.1, 0.6),
-                    random.uniform(-1.0, 1.0),
-                    random.uniform(-1.0, 1.0),
-                    random.uniform(-1.0, 1.0),
-                    random.random(),
-                ]
+            ] + [max(0.0, min(1.0, robot_state[6] + random.uniform(-jitter, jitter)))]
 
-            term_flag = 1.0 if random.random() < 0.02 else 0.0
-            reject_flag = 1 if random.random() < 0.02 else 0
-            msg = f"fake-ok step={step}"
+            # ~every N steps: terminate so Infer LOOP can exit cleanly.
+            term_flag = 1.0 if (term_every > 0 and step % term_every == 0) else 0.0
+            reject_flag = 0
+            msg = f"fake-ok step={step} term={int(term_flag)}"
             msg_b = msg.encode("utf-8")
 
             conn.sendall(struct.pack(">7f", *[float(x) for x in next_state]))
@@ -176,6 +173,7 @@ def serve_forever(
     port: int,
     *,
     jitter: float,
+    term_every: int = 20,
     heartbeat_s: float = 0.0,
 ) -> None:
     global _total_steps
@@ -185,7 +183,7 @@ def serve_forever(
     srv.listen(8)
     print(
         f"[pi05-fake-serve] LISTEN  {host}:{port}  "
-        f"protocol=pi05_jax_sft.serve  jitter={jitter}  "
+        f"protocol=pi05_jax_sft.serve  jitter={jitter}  term_every={term_every}  "
         f"status=READY (waiting for Infer Connect)",
         flush=True,
     )
@@ -238,7 +236,7 @@ def serve_forever(
             threading.Thread(
                 target=handle_client,
                 args=(conn, addr),
-                kwargs={"jitter": jitter},
+                kwargs={"jitter": jitter, "term_every": term_every},
                 name=f"pi05-fake-{addr[0]}-{addr[1]}",
                 daemon=True,
             ).start()
@@ -259,8 +257,14 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument(
         "--jitter",
         type=float,
-        default=0.02,
-        help="Uniform xyz/rpy jitter around received robot_state (meters/rad).",
+        default=0.005,
+        help="Small per-step delta around received robot_state (first 6 + gripper).",
+    )
+    p.add_argument(
+        "--term-every",
+        type=int,
+        default=20,
+        help="Set term_flag=1 every N steps (0=never). Default 20.",
     )
     p.add_argument("--seed", type=int, default=None, help="Optional RNG seed.")
     p.add_argument(
@@ -276,6 +280,7 @@ def main(argv: list[str] | None = None) -> None:
         args.host,
         args.port,
         jitter=max(0.0, float(args.jitter)),
+        term_every=max(0, int(args.term_every)),
         heartbeat_s=max(0.0, float(args.heartbeat)),
     )
 

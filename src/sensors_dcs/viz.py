@@ -2550,6 +2550,19 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const st = await fetch('/api/pi05/status').then((x) => x.json()).catch(() => ({}));
       applyPi05PanelFromPayload(st);
     }
+    function isArmJointLimitError(err) {
+      const s = String(err || '');
+      return /outside soft limits|soft\s*limits?|关节.{0,8}超限/i.test(s);
+    }
+    async function stopPi05LoopForError(n, error) {
+      const err = String(error || 'error');
+      if (isArmJointLimitError(err)) {
+        showAppModal(t('infer.loop_limit_title'), err);
+        await stopPi05Loop(t('infer.hint_loop_limit', { n: n }) + ' · ' + err);
+        return;
+      }
+      await stopPi05Loop(t('infer.hint_loop_error', { error: err }));
+    }
     async function runPi05Loop() {
       const gen = pi05LoopGen;
       pi05LoopStepN = 0;
@@ -2568,9 +2581,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
           }
           if (!pi05LoopRunning || gen !== pi05LoopGen) break;
           if (!stepRes || !stepRes.ok) {
-            await stopPi05Loop(t('infer.hint_loop_error', {
-              error: (stepRes && (stepRes.error || stepRes.message)) || 'step failed',
-            }));
+            await stopPi05LoopForError(
+              n,
+              (stepRes && (stepRes.error || stepRes.message)) || 'step failed',
+            );
             return;
           }
           const term = (stepRes.term_flag != null) ? Number(stepRes.term_flag) : 0;
@@ -2588,14 +2602,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
           try {
             sendRes = await sendInfArmJointsOnce();
           } catch (e) {
-            await stopPi05Loop(t('infer.hint_loop_error', { error: String(e) }));
+            await stopPi05LoopForError(n, String(e));
             return;
           }
           if (!pi05LoopRunning || gen !== pi05LoopGen) break;
           if (!sendRes || !sendRes.ok) {
-            await stopPi05Loop(t('infer.hint_loop_error', {
-              error: (sendRes && sendRes.error) || 'send failed',
-            }));
+            await stopPi05LoopForError(n, (sendRes && sendRes.error) || 'send failed');
             return;
           }
           if (infPi05Hint) infPi05Hint.textContent = t('infer.hint_loop_wait', { n: n });
@@ -2603,12 +2615,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
           if (!pi05LoopRunning || gen !== pi05LoopGen) break;
           if (waitRes.stopped) break;
           if (!waitRes.ok) {
-            await stopPi05Loop(t('infer.hint_loop_error', { error: waitRes.error || 'wait failed' }));
+            await stopPi05LoopForError(n, waitRes.error || 'wait failed');
             return;
           }
         }
       } catch (e) {
-        await stopPi05Loop(t('infer.hint_loop_error', { error: String(e) }));
+        await stopPi05LoopForError(pi05LoopStepN || 0, String(e));
         return;
       }
       if (pi05LoopRunning && gen === pi05LoopGen) {
