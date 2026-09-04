@@ -121,12 +121,12 @@ def load_dcs_config(path: str | Path) -> DcsConfig:
             f"Not a DCS launch YAML (missing sensors_config): {root}\n"
             "  This looks like a hik-sensors device list (sensors_*.yaml).\n"
             "  Use a DCS file instead, e.g.:\n"
-            "    %APPDATA%\\sensors-dcs\\configs\\gello_only.yaml\n"
+            "    %APPDATA%\\sensors-dcs\\configs\\default.yaml\n"
             "    %APPDATA%\\sensors-dcs\\configs\\gello_gripper.yaml\n"
             "    %APPDATA%\\sensors-dcs\\configs\\camera-only.yaml\n"
             "    %APPDATA%\\sensors-dcs\\configs\\camera-multi.yaml\n"
             "    %APPDATA%\\sensors-dcs\\configs\\robot_only.yaml\n"
-            "  Or: sensors-dcs.exe -c <path-to-gello_only.yaml>"
+            "  Or: sensors-dcs.exe -c <path-to-default.yaml>"
         )
 
     try:

@@ -440,7 +440,7 @@ def build_windows(*, skip_frontend: bool = True, delta: bool = True) -> Path:
                 "3. No need to install Python / Node",
                 "4. User data: %APPDATA%\\sensors-dcs\\",
                 "5. Config after first run: %APPDATA%\\sensors-dcs\\configs\\",
-                "   gello_only / gello_gripper / camera-only / camera-multi / full_cell",
+                "   default / gello_only / gello_gripper / camera-only / camera-multi / full_cell",
                 "   sensors_gello*.yaml → endpoint: \"COM3\" (or your COM port)",
                 "   sensors_camera.yaml  → serial already 336222075436",
                 "   sensors_cameras.yaml / sensors_full_cell.yaml",

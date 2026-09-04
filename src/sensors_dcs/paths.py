@@ -98,19 +98,20 @@ def default_dcs_config() -> Path:
             return active
     except Exception:  # noqa: BLE001
         pass
-    data = user_data_dir() / "configs" / "gello_gripper.yaml"
+    data = user_data_dir() / "configs" / "default.yaml"
     if data.is_file():
         return data
-    # fallback older single-agent config
-    legacy = user_data_dir() / "configs" / "gello_only.yaml"
-    if legacy.is_file():
-        return legacy
-    bundled = project_root() / "configs" / "gello_gripper.yaml"
+    # legacy fallbacks (older seeded names)
+    for legacy_name in ("gello_gripper.yaml", "gello_only.yaml"):
+        legacy = user_data_dir() / "configs" / legacy_name
+        if legacy.is_file():
+            return legacy
+    bundled = project_root() / "configs" / "default.yaml"
     if bundled.is_file():
         return bundled
     # Dev layout: repo configs next to src/
     if not is_frozen():
-        repo = Path(__file__).resolve().parents[2] / "configs" / "gello_gripper.yaml"
+        repo = Path(__file__).resolve().parents[2] / "configs" / "default.yaml"
         if repo.is_file():
             return repo
     return data
@@ -139,6 +140,8 @@ def ensure_runtime_env(*, desktop: bool = False) -> Path:
     root = project_root()
     # Seed DCS + sensors YAML into user data (editable after first run)
     for name in (
+        "default.yaml",
+        "sensors_default.yaml",
         "gello_only.yaml",
         "sensors_gello.yaml",
         "gello_gripper.yaml",
@@ -171,6 +174,7 @@ def ensure_runtime_env(*, desktop: bool = False) -> Path:
 
     # Rewrite seeded DCS YAMLs to point at sibling sensors_*.yaml in user data
     for dcs_name, sensors_name in (
+        ("default.yaml", "sensors_default.yaml"),
         ("gello_only.yaml", "sensors_gello.yaml"),
         ("gello_gripper.yaml", "sensors_gello_gripper.yaml"),
         ("camera-only.yaml", "sensors_camera.yaml"),

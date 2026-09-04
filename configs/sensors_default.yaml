@@ -1,0 +1,106 @@
+# hik-sensors bundle — gello + DH gripper + multi RealSense + Elite arm
+# 默认启动设备清单（与 configs/default.yaml 配对）
+version: 1
+site: dcs-full-cell
+# Windows 真机：改 false；无硬件演示：true
+dry_run: true
+
+defaults:
+  gello:
+    baudrate: 57600
+    max_delta_rad: 0.8
+    joint_ids: [1, 2, 3, 4, 5, 6, 7]
+    # Affine q=(q_raw-offsets)*signs — see docs/gello-joint-affine.md
+    joint_offsets:
+      - 1.5707963267948966
+      - 6.283185307179586
+      - 6.283185307179586
+      - 6.283185307179586
+      - 4.71238898038469
+      - 3.141592653589793
+      - 1.78
+    joint_signs: [1, 1, -1, 1, 1, 1, -1]
+  arm_write:
+    num_joints: 6
+    robot_tcp_port: 54321
+    monitor_wait_s: 10
+    max_delta_deg: 15.0
+    enforce_soft_limits: true
+    tt_t: 2
+    tt_response_enable: 0
+  gripper:
+    baudrate: 115200
+    slave_id: 1
+    default_force: 100
+    default_speed: 100
+    init_on_open: false
+  realsense:
+    width: 640
+    height: 480
+    fps: 30
+    exposure: 200
+    gain: 64
+    enable_depth: true
+    align_to_color: true
+    timeout_ms: 5000
+
+devices:
+  - id: gello-leader
+    kind: gello
+    name: "Gello · Leader"
+    endpoint: "COM10"
+    params:
+      port_substr: ""
+      gripper_config: null
+      joint_offsets:
+        - 1.5707963267948966
+        - 6.283185307179586
+        - 6.283185307179586
+        - 6.283185307179586
+        - 4.71238898038469
+        - 3.141592653589793
+        - 1.78
+      joint_signs: [1, 1, -1, 1, 1, 1, -1]
+
+  - id: gripper-dh
+    kind: gripper
+    name: "DH AG95 夹爪"
+    # Windows：改成实际夹爪串口（勿与 Gello 同口）
+    endpoint: "COM13"
+    params:
+      port_substr: ""
+      read_scale: [1.0]
+      read_offset: [0.0]
+      write_scale: [1.0]
+      write_offset: [0.0]
+
+  - id: rs-left
+    kind: realsense
+    name: "RealSense · Left"
+    params:
+      role: left
+      serial: "218722271098"
+
+  - id: rs-right
+    kind: realsense
+    name: "RealSense · Right"
+    params:
+      role: right
+      serial: "327122077544"
+
+  - id: rs-middle
+    kind: realsense
+    name: "RealSense · Middle"
+    params:
+      role: middle
+      serial: "336222075436"
+
+  - id: arm-elite
+    kind: arm_write
+    name: "Elite · Arm (write gated)"
+    endpoint: "10.111.34.200"
+    params:
+      robot_ip: "10.111.34.200"
+      num_joints: 6
+      max_delta_deg: 15.0
+      enforce_soft_limits: true

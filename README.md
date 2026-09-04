@@ -38,6 +38,9 @@ pip install -e ".[export]"
 ## 快速开始（dry-run）
 
 ```bash
+# 默认全工位（gello + gripper + 多相机 + arm；桌面端无 -c 时也用此配置）
+sensors-dcs run -c configs/default.yaml
+
 # gello + gripper_read
 sensors-dcs run -c configs/gello_gripper.yaml
 
@@ -533,6 +536,8 @@ sensors-dcs filter-timeline -e episode_00000 \
 
 | 文件 | 作用 |
 |------|------|
+| `configs/default.yaml` | **默认启动** DCS：全工位（gello + gripper + 多路相机 + arm） |
+| `configs/sensors_default.yaml` | 对应设备清单（与 `default.yaml` 配对） |
 | `configs/gello_gripper.yaml` | DCS：gello + gripper_read |
 | `configs/sensors_gello_gripper.yaml` | 对应设备清单（gello + DH 夹爪） |
 | `configs/gello_only.yaml` | 仅 Gello Agent |

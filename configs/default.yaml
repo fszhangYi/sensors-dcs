@@ -1,0 +1,71 @@
+# sensors-dcs 默认启动配置 — gello + gripper + multi RealSense + Elite arm
+# 配对设备清单：./sensors_default.yaml（同目录）
+version: 1
+site: dcs-full-cell
+
+sensors_config: ./sensors_default.yaml
+# true = 合成假数据；false = 真机（串口 + RealSense serial）
+dry_run: true
+
+runtime:
+  control_host: "0.0.0.0"
+  control_port: 7010
+  viz_host: "0.0.0.0"
+  viz_port: 7011
+  # 含多路 JPEG，推送略降
+  viz_hz: 5
+  console_hz: 5
+
+gello_arm_sync:
+  align_max_rad: 0.8
+  ramp_duration_s: 20
+  ramp_hz: 5
+  sync_done_eps_rad: 0.03
+  max_ramp_rounds: 3
+
+record:
+  save_dir: D:\data_new
+  episode_index: 5
+
+agents:
+  - id: gello
+    type: gello
+    sensor_id: gello-leader
+    hz: 50
+    buffer_frames: 64
+  - id: gripper-read
+    type: gripper_read
+    sensor_id: gripper-dh
+    hz: 50
+    buffer_frames: 64
+  - id: gripper-write
+    type: gripper_write
+    sensor_id: gripper-dh
+    hz: 5
+    buffer_frames: 8
+  - id: cam-left
+    type: realsense
+    sensor_id: rs-left
+    hz: 60
+    buffer_frames: 2
+  - id: cam-right
+    type: realsense
+    sensor_id: rs-right
+    hz: 60
+    buffer_frames: 2
+  - id: cam-middle
+    type: realsense
+    sensor_id: rs-middle
+    hz: 60
+    buffer_frames: 2
+  - id: arm
+    type: arm
+    sensor_id: arm-elite
+    hz: 50
+    buffer_frames: 64
+  - id: arm-write
+    type: arm_write
+    sensor_id: arm-elite
+    hz: 5
+    buffer_frames: 8
+
