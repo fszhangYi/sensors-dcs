@@ -738,61 +738,174 @@ PREVIEW_HTML = """<!DOCTYPE html>
       font-size: 0.82rem;
     }
     .inf-pi05-panel {
+      --inf-fs: 0.8125rem;
+      --inf-ctrl-h: 1.85rem;
       flex-shrink: 0;
       margin: 0 0 0.65rem;
-      padding: 0.55rem 0.65rem;
+      padding: 0.65rem 0.75rem;
       border: 1px solid var(--border);
       border-radius: 10px;
       background: var(--panel, rgba(18, 26, 38, 0.4));
       display: flex;
       flex-direction: column;
-      gap: 0.45rem;
+      gap: 0.5rem;
+      font-size: var(--inf-fs);
+      line-height: 1.35;
+      color: var(--text);
     }
+    .inf-pi05-panel * { box-sizing: border-box; }
     .inf-pi05-row {
       display: flex;
       flex-wrap: wrap;
       gap: 0.4rem 0.55rem;
       align-items: center;
+      min-height: var(--inf-ctrl-h);
     }
-    .inf-pi05-row label { color: var(--muted); font-size: 0.8rem; }
-    .inf-pi05-row input[type="text"],
-    .inf-pi05-row input[type="number"] {
+    .inf-pi05-row.inf-pi05-hints {
+      min-height: 1.35rem;
+      align-items: flex-start;
+    }
+    .inf-pi05-panel label,
+    .inf-pi05-panel .inf-k,
+    .inf-pi05-panel .hint,
+    .inf-pi05-panel .arm-abs-dur,
+    .inf-pi05-panel .arm-abs-label {
+      color: var(--muted);
+      font-size: var(--inf-fs);
+      font-weight: 500;
+      margin: 0;
+    }
+    .inf-pi05-panel button {
+      font-size: var(--inf-fs);
+      height: var(--inf-ctrl-h);
+      padding: 0 0.7rem;
+      line-height: 1;
+    }
+    .inf-pi05-panel input[type="text"],
+    .inf-pi05-panel input[type="number"] {
       background: var(--input-bg);
       border: 1px solid var(--border);
       border-radius: 8px;
       color: var(--text);
-      padding: 0.25rem 0.45rem;
-      min-width: 5rem;
+      font-size: var(--inf-fs);
+      height: var(--inf-ctrl-h);
+      padding: 0 0.5rem;
+      min-width: 0;
     }
-    #infPi05Host { width: 9rem; }
-    #infPi05Prompt { flex: 1; min-width: 12rem; }
+    #infPi05Host { width: 8.5rem; flex: 0 0 auto; }
+    #infPi05Port { width: 5.25rem; flex: 0 0 auto; }
+    #infPi05Prompt { flex: 1 1 12rem; min-width: 10rem; }
     #infArmJoints {
-      flex: 1;
-      min-width: 14rem;
+      flex: 1 1 16rem;
+      min-width: 12rem;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 0.8rem;
+      font-size: var(--inf-fs);
+    }
+    .inf-pi05-panel .arm-abs-dur {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      height: var(--inf-ctrl-h);
+    }
+    .inf-pi05-panel .arm-abs-dur input[type="range"] {
+      width: 7rem;
+      height: auto;
+      padding: 0;
+    }
+    #infPi05Status {
+      display: inline-flex;
+      align-items: center;
+      min-width: 11.5rem;
+      max-width: 14rem;
+      height: var(--inf-ctrl-h);
+      padding: 0 0.45rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--input-bg, rgba(0,0,0,0.12));
+      font-size: var(--inf-fs);
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     #infPi05Status.st-live { color: var(--ok, #3dcc91); }
     #infPi05Status.st-offline { color: var(--muted); }
     #infPi05Status.st-error { color: var(--danger, #e07070); }
     #infPi05Status.st-connecting { color: var(--warn, #d4a017); }
+    .inf-flag {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      flex: 0 0 auto;
+      width: 8.6rem;
+      height: var(--inf-ctrl-h);
+      padding: 0 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-size: var(--inf-fs);
+      color: var(--muted);
+      background: var(--input-bg, rgba(0,0,0,0.12));
+      overflow: hidden;
+    }
+    .inf-flag-lab {
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: var(--text);
+      flex: 0 0 auto;
+    }
+    .inf-flag-val {
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
+    .inf-dot {
+      width: 0.55rem;
+      height: 0.55rem;
+      border-radius: 50%;
+      flex: 0 0 auto;
+      background: var(--muted);
+      box-shadow: 0 0 0 2px rgba(255,255,255,0.04);
+    }
+    .inf-dot.st-idle { background: #6b7280; }
+    .inf-dot.st-ok { background: var(--ok, #3dcc91); }
+    .inf-dot.st-warn { background: var(--warn, #d4a017); }
+    .inf-dot.st-bad { background: var(--danger, #e07070); }
     #infPi05Panel button:disabled {
       opacity: 0.45;
       cursor: not-allowed;
     }
-    .inf-pi05-out {
+    #infPi05Hint,
+    #infArmProg {
+      flex: 1 1 10rem;
+      min-width: 8rem;
+      min-height: 1.35em;
+      max-width: 100%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-size: var(--inf-fs);
+      color: var(--muted);
+    }
+    #infPi05Out { display: none; }
+    .inf-pi05-raw-modal .modal-card {
+      max-width: min(44rem, calc(100vw - 2rem));
+      width: 44rem;
+    }
+    .inf-pi05-raw-modal .modal-body {
       margin: 0;
-      max-height: 6rem;
+      max-height: min(60vh, 28rem);
       overflow: auto;
-      font-size: 0.75rem;
-      line-height: 1.35;
-      padding: 0.45rem 0.55rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.78rem;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      word-break: break-word;
+      padding: 0.65rem 0.75rem;
       border-radius: 8px;
       border: 1px solid var(--border);
       background: var(--input-bg);
-      color: var(--text);
-      white-space: pre-wrap;
-      word-break: break-word;
     }
     .agent-vals {
       display: flex; flex-wrap: wrap; gap: 0.35rem 0.55rem;
@@ -1294,19 +1407,34 @@ PREVIEW_HTML = """<!DOCTYPE html>
     </div>
 
     <div class="tab-panel" id="tab-infer" role="tabpanel">
-    <p class="inf-banner" data-i18n="infer.banner">推理页与采集共用录制；可手动下发 joints（询问一步回填 next_state）。</p>
+    <p class="inf-banner" data-i18n="infer.banner">推理页与采集共用录制；可手动下发 joints（单步调试回填 next_state）。</p>
     <div class="inf-pi05-panel" id="infPi05Panel">
       <div class="inf-pi05-row">
-        <span data-i18n="infer.status_label">Serve：</span>
+        <span class="inf-k" data-i18n="infer.status_label">Serve：</span>
         <strong id="infPi05Status" class="st-offline">未连接</strong>
+        <span class="inf-flag" id="infFlagTerm" title="term_flag">
+          <span class="inf-dot st-idle" id="infFlagTermDot"></span>
+          <span class="inf-flag-lab" data-i18n="infer.flag_term">term</span>
+          <span class="inf-flag-val" id="infFlagTermVal" data-i18n="infer.flag_idle">—</span>
+        </span>
+        <span class="inf-flag" id="infFlagReject" title="reject_flag">
+          <span class="inf-dot st-idle" id="infFlagRejectDot"></span>
+          <span class="inf-flag-lab" data-i18n="infer.flag_reject">reject</span>
+          <span class="inf-flag-val" id="infFlagRejectVal" data-i18n="infer.flag_idle">—</span>
+        </span>
+        <button type="button" id="infPi05RawBtn" data-i18n="infer.raw_btn">原始数据</button>
+      </div>
+      <div class="inf-pi05-row">
         <label for="infPi05Host" data-i18n="infer.host">Host</label>
         <input type="text" id="infPi05Host" value="127.0.0.1" autocomplete="off" spellcheck="false" />
         <label for="infPi05Port" data-i18n="infer.port">Port</label>
         <input type="number" id="infPi05Port" value="5000" min="1" max="65535" step="1" />
         <button type="button" class="primary" id="infPi05Connect" data-i18n="infer.connect">连接</button>
         <button type="button" id="infPi05Disconnect" data-i18n="infer.disconnect" disabled>断开</button>
-        <button type="button" class="primary" id="infPi05Step" data-i18n="infer.step" disabled>询问一步</button>
-        <label for="infArmJoints" class="arm-abs-label" data-i18n="arm.abs_label" data-i18n-title="infer.joints_tip" title="询问一步后回填 next_state；下发前 6 个数为 joints_rad">joints</label>
+      </div>
+      <div class="inf-pi05-row">
+        <button type="button" class="primary" id="infPi05Step" data-i18n="infer.step" disabled>单步调试</button>
+        <label for="infArmJoints" class="arm-abs-label" data-i18n="arm.abs_label" data-i18n-title="infer.joints_tip" title="单步调试后回填 next_state；下发前 6 个数为 joints_rad">joints</label>
         <input type="text" id="infArmJoints" class="inf-arm-joints" data-i18n-placeholder="arm.abs_ph" placeholder="0.00,0.00,0.00,0.00,0.00,0.00" autocomplete="off" spellcheck="false" />
         <button type="button" id="infArmSend" data-i18n="arm.abs_send">下发</button>
         <label class="arm-abs-dur">
@@ -1315,16 +1443,27 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <span id="infArmDurVal">10s</span>
         </label>
       </div>
-      <div class="inf-pi05-row">
+      <div class="inf-pi05-row inf-pi05-hints">
         <span class="hint" id="infArmProg" data-i18n="arm.abs_idle">绝对下发：空闲</span>
       </div>
       <div class="inf-pi05-row">
         <label for="infPi05Prompt" data-i18n="infer.prompt">Prompt</label>
         <input type="text" id="infPi05Prompt" data-i18n-placeholder="infer.prompt_ph" placeholder="任务描述（可空）" autocomplete="off" />
         <button type="button" id="infPi05PromptApply" data-i18n="btn.apply">应用</button>
-        <span class="hint" id="infPi05Hint" data-i18n="infer.hint_idle">连接后点「询问一步」采集传感器并发给 serve</span>
       </div>
-      <pre class="inf-pi05-out" id="infPi05Out">{}</pre>
+      <div class="inf-pi05-row inf-pi05-hints">
+        <span class="hint" id="infPi05Hint" data-i18n="infer.hint_idle">连接后点「单步调试」采集传感器并发给 serve</span>
+      </div>
+      <pre class="inf-pi05-out" id="infPi05Out" hidden>{}</pre>
+    </div>
+    <div class="modal-backdrop inf-pi05-raw-modal" id="infPi05RawModal" role="dialog" aria-modal="true" aria-labelledby="infPi05RawTitle">
+      <div class="modal-card">
+        <h3 id="infPi05RawTitle" data-i18n="infer.raw_title">pi05 原始数据</h3>
+        <pre class="modal-body" id="infPi05RawBody">{}</pre>
+        <div style="margin-top:0.75rem;display:flex;justify-content:flex-end;">
+          <button type="button" class="primary" id="infPi05RawClose" data-i18n="common.done">完成</button>
+        </div>
+      </div>
     </div>
     <div class="actions">
       <button type="button" class="primary" id="infBtnStart" data-i18n="btn.start">开始</button>
@@ -2066,7 +2205,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const infPi05Disconnect = document.getElementById('infPi05Disconnect');
     const infPi05Step = document.getElementById('infPi05Step');
     const infPi05PromptApply = document.getElementById('infPi05PromptApply');
+    const infFlagTermDot = document.getElementById('infFlagTermDot');
+    const infFlagTermVal = document.getElementById('infFlagTermVal');
+    const infFlagTerm = document.getElementById('infFlagTerm');
+    const infFlagRejectDot = document.getElementById('infFlagRejectDot');
+    const infFlagRejectVal = document.getElementById('infFlagRejectVal');
+    const infFlagReject = document.getElementById('infFlagReject');
+    const infPi05RawBtn = document.getElementById('infPi05RawBtn');
+    const infPi05RawModal = document.getElementById('infPi05RawModal');
+    const infPi05RawBody = document.getElementById('infPi05RawBody');
+    const infPi05RawClose = document.getElementById('infPi05RawClose');
     const infArmJoints = document.getElementById('infArmJoints');
+    let pi05LastRawText = '{}';
     const infArmSend = document.getElementById('infArmSend');
     const infArmDur = document.getElementById('infArmDur');
     const infArmDurVal = document.getElementById('infArmDurVal');
@@ -2111,11 +2261,69 @@ PREVIEW_HTML = """<!DOCTYPE html>
       };
       return JSON.stringify(slim, null, 2);
     }
-    function setPi05StatusEl(kind, text) {
+    function setPi05StatusEl(kind, text, titleText) {
       if (!infPi05Status) return;
       infPi05Status.classList.remove('st-live', 'st-offline', 'st-error', 'st-connecting');
       infPi05Status.classList.add(kind || 'st-offline');
       infPi05Status.textContent = text;
+      infPi05Status.title = titleText != null ? String(titleText) : String(text || '');
+    }
+    function setInfDot(el, kind) {
+      if (!el) return;
+      el.classList.remove('st-idle', 'st-ok', 'st-warn', 'st-bad');
+      el.classList.add(kind || 'st-idle');
+    }
+    function updatePi05Flags(p) {
+      const term = (p && p.term_flag != null) ? Number(p.term_flag) : null;
+      const rej = (p && p.reject_flag != null) ? Number(p.reject_flag) : null;
+      if (term == null || !Number.isFinite(term)) {
+        setInfDot(infFlagTermDot, 'st-idle');
+        if (infFlagTermVal) infFlagTermVal.textContent = t('infer.flag_idle');
+        if (infFlagTerm) infFlagTerm.title = 'term_flag';
+      } else if (term > 0.5) {
+        setInfDot(infFlagTermDot, 'st-warn');
+        if (infFlagTermVal) infFlagTermVal.textContent = t('infer.flag_term_on');
+        if (infFlagTerm) infFlagTerm.title = 'term_flag=' + term;
+      } else {
+        setInfDot(infFlagTermDot, 'st-ok');
+        if (infFlagTermVal) infFlagTermVal.textContent = t('infer.flag_term_off');
+        if (infFlagTerm) infFlagTerm.title = 'term_flag=' + term;
+      }
+      if (rej == null || !Number.isFinite(rej)) {
+        setInfDot(infFlagRejectDot, 'st-idle');
+        if (infFlagRejectVal) infFlagRejectVal.textContent = t('infer.flag_idle');
+        if (infFlagReject) infFlagReject.title = 'reject_flag';
+      } else if (rej !== 0) {
+        setInfDot(infFlagRejectDot, 'st-bad');
+        if (infFlagRejectVal) infFlagRejectVal.textContent = t('infer.flag_reject_on');
+        if (infFlagReject) infFlagReject.title = 'reject_flag=' + rej;
+      } else {
+        setInfDot(infFlagRejectDot, 'st-ok');
+        if (infFlagRejectVal) infFlagRejectVal.textContent = t('infer.flag_reject_off');
+        if (infFlagReject) infFlagReject.title = 'reject_flag=0';
+      }
+    }
+    function setPi05RawPayload(p) {
+      pi05LastRawText = formatPi05Out(p);
+      if (infPi05Out) infPi05Out.textContent = pi05LastRawText;
+      if (infPi05RawBody && infPi05RawModal && infPi05RawModal.classList.contains('show')) {
+        infPi05RawBody.textContent = pi05LastRawText;
+      }
+    }
+    function openPi05RawModal() {
+      if (!infPi05RawModal || !infPi05RawBody) return;
+      infPi05RawBody.textContent = pi05LastRawText || '{}';
+      infPi05RawModal.classList.add('show');
+    }
+    function closePi05RawModal() {
+      if (infPi05RawModal) infPi05RawModal.classList.remove('show');
+    }
+    if (infPi05RawBtn) infPi05RawBtn.addEventListener('click', openPi05RawModal);
+    if (infPi05RawClose) infPi05RawClose.addEventListener('click', closePi05RawModal);
+    if (infPi05RawModal) {
+      infPi05RawModal.addEventListener('click', (e) => {
+        if (e.target === infPi05RawModal) closePi05RawModal();
+      });
     }
     function fillInfArmJointsFromNextState(nextState) {
       if (!infArmJoints || !Array.isArray(nextState) || nextState.length < 1) return false;
@@ -2144,12 +2352,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (!configured) {
         setPi05StatusEl('st-offline', t('infer.status_unconfigured'));
         infPi05Hint.textContent = t('infer.hint_unconfigured');
+        if (infPi05Hint) infPi05Hint.title = infPi05Hint.textContent || '';
+        if (infArmProg) infArmProg.title = infArmProg.textContent || '';
         if (infPi05Connect) infPi05Connect.disabled = true;
         if (infPi05Disconnect) infPi05Disconnect.disabled = true;
         if (infPi05Step) infPi05Step.disabled = true;
         if (infPi05Host) infPi05Host.disabled = true;
         if (infPi05Port) infPi05Port.disabled = true;
-        if (infPi05Out) infPi05Out.textContent = formatPi05Out(p);
+        setPi05RawPayload(p);
+        updatePi05Flags(p);
         return;
       }
       if (infPi05Host) infPi05Host.disabled = connected;
@@ -2160,18 +2371,21 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (connected) {
         const host = (p && p.host) || ((infPi05Host && infPi05Host.value) || '127.0.0.1');
         const port = (p && p.port != null) ? p.port : ((infPi05Port && infPi05Port.value) || '5000');
-        setPi05StatusEl('st-live', t('infer.status_connected', { host: host, port: port }));
+        const detail = t('infer.status_connected', { host: host, port: port });
+        setPi05StatusEl('st-live', t('infer.status_connected_short'), detail);
         infPi05Hint.textContent = (p && p.error && p.ok === false)
           ? String(p.error)
           : t('infer.hint_connected');
       } else if (p && p.error) {
-        setPi05StatusEl('st-error', t('infer.status_error'));
+        setPi05StatusEl('st-error', t('infer.status_error'), String(p.error));
         infPi05Hint.textContent = String(p.error);
       } else {
         setPi05StatusEl('st-offline', t('infer.status_disconnected'));
         infPi05Hint.textContent = t('infer.hint_idle');
       }
-      if (infPi05Out) infPi05Out.textContent = formatPi05Out(p);
+      if (infPi05Hint) infPi05Hint.title = infPi05Hint.textContent || '';
+      if (infArmProg) infArmProg.title = infArmProg.textContent || '';
+      setPi05RawPayload(p);
       if (p && p.host && infPi05Host && document.activeElement !== infPi05Host && !connected) {
         infPi05Host.value = p.host;
       }
@@ -2181,6 +2395,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (p && p.prompt != null && infPi05Prompt && document.activeElement !== infPi05Prompt) {
         infPi05Prompt.value = p.prompt;
       }
+      updatePi05Flags(p);
     }
     async function postPi05(path, body) {
       savePi05Form();
@@ -4745,7 +4960,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
             prog.textContent = t('arm.abs_fail', { error: absRamp.last_error });
           }
         }
-      }
       }
       frames.forEach((frame) => {
         try {
