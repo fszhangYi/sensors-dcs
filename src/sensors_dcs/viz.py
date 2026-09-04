@@ -725,8 +725,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     pre#raw, pre#infRaw {
       flex-shrink: 0;
       width: 100%;
-      max-height: 22vh;
-      min-height: 4.5rem;
+      max-height: 12vh;
+      min-height: 3rem;
     }
     .inf-banner {
       margin: 0 0 0.55rem;
