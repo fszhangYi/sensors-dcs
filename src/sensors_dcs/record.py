@@ -47,6 +47,7 @@ class _EpisodeSession:
     ep_dir: Path
     t_start: float
     q: queue.Queue
+    mode: str = "collect"  # collect | infer
     stop_event: threading.Event = field(default_factory=threading.Event)
     accepting: bool = True
     written: int = 0
@@ -99,6 +100,7 @@ class RecordController:
             "save_dir": str(self.save_dir),
             "episode_index": self.episode_index,
             "episode_path": str(sess.ep_dir) if sess is not None else None,
+            "record_mode": sess.mode if sess is not None else None,
             "accepting": bool(sess.accepting) if sess is not None else False,
             "written": int(sess.written) if sess is not None else 0,
             "dropped": int(sess.dropped) if sess is not None else 0,
@@ -138,7 +140,8 @@ class RecordController:
         with self._lock:
             return self._status_unlocked()
 
-    def start(self) -> dict[str, Any]:
+    def start(self, *, mode: str = "collect") -> dict[str, Any]:
+        mode_n = "infer" if str(mode).strip().lower() == "infer" else "collect"
         with self._lock:
             if self.state != "idle":
                 return {
@@ -162,6 +165,7 @@ class RecordController:
                 ep_dir=ep_dir,
                 t_start=time.time(),
                 q=queue.Queue(maxsize=max(8, int(self.cfg.queue_maxsize))),
+                mode=mode_n,
             )
             sess.writer = threading.Thread(
                 target=self._writer_loop,
@@ -190,6 +194,7 @@ class RecordController:
                     dropped=0,
                     provisional=True,
                     valid=False,
+                    mode=mode_n,
                 )
             except Exception as e:  # noqa: BLE001
                 sess.last_error = f"initial manifest: {e}"
@@ -311,6 +316,7 @@ class RecordController:
                 dropped=sess.dropped,
                 provisional=False,
                 valid=bool(valid),
+                mode=sess.mode,
             )
             err = None
         except Exception as e:  # noqa: BLE001
@@ -375,6 +381,7 @@ class RecordController:
         dropped: int,
         provisional: bool,
         valid: bool = True,
+        mode: str = "collect",
     ) -> dict[str, Any]:
         cameras = self._collect_cameras()
         prev_path = ep_dir / "manifest.json"
@@ -403,10 +410,12 @@ class RecordController:
             duration = float(t_end) - float(t_start)
 
         manifest_valid = False if provisional else bool(valid)
+        mode_n = "infer" if str(mode).strip().lower() == "infer" else "collect"
 
         manifest: dict[str, Any] = {
             "site": self.site,
             "episode_index": ep,
+            "record_mode": mode_n,
             "t_start": t_start,
             "t_end": t_end,
             "duration_s": duration,
@@ -440,6 +449,7 @@ class RecordController:
 
     def _sampler_loop(self, sess: _EpisodeSession) -> None:
         last_seq: dict[str, int] = {}
+        mode = sess.mode
         while not sess.stop_event.is_set():
             if not sess.accepting:
                 break
@@ -447,6 +457,16 @@ class RecordController:
                 fr = agent.ring.latest.get()
                 if fr is None or fr.error:
                     continue
+                # Shared YAML: Collect skips pi05; Infer skips gello.
+                if mode == "collect" and fr.kind == "pi05":
+                    continue
+                if mode == "infer" and fr.kind == "gello":
+                    continue
+                # Infer: only persist pi05 decision steps (has next_state), not idle heartbeats.
+                if fr.kind == "pi05":
+                    pl = fr.payload or {}
+                    if not pl.get("next_state"):
+                        continue
                 prev = last_seq.get(aid)
                 if prev is not None and fr.seq <= prev:
                     continue

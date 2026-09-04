@@ -14,6 +14,10 @@ class SaveDirBody(BaseModel):
     save_dir: str | None = None
 
 
+class RecordStartBody(BaseModel):
+    mode: str | None = None  # collect | infer
+
+
 class GripperCommandBody(BaseModel):
     agent_id: str | None = None
     position_norm: float | None = None
@@ -1737,7 +1741,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     appModal.addEventListener('click', (e) => {
       if (e.target === appModal) appModal.classList.remove('show');
     });
-    function bindRecordPanel(ids, lsQuick, lsAsync) {
+    function bindRecordPanel(ids, lsQuick, lsAsync, mode) {
       return {
         recStateEl: document.getElementById(ids.recState),
         saveDirEl: document.getElementById(ids.saveDir),
@@ -1755,6 +1759,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         chkAsyncFlush: document.getElementById(ids.chkAsyncFlush),
         lsQuick: lsQuick,
         lsAsync: lsAsync,
+        mode: mode || 'collect',
       };
     }
     const collectRec = bindRecordPanel({
@@ -1763,14 +1768,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
       btnStart: 'btnStart', btnStop: 'btnStop', btnDiscard: 'btnDiscard',
       btnSaveDir: 'btnSaveDir', saveDirInput: 'saveDirInput', runHint: 'runHint',
       chkQuickCollect: 'chkQuickCollect', chkAsyncFlush: 'chkAsyncFlush',
-    }, 'dcs.quickCollect', 'dcs.asyncFlush');
+    }, 'dcs.quickCollect', 'dcs.asyncFlush', 'collect');
     const inferRec = bindRecordPanel({
       recState: 'infRecState', saveDir: 'infSaveDir', episode: 'infEpisode', written: 'infWritten',
       hzFront: 'infHzFront', raw: 'infRaw',
       btnStart: 'infBtnStart', btnStop: 'infBtnStop', btnDiscard: 'infBtnDiscard',
       btnSaveDir: 'infBtnSaveDir', saveDirInput: 'infSaveDirInput', runHint: 'infRunHint',
       chkQuickCollect: 'infChkQuickCollect', chkAsyncFlush: 'infChkAsyncFlush',
-    }, 'dcs.inf.quickCollect', 'dcs.inf.asyncFlush');
+    }, 'dcs.inf.quickCollect', 'dcs.inf.asyncFlush', 'infer');
     const recordPanels = [collectRec, inferRec].filter((p) => p && p.btnStart);
     // Legacy aliases (collect) used by exit / arm hints elsewhere.
     const recStateEl = collectRec.recStateEl;
@@ -1983,11 +1988,21 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
     function wireRecordButtons(panel) {
       if (!panel || !panel.btnStart) return;
-      panel.btnStart.addEventListener('click', () => postRecord('/api/record/start', undefined, panel));
-      panel.btnStop.addEventListener('click', () => postRecord('/api/record/stop', { valid: true }, panel));
+      panel.btnStart.addEventListener('click', () => postRecord(
+        '/api/record/start',
+        { mode: panel.mode || 'collect' },
+        panel,
+      ));
+      panel.btnStop.addEventListener('click', () => postRecord('/api/record/stop', {
+        valid: true,
+        async_flush: !!(panel.chkAsyncFlush && panel.chkAsyncFlush.checked),
+      }, panel));
       panel.btnDiscard.addEventListener('click', () => {
         if (!confirm(t('confirm.discard'))) return;
-        postRecord('/api/record/stop', { valid: false }, panel);
+        postRecord('/api/record/stop', {
+          valid: false,
+          async_flush: !!(panel.chkAsyncFlush && panel.chkAsyncFlush.checked),
+        }, panel);
       });
     }
     recordPanels.forEach(wireRecordButtons);
@@ -4989,12 +5004,14 @@ def create_viz_app(
         return {"ok": True, **recorder.status()}
 
     @app.post("/api/record/start")
-    async def record_start() -> dict[str, Any]:
+    async def record_start(req: RecordStartBody | None = None) -> dict[str, Any]:
         if _current_boot_error() is not None:
             return {"ok": False, "error": "collect unavailable (boot error)", "state": "idle"}
         if recorder is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
-        return recorder.start()
+        body = req or RecordStartBody()
+        mode = "infer" if str(body.mode or "").strip().lower() == "infer" else "collect"
+        return await asyncio.to_thread(recorder.start, mode=mode)
 
     @app.post("/api/record/stop")
     async def record_stop(request: Request) -> dict[str, Any]:
