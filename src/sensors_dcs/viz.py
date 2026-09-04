@@ -2529,7 +2529,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           // Still offer agents so allow-invalid / quick-collect discard can pick master.
           fillMasterSelect(j.master_candidates || [], prefer);
           if (!silent) {
-            const detail = [j.error, j.note].filter(Boolean).join('\n');
+            const detail = [j.error, j.note].filter(Boolean).join('\\n');
             showAppModal(t('pp.manifest_bad_title'), detail || t('pp.manifest_bad'));
           }
           return j;
@@ -2644,7 +2644,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         inspectSelectedEpisode(ep, { silent: true }).then((info) => {
           if (info && !info.ok) {
             // Restored path from localStorage — surface once if still bad.
-            const detail = [info.error, info.note].filter(Boolean).join('\n');
+            const detail = [info.error, info.note].filter(Boolean).join('\\n');
             showAppModal(t('pp.manifest_bad_title'), detail || t('pp.manifest_bad'));
           }
         });
