@@ -4729,17 +4729,21 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (sendBtn) {
           sendBtn.textContent = absRamp.enabled ? t('arm.abs_cancel') : t('arm.abs_send');
         }
-        if (prog && absRamp.enabled) {
-          prog.textContent = t('arm.abs_ramping', {
-            i: absRamp.ramp_index != null ? absRamp.ramp_index : 0,
-            n: absRamp.ramp_n != null ? absRamp.ramp_n : 0,
-            left: absRamp.duration_s != null
-              ? Math.max(0, Number(absRamp.duration_s) * (1 - (Number(absRamp.ramp_index || 0) / Math.max(1, Number(absRamp.ramp_n || 1))))).toFixed(0)
-              : '—',
-            dur: absRamp.duration_s != null ? Number(absRamp.duration_s).toFixed(0) : '—',
-          });
-        } else if (prog && absRamp.phase === 'idle' && absRamp.last_message) {
-          /* keep last send hint unless idle after completion */
+        if (prog) {
+          const hz = Number(absRamp.hz) || 5;
+          if (absRamp.phase === 'ramping' && absRamp.ramp_n) {
+            const left = Math.max(0, (Number(absRamp.ramp_n) - Number(absRamp.ramp_index || 0)) / hz);
+            prog.textContent = t('arm.abs_ramping', {
+              i: absRamp.ramp_index || 0,
+              n: absRamp.ramp_n,
+              left: left.toFixed(1),
+              dur: Number(absRamp.duration_s || 0).toFixed(0),
+            });
+          } else if (absRamp.phase === 'completed') {
+            prog.textContent = absRamp.message || t('arm.abs_done');
+          } else if (absRamp.phase === 'error' && absRamp.last_error) {
+            prog.textContent = t('arm.abs_fail', { error: absRamp.last_error });
+          }
         }
       }
       }
