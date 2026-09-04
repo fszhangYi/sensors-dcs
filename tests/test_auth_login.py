@@ -128,9 +128,11 @@ def test_boot_error_app_login_and_collect_locked(auth_enabled_tmp: dict[str, str
 
     home = client.get("/")
     assert home.status_code == 200
+    assert 'id="tabBtnHome"' in home.text
     assert 'id="tabBtnPost"' in home.text
     assert "bootBanner" in home.text
-    assert "switchTab('post')" in home.text or "switchTab(\"post\")" in home.text
+    assert "switchTab('home')" in home.text or "switchTab(\"home\")" in home.text
+    assert 'data-i18n="home.title"' in home.text
 
     st = client.get("/api/status")
     assert st.status_code == 200

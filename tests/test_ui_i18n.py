@@ -14,13 +14,16 @@ def test_inject_preview_and_login() -> None:
     assert "__DCS_I18N_JSON__" not in p
     assert "sensors-dcs.locale" in p
     assert 'data-i18n="tab.collect"' in p
+    assert 'id="tabBtnHome"' in p
     assert 'id="tabBtnPost"' in p
+    assert "tab-home" in p
     assert "tab-post" in p
     assert "JSON.parse('__DCS_I18N" not in p
     assert "const DCS_I18N =" in p
-    # Default landing tab is postprocess
-    assert 'id="tab-post" role="tabpanel"' in p
-    assert "tab-panel active" in p
+    # Default landing tab is home
+    assert 'id="tab-home" role="tabpanel"' in p
+    assert 'id="tabBtnHome"' in p and 'data-tab="home"' in p
+    assert "switchTab('home')" in p or 'switchTab("home")' in p
     assert 'id="bootBanner"' in p
 
 

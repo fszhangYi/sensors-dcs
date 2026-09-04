@@ -456,7 +456,35 @@ PREVIEW_HTML = """<!DOCTYPE html>
       gap: 0.65rem;
       overflow: hidden;
     }
-    #tab-post.active { overflow-y: auto; }
+    #tab-post.active,
+    #tab-home.active { overflow-y: auto; }
+    .home-grid {
+      display: grid;
+      gap: 0.75rem;
+      padding-bottom: 1rem;
+      max-width: 52rem;
+    }
+    .home-grid .home-lead {
+      color: var(--text);
+      font-size: 0.95rem;
+      line-height: 1.55;
+      margin: 0.35rem 0 0;
+    }
+    .home-grid .pp-card > p {
+      color: var(--muted);
+      font-size: 0.88rem;
+      line-height: 1.55;
+      margin: 0.4rem 0 0;
+    }
+    .home-list {
+      margin: 0.45rem 0 0;
+      padding-left: 1.2rem;
+      color: var(--muted);
+      font-size: 0.88rem;
+      line-height: 1.55;
+    }
+    .home-list li { margin: 0.28rem 0; }
+    .home-cta .pp-actions { margin-top: 0.65rem; }
     .quick-collect {
       display: inline-flex;
       align-items: center;
@@ -711,7 +739,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     <div class="header-text">
       <p class="kicker" data-i18n="header.kicker">Robotics lab console</p>
       <h1>sensors-dcs</h1>
-      <p data-i18n="header.subtitle">「数据采集」录制写盘；「数据后处理」等价于 export-timeline → filter-timeline → export-hik-dataset。勾选「快速采集」后，结束/作废会自动跑后处理。</p>
+      <p data-i18n="header.subtitle">主页介绍软件；「数据采集」录制写盘；「数据后处理」等价于 export-timeline → filter-timeline → export-hik-dataset。</p>
     </div>
     <div class="header-actions">
       <div class="lang-switch" data-i18n-title="lang.title" title="界面语言 / Language">
@@ -725,8 +753,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
     </div>
   </header>
   <nav class="tabs" role="tablist">
+    <button type="button" class="tab active" id="tabBtnHome" data-tab="home" role="tab" aria-selected="true" data-i18n="tab.home">主页</button>
     <button type="button" class="tab" id="tabBtnCollect" data-tab="collect" role="tab" aria-selected="false" data-i18n="tab.collect">数据采集</button>
-    <button type="button" class="tab active" id="tabBtnPost" data-tab="post" role="tab" aria-selected="true" data-i18n="tab.post">数据后处理</button>
+    <button type="button" class="tab" id="tabBtnPost" data-tab="post" role="tab" aria-selected="false" data-i18n="tab.post">数据后处理</button>
   </nav>
   <div class="boot-banner" id="bootBanner" role="alert" hidden>
     <strong data-i18n="boot.banner_title">配置错误 — 仅后处理可用</strong>
@@ -735,6 +764,44 @@ PREVIEW_HTML = """<!DOCTYPE html>
     <pre id="bootBannerErr"></pre>
   </div>
   <main>
+    <div class="tab-panel active" id="tab-home" role="tabpanel">
+      <div class="home-grid">
+        <section class="pp-card">
+          <h2 data-i18n="home.title">sensors-dcs 是什么</h2>
+          <p class="home-lead" data-i18n="home.lead">面向机器人遥操作 / 多传感器单元的本地数据采集与离线后处理控制台：一边把 GELLO、机械臂、夹爪、RealSense 等写进 episode，一边把落盘数据对齐导出成 hik_dataset。</p>
+        </section>
+        <section class="pp-card">
+          <h2 data-i18n="home.what_title">能做什么</h2>
+          <p data-i18n="home.what_body">在「数据采集」实时预览并录制；在「数据后处理」按常用三步流水线（export-timeline → filter-timeline → export-hik-dataset）处理已落盘 episode。也可勾选「快速采集」，结束/作废后自动跑同一套参数。</p>
+        </section>
+        <section class="pp-card">
+          <h2 data-i18n="home.flow_title">推荐流程</h2>
+          <ol class="home-list">
+            <li data-i18n="home.flow_1">用含 sensors_config + agents 的 DCS YAML 启动（不要直接拿 sensors_*.yaml 当启动配置）。</li>
+            <li data-i18n="home.flow_2">确认保存路径，在「数据采集」开始 / 结束（或作废）录制一集。</li>
+            <li data-i18n="home.flow_3">到「数据后处理」选 episode，核对 align / master / master-hz 与 camera-map，一键三步或逐步执行。</li>
+            <li data-i18n="home.flow_4">需要连续采多集时，可打开「异步落盘」，上一集写盘未完也能开下一集。</li>
+          </ol>
+        </section>
+        <section class="pp-card">
+          <h2 data-i18n="home.tips_title">使用提示</h2>
+          <ul class="home-list">
+            <li data-i18n="home.tips_1">dry_run=true 用合成数据联调 UI；真机请设 dry_run=false 并保证驱动 / 串口 / 相机可用。</li>
+            <li data-i18n="home.tips_2">YAML 或传感器 open 失败时，本页与后处理仍可用，「数据采集」会被锁定并显示错误横幅。</li>
+            <li data-i18n="home.tips_3">右上角可切换中 / EN；「安全退出」会停录制、关传感器并结束进程。</li>
+          </ul>
+        </section>
+        <section class="pp-card home-cta">
+          <h2 data-i18n="home.cta_title">开始使用</h2>
+          <p data-i18n="home.cta_body">从下方进入采集或后处理 Tab。</p>
+          <div class="pp-actions">
+            <button type="button" class="primary" id="btnHomeCollect" data-i18n="home.cta_collect">进入数据采集</button>
+            <button type="button" id="btnHomePost" data-i18n="home.cta_post">进入数据后处理</button>
+          </div>
+        </section>
+      </div>
+    </div>
+
     <div class="tab-panel" id="tab-collect" role="tabpanel">
     <div class="actions">
       <button type="button" class="primary" id="btnStart" data-i18n="btn.start">开始</button>
@@ -773,7 +840,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     <pre id="raw">{}</pre>
     </div>
 
-    <div class="tab-panel active" id="tab-post" role="tabpanel">
+    <div class="tab-panel" id="tab-post" role="tabpanel">
       <div class="pp-grid">
         <section class="pp-card">
           <h2 data-i18n="pp.episode">Episode</h2>
@@ -1139,8 +1206,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
     });
 
     // ---- tabs + postprocess ----
+    const tabBtnHome = document.getElementById('tabBtnHome');
     const tabBtnCollect = document.getElementById('tabBtnCollect');
     const tabBtnPost = document.getElementById('tabBtnPost');
+    const tabHome = document.getElementById('tab-home');
     const tabCollect = document.getElementById('tab-collect');
     const tabPost = document.getElementById('tab-post');
     const bootBanner = document.getElementById('bootBanner');
@@ -1175,7 +1244,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
           if (bootBannerPath) bootBannerPath.textContent = (info && info.config_path) || '';
           if (bootBannerErr) bootBannerErr.textContent = (info && info.error) || '';
         }
-        switchTab('post');
+        if (tabCollect && tabCollect.classList.contains('active')) {
+          switchTab('home');
+        }
       } else if (bootBanner) {
         bootBanner.hidden = true;
         bootBanner.classList.remove('visible');
@@ -1187,21 +1258,36 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (runHint) runHint.textContent = t('boot.collect_locked');
         return;
       }
-      const isCollect = name === 'collect';
-      tabBtnCollect.classList.toggle('active', isCollect);
-      tabBtnPost.classList.toggle('active', !isCollect);
-      tabBtnCollect.setAttribute('aria-selected', isCollect ? 'true' : 'false');
-      tabBtnPost.setAttribute('aria-selected', isCollect ? 'false' : 'true');
-      tabCollect.classList.toggle('active', isCollect);
-      tabPost.classList.toggle('active', !isCollect);
+      const which = (name === 'collect' || name === 'post' || name === 'home') ? name : 'home';
+      tabBtnHome.classList.toggle('active', which === 'home');
+      tabBtnCollect.classList.toggle('active', which === 'collect');
+      tabBtnPost.classList.toggle('active', which === 'post');
+      tabBtnHome.setAttribute('aria-selected', which === 'home' ? 'true' : 'false');
+      tabBtnCollect.setAttribute('aria-selected', which === 'collect' ? 'true' : 'false');
+      tabBtnPost.setAttribute('aria-selected', which === 'post' ? 'true' : 'false');
+      tabHome.classList.toggle('active', which === 'home');
+      tabCollect.classList.toggle('active', which === 'collect');
+      tabPost.classList.toggle('active', which === 'post');
     }
+    tabBtnHome.addEventListener('click', () => switchTab('home'));
     tabBtnCollect.addEventListener('click', () => switchTab('collect'));
     tabBtnPost.addEventListener('click', () => {
       switchTab('post');
       refreshEpisodeList();
     });
-    // Default landing tab after login: postprocess
-    switchTab('post');
+    const btnHomeCollect = document.getElementById('btnHomeCollect');
+    const btnHomePost = document.getElementById('btnHomePost');
+    if (btnHomeCollect) {
+      btnHomeCollect.addEventListener('click', () => switchTab('collect'));
+    }
+    if (btnHomePost) {
+      btnHomePost.addEventListener('click', () => {
+        switchTab('post');
+        refreshEpisodeList();
+      });
+    }
+    // Default landing tab after login: home
+    switchTab('home');
 
     fetch('/api/status', { credentials: 'same-origin' }).then((r) => r.json()).then((j) => {
       const ok = j.collect_ok !== false && !j.boot_error;

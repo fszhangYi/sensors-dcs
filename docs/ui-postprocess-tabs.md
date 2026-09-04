@@ -1,10 +1,10 @@
-# UI：数据采集 / 数据后处理 Tab 与快速采集
+# UI：主页 / 数据采集 / 数据后处理 Tab 与快速采集
 
-日期：2026-09-03
+日期：2026-09-03（2026-09-04 增补主页）
 
 ## 目标
 
-把桌面预览页拆成两个 Tab，并把常用三条后处理 CLI 做成可视化接口：
+登录后默认落在 **主页**（软件介绍，中英 i18n）。另有两个工作 Tab，并把常用三条后处理 CLI 做成可视化接口：
 
 ```text
 sensors-dcs export-timeline -e … --align asof --master cam-left --master-hz <N>
@@ -20,6 +20,8 @@ sensors-dcs export-hik-dataset -e … --camera-map …/hik_camera_map.yaml
 
 | 入口 | 行为 |
 |------|------|
+| 登录 / 打开 `/` | 默认 **主页** Tab |
+| 主页 CTA | 可跳到采集或后处理 |
 | 数据后处理 → 各 Step 按钮 | 只跑对应一步 |
 | 一键执行三步 | 顺序三步，失败即停 |
 | 快速采集 + 结束 | `valid=true` 后跑三步；`allow_invalid` 跟表单 |
@@ -31,4 +33,4 @@ sensors-dcs export-hik-dataset -e … --camera-map …/hik_camera_map.yaml
 - `POST /api/postprocess/run` — body 见 `PostprocessBody`（`episode` + 可选 `steps`）  
 - `POST /api/record/stop` 响应新增 `finished_episode_path` / `finished_episode_index` / `valid`
 
-实现：`src/sensors_dcs/postprocess_service.py`、`viz.py`。
+实现：`src/sensors_dcs/postprocess_service.py`、`viz.py`、`ui_i18n.py`（`home.*` / `tab.home`）。
