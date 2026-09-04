@@ -31,9 +31,11 @@ def test_boot_box_locks_collect_until_cleared(tmp_path: Path, monkeypatch) -> No
     health = client.get("/api/health").json()
     assert health["boot_error"] is True
     assert health["collect_ok"] is False
+    assert health["infer_ok"] is True
 
     st = client.get("/api/status").json()
     assert st["boot_error"] is True
+    assert st["infer_ok"] is True
     assert "agents starting" in (st.get("error") or "")
 
     rec = client.post("/api/record/start").json()
@@ -46,6 +48,7 @@ def test_boot_box_locks_collect_until_cleared(tmp_path: Path, monkeypatch) -> No
     health2 = client.get("/api/health").json()
     assert health2["boot_error"] is False
     assert health2["collect_ok"] is True
+    assert health2["infer_ok"] is True
 
 
 def test_cli_serve_survives_agent_open_failure(tmp_path: Path, monkeypatch) -> None:

@@ -1104,8 +1104,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     <button type="button" class="tab" id="tabBtnSensors" data-tab="sensors" role="tab" aria-selected="false" data-i18n="tab.sensors">传感器状态</button>
   </nav>
   <div class="boot-banner" id="bootBanner" role="alert" hidden>
-    <strong data-i18n="boot.banner_title">配置错误 — 仅后处理可用</strong>
-    <span id="bootBannerHint" data-i18n="boot.collect_locked">YAML 配置无效，无法进入数据采集。请修正配置后重新启动。</span>
+    <strong data-i18n="boot.banner_title">配置错误 — 采集不可用</strong>
+    <span id="bootBannerHint" data-i18n="boot.collect_locked">YAML/agent 启动失败，无法进入数据采集。推理与后处理仍可用；请修正配置后重新启动。</span>
     <div class="boot-path" id="bootBannerPath"></div>
     <pre id="bootBannerErr"></pre>
   </div>
@@ -3678,13 +3678,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (!box) {
         box = document.createElement('div');
         box.className = 'grip-cmd';
+        const inferScope = card.dataset.scope === 'infer';
         box.innerHTML =
           '<button type="button" class="grip-init">初始化</button>' +
-          '<button type="button" class="grip-sync">同步</button>' +
+          (inferScope ? '' : '<button type="button" class="grip-sync">同步</button>') +
           '<label>position_norm</label>' +
           '<input type="number" step="0.01" min="0" max="0.637" value="0.32" class="grip-norm" />' +
           '<button type="button" class="grip-send">下发</button>' +
-          '<span class="cmd-hint">同步=服务端 gello j6(cal)→夹爪；前端只开关</span>';
+          (inferScope
+            ? '<span class="cmd-hint">推理页不提供 gello→夹爪同步</span>'
+            : '<span class="cmd-hint">同步=服务端 gello j6(cal)→夹爪；前端只开关</span>');
         card.appendChild(box);
         const btn = box.querySelector('.grip-send');
         const initBtn = box.querySelector('.grip-init');
@@ -3695,6 +3698,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
           inp.disabled = !on;
         };
         const applySyncUi = (sync) => {
+          if (!syncBtn) {
+            setManualEnabled(true);
+            return;
+          }
           const on = !!(sync && sync.enabled);
           syncBtn.textContent = on ? t('grip.unsync') : t('grip.sync');
           syncBtn.dataset.enabled = on ? '1' : '0';
@@ -3708,7 +3715,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           busyEl.disabled = true;
           btn.disabled = true;
           initBtn.disabled = true;
-          syncBtn.disabled = true;
+          if (syncBtn) syncBtn.disabled = true;
           try {
             const r = await fetch('/api/gripper/command', {
               method: 'POST',
@@ -3719,8 +3726,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
           } finally {
             busyEl.disabled = false;
             initBtn.disabled = false;
-            syncBtn.disabled = false;
-            applySyncUi(window.__gripGelloSync || { enabled: syncBtn.dataset.enabled === '1' });
+            if (syncBtn) syncBtn.disabled = false;
+            applySyncUi(window.__gripGelloSync || { enabled: syncBtn && syncBtn.dataset.enabled === '1' });
           }
         };
         initBtn.addEventListener('click', async () => {
@@ -3734,7 +3741,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             runHint.textContent = t('grip.init_err', { error: e });
           }
         });
-        syncBtn.addEventListener('click', async () => {
+        if (syncBtn) syncBtn.addEventListener('click', async () => {
           const want = syncBtn.dataset.enabled !== '1';
           syncBtn.disabled = true;
           try {
@@ -3829,20 +3836,23 @@ PREVIEW_HTML = """<!DOCTYPE html>
               '<span class="arm-jval">—</span>' +
             '</div>';
         }
+        const inferScope = card.dataset.scope === 'infer';
         box.innerHTML =
           '<div class="arm-tools">' +
             '<button type="button" class="arm-arm">Arm</button>' +
             '<button type="button" class="arm-disarm">Disarm</button>' +
             '<button type="button" class="arm-estop">Estop</button>' +
-            '<button type="button" class="arm-gello-sync">同步</button>' +
-            '<button type="button" class="arm-gello-teleop">摇操</button>' +
+            (inferScope ? '' :
+              '<button type="button" class="arm-gello-sync">同步</button>' +
+              '<button type="button" class="arm-gello-teleop">摇操</button>') +
             '<label>delta°</label>' +
             '<input type="range" class="arm-delta" min="0.1" max="5" step="0.1" value="1.0" />' +
             '<span class="arm-delta-val">1.0°</span>' +
             '<span class="arm-armed-tag">idle</span>' +
           '</div>' +
-          '<div class="arm-sync-prog">gello→arm：空闲（完成后 gello 不控臂）</div>' +
-          '<div class="arm-teleop-prog">摇操：空闲（gello 不控臂）</div>' +
+          (inferScope ? '' :
+            '<div class="arm-sync-prog">gello→arm：空闲（完成后 gello 不控臂）</div>' +
+            '<div class="arm-teleop-prog">摇操：空闲（gello 不控臂）</div>') +
           jogHtml +
           '<div class="arm-abs-row">' +
             '<label class="arm-abs-label" data-i18n="arm.abs_label" data-i18n-title="arm.abs_label_tip" title="双击填入当前关节角">joints</label>' +
@@ -3855,7 +3865,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
             '</label>' +
           '</div>' +
           '<div class="arm-abs-prog" data-i18n="arm.abs_idle">绝对下发：空闲</div>' +
-          '<span class="cmd-hint">须先有 robot·Read；Arm →「同步」对齐 →「摇操」跟随；解除后 gello 不再控臂</span>';
+          (inferScope
+            ? '<span class="cmd-hint">推理页保留点动/绝对下发展示；不提供 gello 同步/摇操，pi05 不控臂</span>'
+            : '<span class="cmd-hint">须先有 robot·Read；Arm →「同步」对齐 →「摇操」跟随；解除后 gello 不再控臂</span>');
         card.appendChild(box);
         applyDomI18n(box);
         const delta = box.querySelector('.arm-delta');
@@ -3941,30 +3953,36 @@ PREVIEW_HTML = """<!DOCTYPE html>
             absSend.textContent = t('arm.abs_send');
           }
           armBtn.disabled = !hasRead || syncing || teleoping || absRamping;
-          syncBtn.disabled = !hasRead || teleoping || absRamping;
-          syncBtn.textContent = syncing ? t('arm.unsync') : t('arm.sync');
-          syncBtn.classList.toggle('arm-sync-on', syncing);
-          syncBtn.dataset.enabled = syncing ? '1' : '0';
-          teleopBtn.disabled = !hasRead || syncing || absRamping;
-          teleopBtn.textContent = teleoping ? t('arm.unteelop') : t('arm.teleop');
-          teleopBtn.classList.toggle('arm-teleop-on', teleoping);
-          teleopBtn.dataset.enabled = teleoping ? '1' : '0';
-          if (sync.phase === 'ramping' && sync.ramp_n) {
-            const left = Math.max(0, (Number(sync.ramp_n) - Number(sync.ramp_index || 0)) / 5);
-            syncProg.textContent =
-              'ramping ' + (sync.ramp_index || 0) + '/' + sync.ramp_n +
-              ' · round ' + (sync.round || 1) +
-              ' · ~' + left.toFixed(1) + 's · 目标已冻结';
-          } else if (sync.phase === 'verifying') {
-            syncProg.textContent = '校验中（不写臂）…';
-          } else if (sync.phase === 'completed') {
-            syncProg.textContent = '同步完成；gello 未控制机械臂';
-          } else if (sync.phase === 'error' && sync.last_error) {
-            syncProg.textContent = '失败：' + sync.last_error;
-          } else if (sync.message) {
-            syncProg.textContent = String(sync.message);
-          } else {
-            syncProg.textContent = 'gello→arm：空闲（完成后 gello 不控臂）';
+          if (syncBtn) {
+            syncBtn.disabled = !hasRead || teleoping || absRamping;
+            syncBtn.textContent = syncing ? t('arm.unsync') : t('arm.sync');
+            syncBtn.classList.toggle('arm-sync-on', syncing);
+            syncBtn.dataset.enabled = syncing ? '1' : '0';
+          }
+          if (teleopBtn) {
+            teleopBtn.disabled = !hasRead || syncing || absRamping;
+            teleopBtn.textContent = teleoping ? t('arm.unteelop') : t('arm.teleop');
+            teleopBtn.classList.toggle('arm-teleop-on', teleoping);
+            teleopBtn.dataset.enabled = teleoping ? '1' : '0';
+          }
+          if (syncProg) {
+            if (sync.phase === 'ramping' && sync.ramp_n) {
+              const left = Math.max(0, (Number(sync.ramp_n) - Number(sync.ramp_index || 0)) / 5);
+              syncProg.textContent =
+                'ramping ' + (sync.ramp_index || 0) + '/' + sync.ramp_n +
+                ' · round ' + (sync.round || 1) +
+                ' · ~' + left.toFixed(1) + 's · 目标已冻结';
+            } else if (sync.phase === 'verifying') {
+              syncProg.textContent = '校验中（不写臂）…';
+            } else if (sync.phase === 'completed') {
+              syncProg.textContent = '同步完成；gello 未控制机械臂';
+            } else if (sync.phase === 'error' && sync.last_error) {
+              syncProg.textContent = '失败：' + sync.last_error;
+            } else if (sync.message) {
+              syncProg.textContent = String(sync.message);
+            } else {
+              syncProg.textContent = 'gello→arm：空闲（完成后 gello 不控臂）';
+            }
           }
           if (absProg) {
             const hz = Number(absRamp.hz) || 5;
@@ -3987,18 +4005,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
               absProg.textContent = t('arm.abs_idle');
             }
           }
-          if (teleop.phase === 'teleop' || teleoping) {
-            teleopProg.textContent = teleop.message || (
-              teleop.rate_limited
-                ? ('限速中 · ' + (teleop.hz || '?') + ' Hz')
-                : ('摇操中 · ' + (teleop.hz || '?') + ' Hz · 已写 ' + (teleop.write_count || 0))
-            );
-          } else if (teleop.phase === 'error' && teleop.last_error) {
-            teleopProg.textContent = '失败：' + teleop.last_error;
-          } else if (teleop.message) {
-            teleopProg.textContent = String(teleop.message);
-          } else {
-            teleopProg.textContent = '摇操：空闲（gello 不控臂）';
+          if (teleopProg) {
+            if (teleop.phase === 'teleop' || teleoping) {
+              teleopProg.textContent = teleop.message || (
+                teleop.rate_limited
+                  ? ('限速中 · ' + (teleop.hz || '?') + ' Hz')
+                  : ('摇操中 · ' + (teleop.hz || '?') + ' Hz · 已写 ' + (teleop.write_count || 0))
+              );
+            } else if (teleop.phase === 'error' && teleop.last_error) {
+              teleopProg.textContent = '失败：' + teleop.last_error;
+            } else if (teleop.message) {
+              teleopProg.textContent = String(teleop.message);
+            } else {
+              teleopProg.textContent = '摇操：空闲（gello 不控臂）';
+            }
           }
         };
         armBtn.addEventListener('click', async () => {
@@ -4029,7 +4049,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             runHint.textContent = t('arm.estop_err', { error: e });
           }
         });
-        syncBtn.addEventListener('click', async () => {
+        if (syncBtn) syncBtn.addEventListener('click', async () => {
           const want = syncBtn.dataset.enabled !== '1';
           syncBtn.disabled = true;
           try {
@@ -4066,7 +4086,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             box._applyArmUi(!!p.armed);
           }
         });
-        teleopBtn.addEventListener('click', async () => {
+        if (teleopBtn) teleopBtn.addEventListener('click', async () => {
           const want = teleopBtn.dataset.enabled !== '1';
           teleopBtn.disabled = true;
           try {
@@ -4310,6 +4330,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
           return;
         }
         ['collect', 'infer'].forEach((scope) => {
+          // Shared YAML: Collect hides pi05; Infer hides gello.
+          if (scope === 'collect' && frame.kind === 'pi05') return;
+          if (scope === 'infer' && frame.kind === 'gello') return;
           const card = ensureStateCard(frame.agent_id, scope);
           if (!card) return;
           if (frame.kind === 'gripper_read') {
@@ -4321,6 +4344,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
           } else if (frame.kind === 'arm_read') {
             renderArmRead(card, frame, hzText);
           } else {
+            // gello / unknown — Collect only until Infer grows a dedicated renderer (P2 pi05).
+            if (scope === 'infer') return;
             renderGello(card, frame, hzText);
           }
         });
@@ -4513,6 +4538,8 @@ def create_viz_app(
             "authRequired": auth_enabled(),
             "boot_error": err is not None,
             "collect_ok": err is None,
+            # Infer is independent of gello/collect boot lock (shared YAML).
+            "infer_ok": True,
         }
 
     @app.get("/api/auth/status")
@@ -4740,6 +4767,8 @@ def create_viz_app(
         else:
             payload.setdefault("boot_error", False)
             payload.setdefault("collect_ok", True)
+        # Infer tab stays reachable even when Collect is locked (no gello / agent open fail).
+        payload["infer_ok"] = True
         return payload
 
     @app.get("/api/record/status")
@@ -5005,6 +5034,7 @@ def create_error_app(
             "ok": False,
             "boot_error": True,
             "collect_ok": False,
+            "infer_ok": True,
             "error": err,
             "config_path": cfg,
             "agents": [],
