@@ -215,9 +215,43 @@ class Orchestrator:
                 f"next_state={ns}  term={out.get('term_flag')} reject={out.get('reject_flag')}",
                 flush=True,
             )
+            # serve next_state is TCP xyzrpy(+grip); convert to joints before arm write.
+            ik = self._next_state_to_joints(ns)
+            out["next_joints_rad"] = ik.get("joints_rad")
+            out["ik_ok"] = bool(ik.get("ok"))
+            out["ik_error"] = ik.get("error")
+            if ik.get("ok"):
+                print(
+                    f"[sensors-dcs] pi05 IK ok  next_joints_rad={ik.get('joints_rad')}",
+                    flush=True,
+                )
+            else:
+                print(f"[sensors-dcs] pi05 IK failed: {ik.get('error')}", flush=True)
         else:
             print(f"[sensors-dcs] pi05 step failed: {out.get('error')}", flush=True)
+            out.setdefault("next_joints_rad", None)
+            out.setdefault("ik_ok", False)
+            out.setdefault("ik_error", out.get("error"))
         return out
+
+    def _next_state_to_joints(self, next_state: Any) -> dict[str, Any]:
+        """IK TCP pose from pi05 ``next_state`` → arm ``joints_rad``."""
+        from sensors_dcs.agents.arm_agent import ArmAgent
+        from sensors_dcs.arm_pose import xyzrpy_to_joints_rad
+
+        if not isinstance(next_state, (list, tuple)) or len(next_state) < 6:
+            return {"ok": False, "error": "next_state missing xyzrpy[6]", "joints_rad": None}
+        readers = [a for a in self.agents.values() if isinstance(a, ArmAgent)]
+        if not readers:
+            return {"ok": False, "error": "no arm_read agent for IK seed", "joints_rad": None}
+        seed = self._joints6_from_ring(readers[0])
+        if seed is None:
+            return {
+                "ok": False,
+                "error": "no live arm joints for IK seed",
+                "joints_rad": None,
+            }
+        return xyzrpy_to_joints_rad(list(next_state)[:6], q_seed_rad=seed)
 
     def start(self) -> None:
         for agent in self.agents.values():

@@ -1443,7 +1443,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <div class="inf-pi05-row">
         <button type="button" class="primary" id="infPi05Step" data-i18n="infer.step" disabled>单步调试</button>
         <button type="button" id="infPi05Loop" data-i18n="infer.loop" disabled>LOOP</button>
-        <label for="infArmJoints" class="arm-abs-label" data-i18n="arm.abs_label" data-i18n-title="infer.joints_tip" title="单步调试后回填 next_state；下发前 6 个数为 joints_rad">joints</label>
+        <label for="infArmJoints" class="arm-abs-label" data-i18n="arm.abs_label" data-i18n-title="infer.joints_tip" title="单步后 IK(next_state→joints) 回填；下发为 joints_rad">joints</label>
         <input type="text" id="infArmJoints" class="inf-arm-joints" data-i18n-placeholder="arm.abs_ph" placeholder="0.00,0.00,0.00,0.00,0.00,0.00" autocomplete="off" spellcheck="false" />
         <button type="button" id="infArmSend" data-i18n="arm.abs_send">下发</button>
         <label class="arm-abs-dur" data-i18n-title="arm.abs_dur_hint" title="1–300（100ms–30s）">
@@ -2267,6 +2267,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
         latency_ms: p.latency_ms,
         robot_state: p.robot_state,
         next_state: p.next_state,
+        next_joints_rad: p.next_joints_rad,
+        ik_ok: p.ik_ok,
+        ik_error: p.ik_error,
         term_flag: p.term_flag,
         reject_flag: p.reject_flag,
         server_text: p.server_text,
@@ -2339,11 +2342,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (e.target === infPi05RawModal) closePi05RawModal();
       });
     }
-    function fillInfArmJointsFromNextState(nextState) {
-      if (!infArmJoints || !Array.isArray(nextState) || nextState.length < 1) return false;
+    function fillInfArmJointsFromStep(r) {
+      if (!infArmJoints || !r) return false;
+      const joints = r.next_joints_rad;
+      if (!r.ik_ok || !Array.isArray(joints) || joints.length < 6) return false;
       const vals = [];
-      for (let i = 0; i < nextState.length; i++) {
-        const v = Number(nextState[i]);
+      for (let i = 0; i < 6; i++) {
+        const v = Number(joints[i]);
         if (!Number.isFinite(v)) return false;
         vals.push(v.toFixed(4));
       }
@@ -2485,8 +2490,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
     async function runInfPi05StepOnce() {
       if (infPi05Hint) infPi05Hint.textContent = t('infer.hint_stepping');
       const r = await postPi05('/api/pi05/step', {});
-      if (r && r.ok && fillInfArmJointsFromNextState(r.next_state)) {
+      if (r && r.ok && fillInfArmJointsFromStep(r)) {
         if (infArmProg) infArmProg.textContent = t('infer.joints_filled');
+      } else if (r && r.ok && r.ik_ok === false) {
+        if (infArmProg) {
+          infArmProg.textContent = t('infer.ik_fail', {
+            error: r.ik_error || 'IK failed',
+          });
+        }
       }
       return r;
     }
@@ -2598,6 +2609,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
             await stopPi05Loop(t('infer.hint_loop_reject', { n: n }));
             return;
           }
+          if (!stepRes.ik_ok || !Array.isArray(stepRes.next_joints_rad)) {
+            const err = stepRes.ik_error || t('infer.ik_fail', { error: 'no next_joints_rad' });
+            showAppModal(t('infer.ik_fail_title'), err);
+            await stopPi05Loop(t('infer.ik_fail', { error: err }));
+            return;
+          }
+          if (!fillInfArmJointsFromStep(stepRes)) {
+            const err = t('infer.ik_fail', { error: 'bad next_joints_rad' });
+            showAppModal(t('infer.ik_fail_title'), err);
+            await stopPi05Loop(err);
+            return;
+          }
           let sendRes;
           try {
             sendRes = await sendInfArmJointsOnce();
@@ -2638,8 +2661,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (infPi05Loop) infPi05Loop.disabled = true;
         try {
           const r = await runInfPi05StepOnce();
-          if (r && r.ok) {
+          if (r && r.ok && r.ik_ok) {
             if (infPi05Hint) infPi05Hint.textContent = t('infer.joints_filled');
+          } else if (r && r.ok && r.ik_ok === false) {
+            if (infPi05Hint) {
+              infPi05Hint.textContent = t('infer.ik_fail', {
+                error: r.ik_error || 'IK failed',
+              });
+            }
           }
         } finally {
           pi05StepBusy = false;
