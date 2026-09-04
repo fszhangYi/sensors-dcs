@@ -1024,6 +1024,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <div class="pp-row">
             <label for="ppEpisode" data-i18n="pp.path">路径</label>
             <input type="text" class="wide" id="ppEpisode" placeholder="D:\\data_new\\episode_00016" />
+            <button type="button" id="btnPpBrowseEpisode" data-i18n="pp.browse">浏览…</button>
           </div>
           <div class="pp-row">
             <label class="quick-collect"><input type="checkbox" id="ppAllowInvalid" /> <span data-i18n="pp.allow_invalid">allow-invalid（作废 episode 也导出）</span></label>
@@ -1088,6 +1089,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <div class="pp-row">
             <label for="ppCameraMap">camera-map</label>
             <input type="text" class="wide" id="ppCameraMap" data-i18n-placeholder="pp.camera_map_ph" placeholder="路径到 hik_camera_map.yaml" />
+            <button type="button" id="btnPpBrowseCameraMap" data-i18n="pp.browse">浏览…</button>
           </div>
           <div class="pp-actions">
             <button type="button" id="btnPpHik" data-i18n="pp.run3">运行 Step 3</button>
@@ -1649,7 +1651,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
       rootKey: 'workspace',
       rootPath: '',
       pathKind: 'file',
+      target: 'config',
     };
+
+    async function ensureSettingsRoots() {
+      if (Object.keys(settingsRoots).length) return;
+      try {
+        const j = await fetch('/api/fs/roots', { credentials: 'same-origin', cache: 'no-store' }).then((r) => r.json());
+        if (j && j.ok && j.roots) {
+          settingsRoots = j.roots;
+          return;
+        }
+      } catch (e) {}
+      await refreshSettingsConfig();
+    }
 
     function setSettingsMsg(el, text, isErr) {
       if (!el) return;
@@ -1990,13 +2005,30 @@ PREVIEW_HTML = """<!DOCTYPE html>
       renderPathPicker();
     }
 
-    async function openPathPicker() {
+    async function openPathPicker(opts) {
       const overlay = document.getElementById('pathPickerOverlay');
       if (!overlay) return;
-      if (!Object.keys(settingsRoots).length) {
-        await refreshSettingsConfig();
+      opts = opts || {};
+      const target = opts.target || 'config';
+      const pathKind = opts.pathKind || (target === 'episode' ? 'dir' : 'file');
+      const titleKey = opts.titleKey || (
+        target === 'episode' ? 'pathPicker.titleEpisode'
+          : (target === 'cameraMap' ? 'pathPicker.titleCameraMap' : 'pathPicker.title')
+      );
+      await ensureSettingsRoots();
+      let seed = opts.seed;
+      if (seed == null || seed === '') {
+        if (target === 'episode') {
+          seed = (ppEpisode && ppEpisode.value) || '';
+        } else if (target === 'cameraMap') {
+          seed = (ppCameraMap && ppCameraMap.value) || '';
+        } else {
+          seed = (settingsConfigPath && settingsConfigPath.value)
+            || (settingsConfigCurrent && settingsConfigCurrent.textContent)
+            || '';
+          if (seed === '—') seed = '';
+        }
       }
-      const seed = (settingsConfigPath && settingsConfigPath.value) || (settingsConfigCurrent && settingsConfigCurrent.textContent) || '';
       // Sandbox root = parent of project root (settingsRoots.workspace). Do not
       // shrink it to the seed file's parent — that only drives cascade focus.
       let rootKey = 'workspace';
@@ -2015,13 +2047,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
         rootKey = 'configs';
         rootPath = settingsRoots.configs;
       }
+      pathPicker.target = target;
       pathPicker.rootKey = rootKey;
       pathPicker.rootPath = rootPath;
-      pathPicker.pathKind = 'file';
+      pathPicker.pathKind = pathKind;
       pathPicker.draft = seed || pathPicker.rootPath;
       pathPicker.activePath = pathPicker.draft;
       pathPicker.columns = [];
       pathPicker.err = '';
+      const titleEl = document.getElementById('pathPickerTitle');
+      if (titleEl) titleEl.textContent = t(titleKey);
+      const draftEl = document.getElementById('pathPickerDraft');
+      if (draftEl) {
+        draftEl.placeholder = t(pathKind === 'dir' ? 'pathPicker.dirPlaceholder' : 'pathPicker.filePlaceholder');
+      }
       overlay.classList.add('show');
       renderPathPicker();
       try {
@@ -2167,7 +2206,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     const btnSettingsBrowseConfig = document.getElementById('btnSettingsBrowseConfig');
     if (btnSettingsBrowseConfig) {
-      btnSettingsBrowseConfig.addEventListener('click', () => openPathPicker());
+      btnSettingsBrowseConfig.addEventListener('click', () => openPathPicker({ target: 'config', pathKind: 'file' }));
     }
     const btnSettingsApplyConfig = document.getElementById('btnSettingsApplyConfig');
     if (btnSettingsApplyConfig) {
@@ -2197,7 +2236,23 @@ PREVIEW_HTML = """<!DOCTYPE html>
     if (pathPickerConfirm) {
       pathPickerConfirm.addEventListener('click', () => {
         const val = (pathPicker.draft || (pathPickerDraft && pathPickerDraft.value) || '').trim();
-        if (settingsConfigPath) {
+        const target = pathPicker.target || 'config';
+        if (target === 'episode') {
+          if (ppEpisode) {
+            ppEpisode.value = val;
+            if (ppEpisodeSelect) {
+              ppEpisodeSelect.value = val;
+              if (ppEpisodeSelect.value !== val) ppEpisodeSelect.value = '';
+            }
+            savePpForm();
+            if (val) inspectSelectedEpisode(val);
+          }
+        } else if (target === 'cameraMap') {
+          if (ppCameraMap) {
+            ppCameraMap.value = val;
+            savePpForm();
+          }
+        } else if (settingsConfigPath) {
           settingsConfigPath.value = val;
           settingsConfigPath.dataset.touched = '1';
         }
@@ -2441,10 +2496,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
     });
     document.getElementById('btnPpRefresh').addEventListener('click', () => refreshEpisodeList());
+    const btnPpBrowseEpisode = document.getElementById('btnPpBrowseEpisode');
+    if (btnPpBrowseEpisode) {
+      btnPpBrowseEpisode.addEventListener('click', () => openPathPicker({ target: 'episode', pathKind: 'dir' }));
+    }
+    const btnPpBrowseCameraMap = document.getElementById('btnPpBrowseCameraMap');
+    if (btnPpBrowseCameraMap) {
+      btnPpBrowseCameraMap.addEventListener('click', () => openPathPicker({ target: 'cameraMap', pathKind: 'file' }));
+    }
 
     function setPpBusy(on, text) {
       ppBusy = !!on;
-      ['btnPpExport', 'btnPpFilter', 'btnPpHik', 'btnPpRunAll', 'btnPpRefresh'].forEach((id) => {
+      ['btnPpExport', 'btnPpFilter', 'btnPpHik', 'btnPpRunAll', 'btnPpRefresh', 'btnPpBrowseEpisode', 'btnPpBrowseCameraMap'].forEach((id) => {
         const b = document.getElementById(id);
         if (b) b.disabled = !!on;
       });
