@@ -2139,6 +2139,7 @@ def create_viz_app(
     gello_arm_teleop_status: Callable[[], dict[str, Any]] | None = None,
     shutdown: Callable[[], dict[str, Any]] | None = None,
     boot_error: str | None = None,
+    boot_box: dict[str, Any] | None = None,
     config_path: str | None = None,
     postprocess_save_dir: str | None = None,
 ) -> FastAPI:
@@ -2162,6 +2163,15 @@ def create_viz_app(
 
     init_auth()
     app = FastAPI(title="sensors-dcs viz", version="0.1.0")
+
+    def _current_boot_error() -> str | None:
+        """Static boot_error or mutable boot_box['error'] (agent open may fail after UI is up)."""
+        if boot_box is not None:
+            err = boot_box.get("error")
+            if err is None or err is False:
+                return None
+            return str(err)
+        return boot_error
 
     from pathlib import Path
 
@@ -2209,11 +2219,12 @@ def create_viz_app(
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
+        err = _current_boot_error()
         return {
-            "ok": boot_error is None,
+            "ok": err is None,
             "authRequired": auth_enabled(),
-            "boot_error": boot_error is not None,
-            "collect_ok": boot_error is None,
+            "boot_error": err is not None,
+            "collect_ok": err is None,
         }
 
     @app.get("/api/auth/status")
@@ -2269,11 +2280,12 @@ def create_viz_app(
             payload = dict(status_fn() or {})
         except Exception as exc:  # noqa: BLE001
             payload = {"ok": False, "error": str(exc)}
-        if boot_error is not None:
+        err = _current_boot_error()
+        if err is not None:
             payload.setdefault("ok", False)
             payload["boot_error"] = True
             payload["collect_ok"] = False
-            payload["error"] = boot_error
+            payload["error"] = err
             if config_path is not None:
                 payload["config_path"] = config_path
         else:
@@ -2283,7 +2295,7 @@ def create_viz_app(
 
     @app.get("/api/record/status")
     async def record_status() -> dict[str, Any]:
-        if boot_error is not None:
+        if _current_boot_error() is not None:
             return {
                 "ok": False,
                 "error": "collect unavailable (boot error)",
@@ -2297,7 +2309,7 @@ def create_viz_app(
 
     @app.post("/api/record/start")
     async def record_start() -> dict[str, Any]:
-        if boot_error is not None:
+        if _current_boot_error() is not None:
             return {"ok": False, "error": "collect unavailable (boot error)", "state": "idle"}
         if recorder is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
@@ -2305,7 +2317,7 @@ def create_viz_app(
 
     @app.post("/api/record/stop")
     async def record_stop(request: Request) -> dict[str, Any]:
-        if boot_error is not None:
+        if _current_boot_error() is not None:
             return {"ok": False, "error": "collect unavailable (boot error)", "state": "idle"}
         if recorder is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
@@ -2332,7 +2344,7 @@ def create_viz_app(
 
     @app.post("/api/record/save_dir")
     async def record_save_dir(req: SaveDirBody) -> dict[str, Any]:
-        if boot_error is not None:
+        if _current_boot_error() is not None:
             return {"ok": False, "error": "collect unavailable (boot error)", "state": "idle"}
         if recorder is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
@@ -2345,7 +2357,7 @@ def create_viz_app(
         from sensors_dcs.postprocess_service import postprocess_defaults as _defaults
 
         save_dir = postprocess_save_dir
-        if recorder is not None and boot_error is None:
+        if recorder is not None and _current_boot_error() is None:
             try:
                 save_dir = recorder.status().get("save_dir") or save_dir
             except Exception:  # noqa: BLE001

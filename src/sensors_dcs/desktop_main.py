@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
 import traceback
 from typing import Any
 
@@ -166,6 +167,9 @@ def main(argv: list[str] | None = None) -> None:
 
     orch._uvicorn_exit = lambda: setattr(shutdown_box.get("server"), "should_exit", True) if shutdown_box.get("server") is not None else None
 
+    # UI first: agent open() may hang or raise under dry_run=false; Collect stays
+    # locked via boot_box until start succeeds.
+    boot_box: dict[str, Any] = {"error": "agents starting…"}
     app = create_viz_app(
         orch.hub,
         orch.status,
@@ -179,34 +183,29 @@ def main(argv: list[str] | None = None) -> None:
         gello_arm_teleop=orch.set_gello_arm_teleop,
         gello_arm_teleop_status=orch.gello_arm_teleop_status,
         shutdown=_shutdown,
+        boot_box=boot_box,
+        config_path=str(cfg_path),
+        postprocess_save_dir=str(orch.recorder.save_dir),
     )
     orch.cfg.runtime.viz_port = port
-    try:
-        orch.start()
-    except Exception as e:  # noqa: BLE001
-        boot_error = f"{e}\n\n{traceback.format_exc()}"
-        print(f"[sensors-dcs] start error (UI will show details):\n{e}", flush=True)
-        app = create_error_app(
-            error=boot_error,
-            config_path=str(cfg_path),
-            shutdown=_error_shutdown,
-        )
-        if not open_ui:
-            print(f"[sensors-dcs] start error (headless): {boot_error.splitlines()[0]}", flush=True)
-            print(f"[sensors-dcs] details at {url} — run with --ui to open automatically", flush=True)
-        serve_app_blocking(
-            app,
-            host=host,
-            port=port,
-            open_ui=open_ui,
-            attach_server=lambda s: shutdown_box.__setitem__("server", s),
-        )
-        return
 
-    print(
-        f"[sensors-dcs] site={orch.cfg.site} dry_run={orch.manager.ctx.dry_run}",
-        flush=True,
-    )
+    def _boot_agents() -> None:
+        try:
+            orch.start()
+            boot_box["error"] = None
+            print(
+                f"[sensors-dcs] site={orch.cfg.site} dry_run={orch.manager.ctx.dry_run}",
+                flush=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            boot_box["error"] = f"{e}\n\n{traceback.format_exc()}"
+            print(
+                f"[sensors-dcs] agent boot failed (UI stays up; Collect locked):\n{e}",
+                flush=True,
+            )
+
+    threading.Thread(target=_boot_agents, name="sensors-dcs-agent-boot", daemon=True).start()
+
     if not open_ui:
         print(f"[sensors-dcs] headless backend at {url}", flush=True)
         print("[sensors-dcs] open the URL in a browser, or restart with --ui", flush=True)

@@ -1304,8 +1304,17 @@ class Orchestrator:
         return {"ok": False, "error": "arm, disarm/stop, joints_rad, or jog_joint required"}
 
     def serve(self) -> None:
-        """Blocking: start agents + uvicorn viz server until SIGINT."""
+        """Blocking: bring viz UI up first, then open agents; SIGINT stops both.
+
+        Agent ``open()`` failures (common with ``dry_run: false`` / missing HW SDK)
+        must not kill the process — postprocess UI stays up and Collect stays locked
+        via mutable ``boot_box``.
+        """
+        import traceback
+
         rt = self.cfg.runtime
+        # Locked until agents start successfully (or permanently on open failure).
+        boot_box: dict[str, Any] = {"error": "agents starting…"}
         app = create_viz_app(
             self.hub,
             self.status,
@@ -1319,6 +1328,8 @@ class Orchestrator:
             gello_arm_teleop=self.set_gello_arm_teleop,
             gello_arm_teleop_status=self.gello_arm_teleop_status,
             shutdown=self.request_shutdown,
+            boot_box=boot_box,
+            postprocess_save_dir=str(self.recorder.save_dir),
         )
         self._server = uvicorn.Server(
             uvicorn.Config(
@@ -1336,18 +1347,49 @@ class Orchestrator:
             if self._server is not None:
                 self._server.should_exit = True
 
-        signal.signal(signal.SIGINT, _handle_sig)
-        signal.signal(signal.SIGTERM, _handle_sig)
+        try:
+            signal.signal(signal.SIGINT, _handle_sig)
+            signal.signal(signal.SIGTERM, _handle_sig)
+        except ValueError:
+            # signal handlers only work in the main thread (e.g. unit tests)
+            pass
 
-        self.start()
+        server_thread = threading.Thread(
+            target=self._server.run, name="sensors-dcs-uvicorn", daemon=True
+        )
+        server_thread.start()
+        deadline = time.time() + 20.0
+        while not getattr(self._server, "started", False) and time.time() < deadline:
+            if self._stop.is_set() or self._server.should_exit:
+                break
+            time.sleep(0.05)
+
         print(
             f"[sensors-dcs] site={self.cfg.site} dry_run={self.manager.ctx.dry_run} "
             f"viz=http://{rt.viz_host}:{rt.viz_port}/ "
             f"save_dir={self.recorder.save_dir} episode={self.recorder.episode_index}",
             flush=True,
         )
+
         try:
-            self._server.run()
+            self.start()
+            boot_box["error"] = None
+        except Exception as e:  # noqa: BLE001
+            boot_box["error"] = f"{e}\n\n{traceback.format_exc()}"
+            print(
+                f"[sensors-dcs] agent boot failed (UI stays up; Collect locked):\n{e}",
+                flush=True,
+            )
+
+        try:
+            while server_thread.is_alive() and not self._stop.is_set():
+                if self._server.should_exit:
+                    break
+                time.sleep(0.2)
         finally:
-            self.stop()
+            if not self._stop.is_set():
+                self.stop()
+            if self._server is not None:
+                self._server.should_exit = True
+            server_thread.join(timeout=5.0)
             print("[sensors-dcs] stopped", flush=True)
