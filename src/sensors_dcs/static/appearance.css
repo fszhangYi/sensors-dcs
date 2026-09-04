@@ -374,3 +374,13 @@ html[data-theme='light'] .settings-gear-btn:hover {
   color: var(--accent);
   background: var(--surface-3);
 }
+
+html[data-theme='light'] .sensors-page,
+html[data-theme='light'] .sensors-embed,
+html[data-theme='light'] .sensors-unreachable {
+  background: var(--bg);
+}
+
+html[data-theme='light'] .settings-sensors-status-fail {
+  color: var(--danger);
+}

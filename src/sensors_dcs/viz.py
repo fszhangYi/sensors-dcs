@@ -504,6 +504,58 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     #tab-post.active,
     #tab-home.active { overflow-y: auto; }
+    #tab-sensors.active {
+      gap: 0;
+      overflow: hidden;
+      padding: 0;
+    }
+    .sensors-page {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      background: var(--bg);
+    }
+    .sensors-embed {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      display: block;
+      background: var(--bg);
+    }
+    .sensors-unreachable {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 24px;
+      text-align: center;
+      background: var(--bg);
+    }
+    .sensors-unreachable-title {
+      margin: 0;
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .sensors-unreachable-msg {
+      margin: 0;
+      max-width: 36rem;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    .sensors-unreachable-url {
+      margin: 8px 0 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.72rem;
+      word-break: break-all;
+      color: var(--muted);
+    }
     .home-grid {
       display: grid;
       gap: 0.75rem;
@@ -954,6 +1006,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     <button type="button" class="tab active" id="tabBtnHome" data-tab="home" role="tab" aria-selected="true" data-i18n="tab.home">主页</button>
     <button type="button" class="tab" id="tabBtnCollect" data-tab="collect" role="tab" aria-selected="false" data-i18n="tab.collect">数据采集</button>
     <button type="button" class="tab" id="tabBtnPost" data-tab="post" role="tab" aria-selected="false" data-i18n="tab.post">数据后处理</button>
+    <button type="button" class="tab" id="tabBtnSensors" data-tab="sensors" role="tab" aria-selected="false" data-i18n="tab.sensors">传感器状态</button>
   </nav>
   <div class="boot-banner" id="bootBanner" role="alert" hidden>
     <strong data-i18n="boot.banner_title">配置错误 — 仅后处理可用</strong>
@@ -995,8 +1048,27 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <div class="pp-actions">
             <button type="button" class="primary" id="btnHomeCollect" data-i18n="home.cta_collect">进入数据采集</button>
             <button type="button" id="btnHomePost" data-i18n="home.cta_post">进入数据后处理</button>
+            <button type="button" id="btnHomeSensors" data-i18n="home.cta_sensors">传感器状态</button>
           </div>
         </section>
+      </div>
+    </div>
+
+    <div class="tab-panel" id="tab-sensors" role="tabpanel">
+      <div class="sensors-page" id="sensorsPage">
+        <iframe
+          class="sensors-embed"
+          id="sensorsEmbedFrame"
+          title="sensors-view"
+          allow="fullscreen; clipboard-read; clipboard-write"
+          referrerpolicy="no-referrer-when-downgrade"
+          hidden
+        ></iframe>
+        <div class="sensors-unreachable" id="sensorsUnreachable" role="status" hidden>
+          <p class="sensors-unreachable-title" data-i18n="settings.sensors.statusFail">不可达</p>
+          <p class="sensors-unreachable-msg" id="sensorsUnreachableMsg" data-i18n="settings.sensors.unreachableHint">地址不可达时，「传感器状态」入口会置灰，无法打开。</p>
+          <p class="sensors-unreachable-url" id="sensorsUnreachableUrl"></p>
+        </div>
       </div>
     </div>
 
@@ -1161,6 +1233,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <span class="settings-nav-label" data-i18n="settings.tabs.language.label">语言</span>
             <span class="settings-nav-hint" data-i18n="settings.tabs.language.hint">界面中英</span>
           </button>
+          <button type="button" class="settings-nav-item" id="settingsNavSensors" data-settings-tab="sensors">
+            <span class="settings-nav-label" data-i18n="settings.tabs.sensors.label">传感器</span>
+            <span class="settings-nav-hint" data-i18n="settings.tabs.sensors.hint">sensors-view 嵌入地址</span>
+          </button>
           <button type="button" class="settings-nav-item" id="settingsNavAuth" data-settings-tab="auth">
             <span class="settings-nav-label" data-i18n="settings.tabs.auth.label">鉴权</span>
             <span class="settings-nav-hint" data-i18n="settings.tabs.auth.hint">会话与退出</span>
@@ -1237,6 +1313,29 @@ PREVIEW_HTML = """<!DOCTYPE html>
               <div class="settings-seg" role="group" data-i18n-attr="aria-label" data-i18n="settings.lang_label" aria-label="界面语言">
                 <button type="button" class="settings-seg-btn active" data-locale="zh" data-i18n="lang.zh">中文</button>
                 <button type="button" class="settings-seg-btn" data-locale="en" data-i18n="lang.en">EN</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="settings-panel" id="settingsPanelSensors" data-settings-panel="sensors" role="tabpanel">
+          <h3 class="settings-panel-title" data-i18n="settings.tabs.sensors.label">传感器</h3>
+          <div class="settings-row settings-row-stack">
+            <div class="settings-row-text">
+              <div class="settings-row-title">
+                <span data-i18n="settings.sensors.url">sensors-view 地址</span>
+                <span class="settings-badge" data-i18n="common.live">实时</span>
+              </div>
+              <p class="settings-row-desc" data-i18n="settings.sensors.urlDesc">「传感器状态」页通过 iframe 嵌入此 URL。修改后自动写入本机，并立即探测可达性；不可达时导航入口置灰。</p>
+            </div>
+            <div class="settings-row-control">
+              <div class="settings-sensors-control">
+                <input type="url" id="settingsSensorsUrl" class="settings-users-input" data-i18n-placeholder="settings.sensors.urlPlaceholder" placeholder="https://host:8443/" spellcheck="false" autocomplete="off" />
+                <div class="settings-sensors-meta">
+                  <span class="settings-sensors-status" id="settingsSensorsStatus"></span>
+                  <button type="button" class="settings-ghost-btn settings-sensors-ping" id="btnSettingsSensorsPing" data-i18n="settings.sensors.ping">重新探测</button>
+                </div>
+                <p class="settings-sensors-saved" id="settingsSensorsSaved" hidden data-i18n="settings.sensors.saved">已保存到本机</p>
+                <p class="settings-sensors-hint" data-i18n="settings.sensors.unreachableHint">地址不可达时，「传感器状态」入口会置灰，无法打开。</p>
               </div>
             </div>
           </div>
@@ -1389,6 +1488,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const tc = document.getElementById('tabBtnCollect');
         if (b && b.disabled) b.title = t('boot.collect_title');
         if (tc && tc.disabled) tc.title = t('boot.collect_title');
+      } catch (e) {}
+      try {
+        if (typeof pushSensorsEmbedPrefs === 'function') pushSensorsEmbedPrefs();
+        if (typeof syncSensorsEmbedStatusUi === 'function') syncSensorsEmbedStatusUi();
+        if (typeof applySensorsGate === 'function') applySensorsGate();
       } catch (e) {}
     }
     document.querySelectorAll('.settings-seg-btn[data-locale]').forEach((btn) => {
@@ -1606,9 +1710,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const tabBtnHome = document.getElementById('tabBtnHome');
     const tabBtnCollect = document.getElementById('tabBtnCollect');
     const tabBtnPost = document.getElementById('tabBtnPost');
+    const tabBtnSensors = document.getElementById('tabBtnSensors');
     const tabHome = document.getElementById('tab-home');
     const tabCollect = document.getElementById('tab-collect');
     const tabPost = document.getElementById('tab-post');
+    const tabSensors = document.getElementById('tab-sensors');
     const bootBanner = document.getElementById('bootBanner');
     const bootBannerPath = document.getElementById('bootBannerPath');
     const bootBannerErr = document.getElementById('bootBannerErr');
@@ -1627,6 +1733,213 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const ppLog = document.getElementById('ppLog');
     let ppBusy = false;
     let collectOk = true;
+
+    const SENSORS_EMBED_URL_KEY = 'sensors-dcs.sensorsEmbedUrl';
+    const DEFAULT_SENSORS_EMBED_URL = 'https://uu658526-m86b-7fdc269f.weste.seetacloud.com:8443/';
+    let sensorsEmbed = {
+      url: DEFAULT_SENSORS_EMBED_URL,
+      reachability: 'unknown',
+      reachMessage: '',
+      canPing: false,
+      pingSeq: 0,
+      mountedBase: '',
+    };
+    const sensorsEmbedFrame = document.getElementById('sensorsEmbedFrame');
+    const sensorsUnreachable = document.getElementById('sensorsUnreachable');
+    const sensorsUnreachableMsg = document.getElementById('sensorsUnreachableMsg');
+    const sensorsUnreachableUrl = document.getElementById('sensorsUnreachableUrl');
+    const settingsSensorsUrl = document.getElementById('settingsSensorsUrl');
+    const settingsSensorsStatus = document.getElementById('settingsSensorsStatus');
+    const settingsSensorsSaved = document.getElementById('settingsSensorsSaved');
+    let sensorsUrlDraftTimer = null;
+
+    function normalizeSensorsEmbedUrl(raw) {
+      const trimmed = String(raw || '').trim();
+      if (!trimmed) return DEFAULT_SENSORS_EMBED_URL;
+      let withProto = trimmed;
+      if (!/^https?:[/][/]/i.test(withProto)) withProto = 'https://' + withProto;
+      try {
+        const u = new URL(withProto);
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') return DEFAULT_SENSORS_EMBED_URL;
+        const path = (u.pathname === '/' || u.pathname === '') ? '/' : u.pathname.replace(/[/]?$/, '/');
+        return u.origin + path;
+      } catch (e) {
+        return DEFAULT_SENSORS_EMBED_URL;
+      }
+    }
+    function sensorsEmbedOrigin(url) {
+      try { return new URL(normalizeSensorsEmbedUrl(url)).origin; }
+      catch (e) { return new URL(DEFAULT_SENSORS_EMBED_URL).origin; }
+    }
+    function readStoredSensorsEmbedUrl() {
+      try {
+        const raw = localStorage.getItem(SENSORS_EMBED_URL_KEY);
+        if (raw && raw.trim()) return normalizeSensorsEmbedUrl(raw);
+      } catch (e) {}
+      return DEFAULT_SENSORS_EMBED_URL;
+    }
+    function persistSensorsEmbedUrl(url) {
+      const normalized = normalizeSensorsEmbedUrl(url);
+      try { localStorage.setItem(SENSORS_EMBED_URL_KEY, normalized); } catch (e) {}
+      return normalized;
+    }
+    function buildSensorsEmbedSrc(baseUrl) {
+      const u = new URL(normalizeSensorsEmbedUrl(baseUrl));
+      u.searchParams.set('locale', currentLocale === 'en' ? 'en' : 'zh');
+      u.searchParams.set('theme', (appearancePrefs && appearancePrefs.theme) || 'dark');
+      return u.toString();
+    }
+    function pushSensorsEmbedPrefs() {
+      if (!sensorsEmbedFrame || !sensorsEmbedFrame.contentWindow) return;
+      const origin = sensorsEmbedOrigin(sensorsEmbed.url);
+      try {
+        sensorsEmbedFrame.contentWindow.postMessage({
+          source: 'sensors-view-host',
+          type: 'embed-prefs',
+          locale: currentLocale === 'en' ? 'en' : 'zh',
+          theme: (appearancePrefs && appearancePrefs.theme) || 'dark',
+        }, origin);
+      } catch (e) {}
+    }
+    function syncSensorsEmbedStatusUi() {
+      if (settingsSensorsStatus) {
+        const map = {
+          ok: 'settings.sensors.statusOk',
+          fail: 'settings.sensors.statusFail',
+          checking: 'settings.sensors.statusChecking',
+          unknown: 'settings.sensors.statusUnknown',
+        };
+        const key = map[sensorsEmbed.reachability] || map.unknown;
+        let label = t(key);
+        if (sensorsEmbed.reachMessage) label = label + ' · ' + sensorsEmbed.reachMessage;
+        settingsSensorsStatus.textContent = label;
+        settingsSensorsStatus.className = 'settings-sensors-status'
+          + (sensorsEmbed.reachability === 'ok' ? ' settings-sensors-status-ok' : '')
+          + (sensorsEmbed.reachability === 'fail' ? ' settings-sensors-status-fail' : '')
+          + (sensorsEmbed.reachability === 'checking' ? ' settings-sensors-status-checking' : '');
+      }
+      if (settingsSensorsUrl && document.activeElement !== settingsSensorsUrl) {
+        settingsSensorsUrl.value = sensorsEmbed.url;
+      }
+      const unreachable = sensorsEmbed.reachability === 'fail';
+      if (sensorsEmbedFrame) sensorsEmbedFrame.hidden = unreachable;
+      if (sensorsUnreachable) sensorsUnreachable.hidden = !unreachable;
+      if (unreachable) {
+        if (sensorsUnreachableMsg) {
+          sensorsUnreachableMsg.textContent = sensorsEmbed.reachMessage || t('settings.sensors.unreachableHint');
+        }
+        if (sensorsUnreachableUrl) sensorsUnreachableUrl.textContent = sensorsEmbed.url;
+      }
+    }
+    function applySensorsGate() {
+      const blocked = sensorsEmbed.reachability === 'fail';
+      if (tabBtnSensors) {
+        tabBtnSensors.classList.toggle('tab-locked', blocked);
+        tabBtnSensors.disabled = blocked;
+        tabBtnSensors.setAttribute('aria-disabled', blocked ? 'true' : 'false');
+        tabBtnSensors.title = blocked ? t('settings.sensors.unreachableHint') : '';
+      }
+      const homeBtn = document.getElementById('btnHomeSensors');
+      if (homeBtn) {
+        homeBtn.disabled = blocked;
+        homeBtn.setAttribute('aria-disabled', blocked ? 'true' : 'false');
+        homeBtn.title = blocked ? t('settings.sensors.unreachableHint') : '';
+      }
+      if (blocked && tabSensors && tabSensors.classList.contains('active')) {
+        switchTab('home');
+      }
+      syncSensorsEmbedStatusUi();
+    }
+    function ensureSensorsIframeMounted() {
+      if (sensorsEmbed.reachability === 'fail') {
+        syncSensorsEmbedStatusUi();
+        return;
+      }
+      if (!sensorsEmbedFrame) return;
+      const base = normalizeSensorsEmbedUrl(sensorsEmbed.url);
+      if (sensorsEmbed.mountedBase !== base) {
+        sensorsEmbed.mountedBase = base;
+        sensorsEmbedFrame.src = buildSensorsEmbedSrc(base);
+      }
+      sensorsEmbedFrame.hidden = false;
+      if (sensorsUnreachable) sensorsUnreachable.hidden = true;
+    }
+    async function pingSensorsEmbed() {
+      if (!sensorsEmbed.canPing) {
+        sensorsEmbed.reachability = 'unknown';
+        sensorsEmbed.reachMessage = '';
+        applySensorsGate();
+        return false;
+      }
+      const seq = ++sensorsEmbed.pingSeq;
+      sensorsEmbed.reachability = 'checking';
+      sensorsEmbed.reachMessage = '';
+      syncSensorsEmbedStatusUi();
+      const pingBtn = document.getElementById('btnSettingsSensorsPing');
+      if (pingBtn) {
+        pingBtn.disabled = true;
+        pingBtn.textContent = t('settings.sensors.pinging');
+      }
+      try {
+        const qs = new URLSearchParams({ url: sensorsEmbed.url });
+        const r = await fetch('/api/sensors-view/ping?' + qs.toString(), {
+          cache: 'no-store',
+          credentials: 'same-origin',
+        });
+        const j = await r.json().catch(() => ({ ok: false, message: 'HTTP ' + r.status }));
+        if (seq !== sensorsEmbed.pingSeq) return false;
+        if (j && j.ok) {
+          sensorsEmbed.reachability = 'ok';
+          sensorsEmbed.reachMessage = j.message || '';
+          applySensorsGate();
+          return true;
+        }
+        sensorsEmbed.reachability = 'fail';
+        sensorsEmbed.reachMessage = (j && (j.message || j.error)) || 'unreachable';
+        applySensorsGate();
+        return false;
+      } catch (e) {
+        if (seq !== sensorsEmbed.pingSeq) return false;
+        sensorsEmbed.reachability = 'fail';
+        sensorsEmbed.reachMessage = String(e.message || e);
+        applySensorsGate();
+        return false;
+      } finally {
+        if (pingBtn) {
+          pingBtn.disabled = false;
+          pingBtn.textContent = t('settings.sensors.ping');
+        }
+      }
+    }
+    function setSensorsEmbedUrl(next) {
+      const saved = persistSensorsEmbedUrl(next);
+      const changed = saved !== sensorsEmbed.url;
+      sensorsEmbed.url = saved;
+      if (settingsSensorsUrl) settingsSensorsUrl.value = saved;
+      if (settingsSensorsSaved) {
+        settingsSensorsSaved.hidden = false;
+        setTimeout(() => { if (settingsSensorsSaved) settingsSensorsSaved.hidden = true; }, 1600);
+      }
+      if (changed) sensorsEmbed.mountedBase = '';
+      pingSensorsEmbed();
+    }
+    sensorsEmbed.url = readStoredSensorsEmbedUrl();
+    if (settingsSensorsUrl) settingsSensorsUrl.value = sensorsEmbed.url;
+    window.addEventListener('message', (event) => {
+      const want = sensorsEmbedOrigin(sensorsEmbed.url);
+      if (event.origin !== want) return;
+      const data = event.data;
+      if (!data || data.source !== 'sensors-view') return;
+      if (data.type !== 'embed-ready' && data.type !== 'embed-request-prefs') return;
+      try {
+        event.source.postMessage({
+          source: 'sensors-view-host',
+          type: 'embed-prefs',
+          locale: currentLocale === 'en' ? 'en' : 'zh',
+          theme: (appearancePrefs && appearancePrefs.theme) || 'dark',
+        }, event.origin);
+      } catch (e) {}
+    });
 
     function applyCollectGate(ok, info) {
       collectOk = !!ok;
@@ -1661,19 +1974,26 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (runHint) runHint.textContent = t('boot.collect_locked');
         return;
       }
-      const which = (name === 'collect' || name === 'post' || name === 'home') ? name : 'home';
+      if (name === 'sensors' && sensorsEmbed.reachability === 'fail') {
+        return;
+      }
+      const which = (name === 'collect' || name === 'post' || name === 'home' || name === 'sensors') ? name : 'home';
       tabBtnHome.classList.toggle('active', which === 'home');
       tabBtnCollect.classList.toggle('active', which === 'collect');
       tabBtnPost.classList.toggle('active', which === 'post');
+      if (tabBtnSensors) tabBtnSensors.classList.toggle('active', which === 'sensors');
       tabBtnHome.setAttribute('aria-selected', which === 'home' ? 'true' : 'false');
       tabBtnCollect.setAttribute('aria-selected', which === 'collect' ? 'true' : 'false');
       tabBtnPost.setAttribute('aria-selected', which === 'post' ? 'true' : 'false');
+      if (tabBtnSensors) tabBtnSensors.setAttribute('aria-selected', which === 'sensors' ? 'true' : 'false');
       tabHome.classList.toggle('active', which === 'home');
       tabCollect.classList.toggle('active', which === 'collect');
       tabPost.classList.toggle('active', which === 'post');
+      if (tabSensors) tabSensors.classList.toggle('active', which === 'sensors');
       // Embody convention: Settings gear only on the home overview.
       const gear = document.getElementById('btnSettings');
       if (gear) gear.hidden = which !== 'home';
+      if (which === 'sensors') ensureSensorsIframeMounted();
     }
     tabBtnHome.addEventListener('click', () => switchTab('home'));
     tabBtnCollect.addEventListener('click', () => switchTab('collect'));
@@ -1681,8 +2001,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
       switchTab('post');
       refreshEpisodeList();
     });
+    if (tabBtnSensors) tabBtnSensors.addEventListener('click', () => switchTab('sensors'));
     const btnHomeCollect = document.getElementById('btnHomeCollect');
     const btnHomePost = document.getElementById('btnHomePost');
+    const btnHomeSensors = document.getElementById('btnHomeSensors');
     if (btnHomeCollect) {
       btnHomeCollect.addEventListener('click', () => switchTab('collect'));
     }
@@ -1691,6 +2013,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
         switchTab('post');
         refreshEpisodeList();
       });
+    }
+    if (btnHomeSensors) {
+      btnHomeSensors.addEventListener('click', () => switchTab('sensors'));
     }
     // Default landing tab after login: home
     switchTab('home');
@@ -1703,11 +2028,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const btnSettingsDone = document.getElementById('btnSettingsDone');
     const settingsNavAppearance = document.getElementById('settingsNavAppearance');
     const settingsNavLanguage = document.getElementById('settingsNavLanguage');
+    const settingsNavSensors = document.getElementById('settingsNavSensors');
     const settingsNavAuth = document.getElementById('settingsNavAuth');
     const settingsNavConfig = document.getElementById('settingsNavConfig');
     const settingsNavUsers = document.getElementById('settingsNavUsers');
     const settingsPanelAppearance = document.getElementById('settingsPanelAppearance');
     const settingsPanelLanguage = document.getElementById('settingsPanelLanguage');
+    const settingsPanelSensors = document.getElementById('settingsPanelSensors');
     const settingsPanelAuth = document.getElementById('settingsPanelAuth');
     const settingsPanelConfig = document.getElementById('settingsPanelConfig');
     const settingsPanelUsers = document.getElementById('settingsPanelUsers');
@@ -1755,11 +2082,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
 
     function switchSettingsTab(name) {
-      const allowed = { appearance: 1, language: 1, auth: 1, config: 1, users: 1 };
+      const allowed = { appearance: 1, language: 1, sensors: 1, auth: 1, config: 1, users: 1 };
       const which = allowed[name] ? name : 'appearance';
       const navs = {
         appearance: settingsNavAppearance,
         language: settingsNavLanguage,
+        sensors: settingsNavSensors,
         auth: settingsNavAuth,
         config: settingsNavConfig,
         users: settingsNavUsers,
@@ -1767,6 +2095,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const panels = {
         appearance: settingsPanelAppearance,
         language: settingsPanelLanguage,
+        sensors: settingsPanelSensors,
         auth: settingsPanelAuth,
         config: settingsPanelConfig,
         users: settingsPanelUsers,
@@ -1851,6 +2180,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       applyAppearance(appearancePrefs);
       syncAppearanceControls();
       bindAppearanceMedia();
+      try { if (typeof pushSensorsEmbedPrefs === 'function') pushSensorsEmbedPrefs(); } catch (e) {}
     }
     function bindAppearanceMedia() {
       if (appearanceMedia) {
@@ -1862,7 +2192,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
       appearanceMedia.addEventListener('change', onAppearanceMediaChange);
     }
     function onAppearanceMediaChange() {
-      if (appearancePrefs.theme === 'system') applyAppearance(appearancePrefs);
+      if (appearancePrefs.theme === 'system') {
+        applyAppearance(appearancePrefs);
+        try { if (typeof pushSensorsEmbedPrefs === 'function') pushSensorsEmbedPrefs(); } catch (e) {}
+      }
     }
     appearancePrefs = readStoredAppearance();
     applyAppearance(appearancePrefs);
@@ -1904,6 +2237,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (settingsUsersNonAdmin) settingsUsersNonAdmin.hidden = !required || isAdmin;
         const btnLogout = document.getElementById('btnSettingsLogout');
         if (btnLogout) btnLogout.style.display = required ? '' : 'none';
+        const nextCanPing = !required || authed;
+        if (nextCanPing !== sensorsEmbed.canPing) {
+          sensorsEmbed.canPing = nextCanPing;
+          if (nextCanPing) pingSensorsEmbed();
+          else applySensorsGate();
+        } else if (nextCanPing && sensorsEmbed.reachability === 'unknown') {
+          pingSensorsEmbed();
+        }
         return j;
       } catch (e) {
         setSettingsMsg(settingsAuthMsg, String(e), true);
@@ -2355,6 +2696,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     if (settingsNavAppearance) settingsNavAppearance.addEventListener('click', () => switchSettingsTab('appearance'));
     if (settingsNavLanguage) settingsNavLanguage.addEventListener('click', () => switchSettingsTab('language'));
+    if (settingsNavSensors) {
+      settingsNavSensors.addEventListener('click', () => {
+        switchSettingsTab('sensors');
+        syncSensorsEmbedStatusUi();
+      });
+    }
     if (settingsNavAuth) settingsNavAuth.addEventListener('click', () => switchSettingsTab('auth'));
     if (settingsNavConfig) {
       settingsNavConfig.addEventListener('click', async () => {
@@ -2368,6 +2715,25 @@ PREVIEW_HTML = """<!DOCTYPE html>
         await refreshSettingsAuth();
         await refreshSettingsUsers();
       });
+    }
+    if (settingsSensorsUrl) {
+      settingsSensorsUrl.addEventListener('input', () => {
+        if (sensorsUrlDraftTimer) clearTimeout(sensorsUrlDraftTimer);
+        sensorsUrlDraftTimer = setTimeout(() => {
+          const next = normalizeSensorsEmbedUrl(settingsSensorsUrl.value);
+          if (next !== sensorsEmbed.url) setSensorsEmbedUrl(settingsSensorsUrl.value);
+        }, 450);
+      });
+      settingsSensorsUrl.addEventListener('blur', () => {
+        if (sensorsUrlDraftTimer) clearTimeout(sensorsUrlDraftTimer);
+        const next = normalizeSensorsEmbedUrl(settingsSensorsUrl.value);
+        settingsSensorsUrl.value = next;
+        if (next !== sensorsEmbed.url) setSensorsEmbedUrl(next);
+      });
+    }
+    const btnSettingsSensorsPing = document.getElementById('btnSettingsSensorsPing');
+    if (btnSettingsSensorsPing) {
+      btnSettingsSensorsPing.addEventListener('click', () => pingSensorsEmbed());
     }
     document.querySelectorAll('#settingsThemeSeg [data-theme-pref]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -2508,6 +2874,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const ok = j.collect_ok !== false && !j.boot_error;
       applyCollectGate(ok, j);
     }).catch(() => {});
+    refreshSettingsAuth().catch(() => {});
+    if (sensorsEmbedFrame) sensorsEmbedFrame.title = t('sensors.title');
 
     function readPpForm() {
       const hz = parseFloat(ppMasterHz.value);
@@ -3788,6 +4156,12 @@ def create_viz_app(
         from sensors_dcs.fs_browse import browse_roots
 
         return {"ok": True, "roots": browse_roots()}
+
+    @app.get("/api/sensors-view/ping")
+    async def sensors_view_ping(url: str = "") -> dict[str, Any]:
+        from sensors_dcs.sensors_embed import ping_sensors_view
+
+        return ping_sensors_view(url)
 
     @app.get("/api/fs/children")
     async def fs_children(
