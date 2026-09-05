@@ -180,6 +180,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
   <link rel="stylesheet" href="/assets/fonts/ibm-plex-sans.css" />
   <link rel="stylesheet" href="/assets/settings.css" />
   <link rel="stylesheet" href="/assets/appearance.css" />
+  <script src="/assets/vendor/three.min.js"></script>
   <style>
     :root,
     html[data-theme='dark'] {
@@ -591,6 +592,66 @@ PREVIEW_HTML = """<!DOCTYPE html>
     #tab-infer.active {
       overflow-y: auto;
       overflow-x: hidden;
+    }
+    .inf-split {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(16rem, 0.85fr);
+      gap: 0.75rem;
+      align-items: stretch;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    .inf-split-main {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+      min-width: 0;
+      min-height: 0;
+    }
+    .inf-split-pose {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      min-width: 0;
+      min-height: 18rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--panel) 88%, #000 12%);
+      padding: 0.55rem 0.65rem 0.65rem;
+    }
+    .inf-split-pose h2 {
+      margin: 0;
+      font-size: 0.92rem;
+      font-weight: 600;
+    }
+    .inf-pose-canvas-wrap {
+      position: relative;
+      flex: 1 1 auto;
+      min-height: 14rem;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #0b1018;
+    }
+    #infPoseCanvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    .inf-pose-hud {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.72rem;
+      color: var(--muted);
+      line-height: 1.35;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    @media (max-width: 1100px) {
+      .inf-split {
+        grid-template-columns: 1fr;
+      }
+      .inf-split-pose {
+        min-height: 16rem;
+      }
     }
     .content-row {
       flex: 1 1 auto;
@@ -1465,6 +1526,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     </div>
 
     <div class="tab-panel" id="tab-infer" role="tabpanel">
+    <div class="inf-split">
+    <div class="inf-split-main">
     <p class="inf-banner" data-i18n="infer.banner">推理页与采集共用录制；可手动下发 joints（单步调试回填 next_state）。</p>
     <div class="inf-pi05-panel" id="infPi05Panel">
       <div class="inf-pi05-row">
@@ -1570,6 +1633,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <div id="infAgents"></div>
     </div>
     <pre id="infRaw">{}</pre>
+    </div>
+    <aside class="inf-split-pose" aria-label="End-effector pose">
+      <h2 data-i18n="infer.pose_title">末端位姿</h2>
+      <div class="inf-pose-canvas-wrap"><canvas id="infPoseCanvas"></canvas></div>
+      <div class="inf-pose-hud" id="infPoseHud" data-i18n="infer.pose_idle">等待 arm · Read…</div>
+    </aside>
+    </div>
     </div>
 
 
@@ -2656,6 +2726,116 @@ PREVIEW_HTML = """<!DOCTYPE html>
     function sleepMs(ms) {
       return new Promise((resolve) => setTimeout(resolve, ms));
     }
+    (function initInfPoseViz() {
+      const canvas = document.getElementById('infPoseCanvas');
+      const hud = document.getElementById('infPoseHud');
+      if (!canvas || typeof THREE === 'undefined') {
+        if (hud) hud.textContent = t('infer.pose_idle');
+        return;
+      }
+      const wrap = canvas.parentElement;
+      const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: false });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setClearColor(0x0b1018, 1);
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 20);
+      camera.position.set(0.55, 0.45, 0.75);
+      camera.lookAt(0.3, 0.0, 0.2);
+      scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+      const grid = new THREE.GridHelper(1.2, 12, 0x3dd6c6, 0x1c2736);
+      grid.position.y = 0;
+      scene.add(grid);
+      const axes = new THREE.AxesHelper(0.25);
+      scene.add(axes);
+      const marker = new THREE.Mesh(
+        new THREE.SphereGeometry(0.025, 20, 20),
+        new THREE.MeshStandardMaterial({ color: 0xf0b429, emissive: 0x6a4a10, metalness: 0.2, roughness: 0.45 }),
+      );
+      const tipAxes = new THREE.AxesHelper(0.1);
+      marker.add(tipAxes);
+      scene.add(marker);
+      scene.add(new THREE.DirectionalLight(0xffffff, 0.55));
+      const trailGeom = new THREE.BufferGeometry();
+      const trailMax = 120;
+      const trailPos = new Float32Array(trailMax * 3);
+      trailGeom.setAttribute('position', new THREE.BufferAttribute(trailPos, 3));
+      trailGeom.setDrawRange(0, 0);
+      const trail = new THREE.Line(
+        trailGeom,
+        new THREE.LineBasicMaterial({ color: 0x3dd6c6, transparent: true, opacity: 0.65 }),
+      );
+      scene.add(trail);
+      let trailN = 0;
+      let trailI = 0;
+      function resize() {
+        if (!wrap) return;
+        const w = Math.max(1, wrap.clientWidth || canvas.clientWidth || 320);
+        const h = Math.max(1, wrap.clientHeight || 240);
+        renderer.setSize(w, h, false);
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+      }
+      function pushTrail(x, y, z) {
+        trailPos[trailI * 3] = x;
+        trailPos[trailI * 3 + 1] = y;
+        trailPos[trailI * 3 + 2] = z;
+        trailI = (trailI + 1) % trailMax;
+        trailN = Math.min(trailMax, trailN + 1);
+        // Rebuild contiguous order for Line (simple ring → copy)
+        const ordered = new Float32Array(trailN * 3);
+        for (let k = 0; k < trailN; k++) {
+          const src = (trailI - trailN + k + trailMax) % trailMax;
+          ordered[k * 3] = trailPos[src * 3];
+          ordered[k * 3 + 1] = trailPos[src * 3 + 1];
+          ordered[k * 3 + 2] = trailPos[src * 3 + 2];
+        }
+        trailGeom.setAttribute('position', new THREE.BufferAttribute(ordered, 3));
+        trailGeom.setDrawRange(0, trailN);
+        trailGeom.attributes.position.needsUpdate = true;
+      }
+      function fmt(v) {
+        const n = Number(v);
+        return Number.isFinite(n) ? n.toFixed(3) : '—';
+      }
+      function setPose(xyzrpy) {
+        if (!Array.isArray(xyzrpy) || xyzrpy.length < 6) {
+          if (hud) hud.textContent = t('infer.pose_idle');
+          return;
+        }
+        const x = Number(xyzrpy[0]);
+        const y = Number(xyzrpy[1]);
+        const z = Number(xyzrpy[2]);
+        const rx = Number(xyzrpy[3]);
+        const ry = Number(xyzrpy[4]);
+        const rz = Number(xyzrpy[5]);
+        if (![x, y, z, rx, ry, rz].every(Number.isFinite)) {
+          if (hud) hud.textContent = t('infer.pose_idle');
+          return;
+        }
+        marker.position.set(x, y, z);
+        marker.rotation.set(rx, ry, rz, 'XYZ');
+        pushTrail(x, y, z);
+        if (hud) {
+          hud.textContent = t('infer.pose_hud', {
+            x: fmt(x), y: fmt(y), z: fmt(z),
+            rx: fmt(rx), ry: fmt(ry), rz: fmt(rz),
+          });
+        }
+      }
+      function tick() {
+        renderer.render(scene, camera);
+        requestAnimationFrame(tick);
+      }
+      window.__updateInfPoseViz = setPose;
+      window.__resizeInfPoseViz = resize;
+      resize();
+      if (typeof ResizeObserver !== 'undefined' && wrap) {
+        new ResizeObserver(() => resize()).observe(wrap);
+      }
+      window.addEventListener('resize', resize);
+      if (window.__armReadCartesian) setPose(window.__armReadCartesian);
+      tick();
+    })();
     function parseInfArmJoints6() {
       const raw = ((infArmJoints && infArmJoints.value) || '').trim();
       const parts = raw.split(/[,\s;]+/).filter(Boolean);
@@ -3380,6 +3560,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const gear = document.getElementById('btnSettings');
       if (gear) gear.hidden = which !== 'home';
       if (which === 'sensors') ensureSensorsIframeMounted();
+      if (which === 'infer' && typeof window.__resizeInfPoseViz === 'function') {
+        requestAnimationFrame(() => window.__resizeInfPoseViz());
+      }
     }
     tabBtnHome.addEventListener('click', () => switchTab('home'));
     tabBtnCollect.addEventListener('click', () => switchTab('collect'));
@@ -4829,6 +5012,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       window.__armReadJoints = joints;
       window.__armReadCartesian = p.cartesian_xyzrpy || null;
       window.__armReadAgentId = frame.agent_id;
+      if (typeof window.__updateInfPoseViz === 'function') {
+        window.__updateInfPoseViz(window.__armReadCartesian);
+      }
       const root = ensureValsRoot(card);
       const cmd = card.querySelector('.grip-cmd');
       if (cmd) cmd.remove();
