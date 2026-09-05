@@ -238,7 +238,8 @@ Disconnect → idle
 
 ### 6.2 后处理（二期，本计划只留接口）
 
-- 新文档 / 命令：例如 `export-pi05-dataset`（名称待定）  
+- **用法与飞轮建设**：见 [`pi05-infer-flywheel.md`](pi05-infer-flywheel.md)  
+- 新命令（待实现）：例如 `export-pi05-dataset`  
 - 输入：episode（传感器 + pi05 决策）  
 - 输出：与当前 `serve` 训练分布一致的样本（时间对齐、action 定义、图像打包）  
 - **不阻塞** 首版 Tab + client 合并。
