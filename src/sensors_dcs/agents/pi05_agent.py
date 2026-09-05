@@ -383,6 +383,7 @@ class Pi05ClientAgent(BaseAgent):
             connected = self._connected
             host = self._host
             port = self._port
+            camera_map = dict(self._camera_map)
         payload = {
             "connected": connected,
             "host": host,
@@ -399,6 +400,7 @@ class Pi05ClientAgent(BaseAgent):
             "ok": ok,
             "error": error,
             "jpeg_lens": jpeg_lens,
+            "camera_map": camera_map,
         }
         frame = Frame(
             sensor_id=self.sensor_id,
