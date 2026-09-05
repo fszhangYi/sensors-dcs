@@ -1,34 +1,15 @@
 /* Preferences modal — VS Code / Linear style placeholders */
 
 .settings-gear-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 30px;
-  min-height: 30px;
-  padding: 0 10px;
-  box-sizing: border-box;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--chrome);
-  color: var(--text);
-  font: inherit;
-  font-size: 0.72rem;
-  line-height: 1;
-  vertical-align: middle;
-  cursor: pointer;
-  transition:
-    border-color 140ms ease,
-    color 140ms ease,
-    background 140ms ease,
-    transform 140ms ease;
+  /* inherits unified `button` from viz shell */
+  height: var(--btn-h, 2rem);
+  min-height: var(--btn-h, 2rem);
+  padding: 0 var(--btn-pad-x, 0.85rem);
+  font-size: var(--btn-fs, 0.82rem);
 }
 
 .settings-gear-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--surface-3);
+  color: var(--text);
 }
 
 .settings-gear-btn:active {
@@ -107,16 +88,18 @@
 .settings-close {
   width: 32px;
   height: 32px;
+  min-height: 32px;
+  padding: 0;
   border-radius: 8px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted, #8b9bb4);
   font-size: 1.35rem;
   line-height: 1;
-  cursor: pointer;
+  box-shadow: none;
 }
 
-.settings-close:hover {
+.settings-close:hover:not(:disabled) {
   color: var(--text, #e7ecf3);
   border-color: rgba(58, 77, 102, 0.8);
   background: rgba(255, 255, 255, 0.03);
@@ -146,6 +129,8 @@
   align-items: flex-start;
   gap: 2px;
   width: 100%;
+  height: auto;
+  min-height: 0;
   padding: 9px 10px;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -153,11 +138,12 @@
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
+  box-shadow: none;
 }
 
-.settings-nav-item:hover {
+.settings-nav-item:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.03);
+  border-color: transparent;
 }
 
 .settings-nav-item.active {
@@ -294,6 +280,8 @@
 }
 
 .settings-seg-btn {
+  height: auto;
+  min-height: 0;
   border: 0;
   border-radius: 6px;
   padding: 5px 10px;
@@ -302,44 +290,24 @@
   font: inherit;
   font-size: 0.72rem;
   font-weight: 600;
-  cursor: pointer;
+  box-shadow: none;
+}
+
+.settings-seg-btn:hover:not(:disabled) {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text);
 }
 
 .settings-seg-btn.active {
   background: rgba(61, 214, 198, 0.16);
   color: #dffef8;
+  border-color: transparent;
 }
 
 .settings-ghost-btn,
 .settings-primary-btn {
-  font: inherit;
-  font-size: 0.76rem;
-  font-weight: 600;
-  border-radius: 8px;
-  cursor: pointer;
-}
-
-.settings-ghost-btn {
-  padding: 6px 12px;
-  border: 1px solid rgba(58, 77, 102, 0.9);
-  background: rgba(18, 26, 38, 0.8);
-  color: var(--text, #e7ecf3);
-}
-
-.settings-ghost-btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.settings-primary-btn {
-  padding: 7px 14px;
-  border: 1px solid rgba(61, 214, 198, 0.55);
-  background: linear-gradient(180deg, #1f4a45 0%, #163832 100%);
-  color: #dffef8;
-}
-
-.settings-primary-btn:hover {
-  border-color: #3dd6c6;
+  /* aliases of unified shell buttons */
 }
 
 .settings-pill {
@@ -888,25 +856,4 @@
 header .settings-gear-btn[hidden] { display: none !important; }
 .settings-panel { display: none; }
 .settings-panel.active { display: block; }
-.settings-users-table button,
-.settings-add button {
-  font: inherit;
-  font-size: 0.72rem;
-  font-weight: 600;
-  border-radius: 8px;
-  cursor: pointer;
-  padding: 6px 10px;
-  border: 1px solid rgba(58, 77, 102, 0.9);
-  background: rgba(18, 26, 38, 0.8);
-  color: var(--text, #e7ecf3);
-}
-.settings-users-table button:hover,
-.settings-add button:hover {
-  border-color: rgba(61, 214, 198, 0.55);
-}
-.settings-users-table button:disabled,
-.settings-add button:disabled,
-.settings-config-row button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
+/* table/add buttons inherit unified shell `button` */

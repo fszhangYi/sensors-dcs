@@ -220,6 +220,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
       --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
       --motion-fast: 160ms;
       --motion-med: 280ms;
+      --btn-h: 2rem;
+      --btn-radius: 8px;
+      --btn-pad-x: 0.85rem;
+      --btn-fs: 0.82rem;
       color-scheme: dark;
     }
     * { box-sizing: border-box; }
@@ -228,6 +232,104 @@ PREVIEW_HTML = """<!DOCTYPE html>
     *::-webkit-scrollbar-track { background: transparent; }
     *::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 999px; }
     *::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+    /* Shared action-button look (tabs / settings-nav / close icons keep their own rules). */
+    button {
+      appearance: none;
+      box-sizing: border-box;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.35rem;
+      height: var(--btn-h);
+      min-height: var(--btn-h);
+      padding: 0 var(--btn-pad-x);
+      border: 1px solid var(--border);
+      border-radius: var(--btn-radius);
+      background: var(--chrome);
+      color: var(--text);
+      font: inherit;
+      font-size: var(--btn-fs);
+      font-weight: 550;
+      line-height: 1;
+      cursor: pointer;
+      vertical-align: middle;
+      transition:
+        border-color var(--motion-fast) var(--motion-ease),
+        background var(--motion-fast) var(--motion-ease),
+        color var(--motion-fast) var(--motion-ease);
+    }
+    button:hover:not(:disabled) {
+      border-color: var(--accent);
+      background: var(--accent-dim);
+    }
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+    button.primary,
+    .settings-primary-btn,
+    .path-picker-btn.primary {
+      background: linear-gradient(120deg, var(--accent-dim), color-mix(in srgb, var(--spark-dim) 55%, var(--accent-dim)));
+      border-color: var(--accent);
+      color: var(--text);
+      box-shadow: 0 0 0 1px rgba(61, 214, 198, 0.12);
+    }
+    button.primary:hover:not(:disabled),
+    .settings-primary-btn:hover:not(:disabled),
+    .path-picker-btn.primary:hover:not(:disabled) {
+      border-color: var(--spark);
+    }
+    button.primary:disabled,
+    .settings-primary-btn:disabled {
+      opacity: 1;
+      color: var(--muted);
+      background: var(--chrome);
+      border-color: var(--border);
+      box-shadow: none;
+    }
+    button.danger {
+      background: color-mix(in srgb, var(--danger) 22%, var(--chrome));
+      border-color: var(--danger);
+      color: var(--text);
+    }
+    button.danger:hover:not(:disabled) {
+      border-color: #fca5a5;
+      background: color-mix(in srgb, var(--danger) 36%, var(--chrome));
+      color: #fff;
+    }
+    button.discard {
+      background: color-mix(in srgb, var(--spark) 18%, var(--chrome));
+      border-color: color-mix(in srgb, var(--spark) 55%, var(--border));
+      color: var(--text);
+    }
+    button.discard:hover:not(:disabled) {
+      border-color: var(--spark);
+      background: color-mix(in srgb, var(--spark) 28%, var(--chrome));
+    }
+    button.ghost {
+      height: auto;
+      min-height: 0;
+      padding: 0.15rem 0.4rem;
+      border-color: transparent;
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 500;
+      box-shadow: none;
+      opacity: 0.72;
+    }
+    button.ghost:hover:not(:disabled) {
+      opacity: 1;
+      color: var(--text);
+      border-color: var(--border);
+      background: color-mix(in srgb, var(--accent-dim) 55%, transparent);
+    }
+    .settings-ghost-btn,
+    .path-picker-btn.ghost,
+    .settings-gear-btn {
+      /* aliases → same as default button */
+    }
     html, body {
       height: 100%;
       overflow: hidden;
@@ -259,7 +361,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       background-size: 48px 48px;
       mask-image: radial-gradient(ellipse 70% 60% at 50% 20%, #000 20%, transparent 75%);
     }
-    header, .tabs, main, .modal-backdrop { position: relative; z-index: 1; }
+    header, .app-shell, .tabs, main, .modal-backdrop { position: relative; z-index: 1; }
     header {
       flex-shrink: 0;
       padding: 0.85rem 1.25rem 0.55rem;
@@ -299,27 +401,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       color: transparent;
     }
     header p { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.82rem; line-height: 1.45; }
-    header #btnExit {
-      flex-shrink: 0;
-      appearance: none;
-      border: 1px solid var(--danger);
-      background: color-mix(in srgb, var(--danger) 22%, var(--chrome));
-      color: var(--text);
-      font: inherit;
-      font-size: 0.85rem;
-      font-weight: 550;
-      padding: 0.45rem 1.15rem;
-      border-radius: 999px;
-      cursor: pointer;
-      margin-top: 0.15rem;
-      transition: border-color var(--motion-fast) var(--motion-ease), background var(--motion-fast) var(--motion-ease);
-    }
-    header #btnExit:hover {
-      border-color: #fca5a5;
-      background: color-mix(in srgb, var(--danger) 36%, var(--chrome));
-      color: #fff;
-    }
-    header #btnExit:disabled { opacity: 0.45; cursor: not-allowed; }
+    header #btnExit { flex-shrink: 0; margin-top: 0.15rem; }
     header .header-actions {
       display: flex;
       flex-direction: row;
@@ -384,58 +466,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
       flex-shrink: 0;
       display: flex; flex-wrap: wrap; gap: 0.55rem; align-items: center;
     }
-    .actions button,
-    .save-path button,
-    .pp-actions button,
-    .grip-cmd button,
-    .arm-cmd button {
-      appearance: none;
-      border: 1px solid var(--border);
-      background: var(--chrome);
-      color: var(--text);
-      font: inherit;
-      font-size: 0.85rem;
-      font-weight: 550;
-      padding: 0.42rem 1.05rem;
-      border-radius: 999px;
-      cursor: pointer;
-      transition: border-color var(--motion-fast) var(--motion-ease), background var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease);
-    }
-    .actions button:hover,
-    .save-path button:hover,
-    .pp-actions button:hover { border-color: var(--accent); background: var(--accent-dim); }
-    .actions button:disabled,
-    .pp-actions button:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-      pointer-events: none;
-    }
-    .actions button.primary,
-    .pp-actions button.primary {
-      background: linear-gradient(120deg, var(--accent-dim), color-mix(in srgb, var(--spark-dim) 55%, var(--accent-dim)));
-      border-color: var(--accent);
-      color: var(--text);
-      box-shadow: 0 0 0 1px rgba(61, 214, 198, 0.12);
-    }
-    .actions button.primary:hover,
-    .pp-actions button.primary:hover {
-      border-color: var(--spark);
-    }
-    .actions button.primary:disabled,
-    .pp-actions button.primary:disabled {
-      opacity: 1;
-      color: var(--muted);
-      background: var(--chrome);
-      border-color: var(--border);
-      box-shadow: none;
-      cursor: not-allowed;
-      pointer-events: none;
-    }
-    .actions button.primary:disabled:hover,
-    .pp-actions button.primary:disabled:hover {
-      border-color: var(--border);
-      background: var(--chrome);
-    }
     .actions .hint, .pp-actions .hint { color: var(--muted); font-size: 0.82rem; }
     .save-path {
       flex-shrink: 0;
@@ -486,7 +516,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       gap: 0.5rem;
       flex-shrink: 0;
     }
-    .agent-card h2, .pp-card h2, .cam-section h2 {
+    .agent-card h2, .pp-card h2 {
       margin: 0;
       font-size: 0.95rem;
       font-weight: 600;
@@ -500,43 +530,138 @@ PREVIEW_HTML = """<!DOCTYPE html>
     #status.st-connecting { color: var(--muted); }
     #status.st-reconnecting { color: var(--spark); }
     #status.st-error, #status.st-offline { color: var(--danger); }
-    button.danger {
-      background: color-mix(in srgb, var(--danger) 22%, var(--chrome));
-      border-color: var(--danger);
-      color: var(--text);
+    .app-shell {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: row;
+      align-items: stretch;
+      overflow: hidden;
     }
-    button.discard {
-      background: color-mix(in srgb, var(--spark) 18%, var(--chrome));
-      border-color: color-mix(in srgb, var(--spark) 55%, var(--border));
-      color: var(--text);
+    .app-stage {
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
     .tabs {
-      flex-shrink: 0;
+      --tabs-w-collapsed: 3.15rem;
+      --tabs-w-expanded: 10.5rem;
+      flex: 0 0 var(--tabs-w-collapsed);
+      width: var(--tabs-w-collapsed);
       display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+      padding: 0.45rem 0.35rem;
+      border-right: 1px solid var(--border);
+      border-bottom: 0;
+      background: linear-gradient(180deg, rgba(13, 19, 28, 0.96) 0%, rgba(11, 16, 24, 0.92) 100%);
+      overflow-x: hidden;
+      overflow-y: auto;
+      transition: flex-basis var(--motion-med) var(--motion-ease),
+        width var(--motion-med) var(--motion-ease);
+    }
+    .tabs.is-expanded {
+      flex-basis: var(--tabs-w-expanded);
+      width: var(--tabs-w-expanded);
+    }
+    .tabs-toggle {
+      flex: 0 0 auto;
+      align-self: stretch;
       gap: 0.4rem;
-      padding: 0.55rem 1.25rem 0.35rem;
-      border-bottom: 1px solid var(--border);
-      background: linear-gradient(180deg, rgba(11, 16, 24, 0.55), transparent);
+      height: 2rem;
+      min-height: 2rem;
+      margin: 0 0 0.25rem;
+      padding: 0 0.35rem;
+      color: var(--muted);
+      font-size: 0.72rem;
+    }
+    .tabs-toggle-ico {
+      display: inline-flex;
+      width: 1rem;
+      justify-content: center;
+      font-size: 0.85rem;
+      line-height: 1;
+      transition: transform var(--motion-med) var(--motion-ease);
+    }
+    .tabs.is-expanded .tabs-toggle-ico { transform: rotate(180deg); }
+    .tabs-toggle-label {
+      overflow: hidden;
+      white-space: nowrap;
+      max-width: 0;
+      opacity: 0;
+      transition: max-width var(--motion-med) var(--motion-ease),
+        opacity var(--motion-fast) var(--motion-ease);
+    }
+    .tabs.is-expanded .tabs-toggle-label {
+      max-width: 6rem;
+      opacity: 1;
     }
     .tabs button.tab {
-      appearance: none;
-      border: 1px solid var(--border);
+      flex: 0 0 auto;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 0.55rem;
+      height: auto;
+      min-height: 2.35rem;
+      border: 1px solid transparent;
       background: transparent;
       color: var(--muted);
-      font: inherit;
       font-size: 0.82rem;
-      font-weight: 550;
-      padding: 0.38rem 1rem;
-      border-radius: 999px;
-      cursor: pointer;
-      transition: background var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease);
+      padding: 0.35rem 0.4rem;
+      border-radius: 10px;
+      text-align: left;
+      box-shadow: none;
     }
-    .tabs button.tab:hover { color: var(--text); border-color: rgba(61, 214, 198, 0.4); }
+    .tabs button.tab .tab-ico {
+      flex: 0 0 1.55rem;
+      width: 1.55rem;
+      height: 1.55rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--chrome) 80%, transparent);
+      font-size: 0.72rem;
+      font-weight: 650;
+      line-height: 1;
+      color: var(--accent);
+    }
+    .tabs button.tab .tab-label {
+      overflow: hidden;
+      white-space: nowrap;
+      max-width: 0;
+      opacity: 0;
+      transition: max-width var(--motion-med) var(--motion-ease),
+        opacity var(--motion-fast) var(--motion-ease);
+    }
+    .tabs.is-expanded button.tab .tab-label {
+      max-width: 7rem;
+      opacity: 1;
+    }
+    .tabs button.tab:hover {
+      color: var(--text);
+      border-color: rgba(61, 214, 198, 0.35);
+      background: color-mix(in srgb, var(--accent-dim) 55%, transparent);
+    }
+    .tabs button.tab:hover .tab-ico {
+      border-color: rgba(61, 214, 198, 0.45);
+    }
     .tabs button.tab.active {
       color: var(--text);
       background: linear-gradient(90deg, var(--spark-dim), var(--accent-dim));
       border-color: rgba(61, 214, 198, 0.45);
       box-shadow: inset 0 0 0 1px rgba(61, 214, 198, 0.12);
+    }
+    .tabs button.tab.active .tab-ico {
+      background: color-mix(in srgb, var(--accent) 18%, var(--chrome));
+      border-color: rgba(61, 214, 198, 0.55);
+      color: var(--text);
     }
     .tabs button.tab.tab-locked,
     .tabs button.tab:disabled {
@@ -547,7 +672,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
     .tabs button.tab.tab-locked:hover,
     .tabs button.tab:disabled:hover {
       color: var(--muted);
-      border-color: var(--border);
+      border-color: transparent;
+      background: transparent;
+    }
+    .tabs:not(.is-expanded) button.tab {
+      justify-content: center;
+      padding: 0.35rem 0.2rem;
+    }
+    .tabs:not(.is-expanded) button.tab .tab-ico {
+      margin: 0 auto;
     }
     .boot-banner {
       flex-shrink: 0;
@@ -598,11 +731,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
       overflow-x: hidden;
     }
     #tab-infer.active {
+      position: relative;
       overflow: hidden;
-      gap: 0.5rem;
+      gap: 0;
     }
     .inf-subnav {
-      flex: 0 0 auto;
+      position: absolute;
+      top: 0.45rem;
+      right: 0.55rem;
+      z-index: 6;
       display: inline-flex;
       flex-wrap: wrap;
       gap: 0.3rem;
@@ -610,34 +747,33 @@ PREVIEW_HTML = """<!DOCTYPE html>
       padding: 0.15rem;
       border: 1px solid var(--border);
       border-radius: 10px;
-      background: color-mix(in srgb, var(--panel) 88%, transparent);
+      background: color-mix(in srgb, var(--surface, var(--panel)) 88%, transparent);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
       width: fit-content;
-      max-width: 100%;
+      max-width: calc(100% - 1.2rem);
+      pointer-events: auto;
     }
     .inf-subnav-btn {
-      appearance: none;
+      height: 1.85rem;
+      min-height: 1.85rem;
+      padding: 0 0.85rem;
       border: 1px solid transparent;
       background: transparent;
       color: var(--muted);
-      font: inherit;
-      font-size: 0.82rem;
-      font-weight: 550;
-      height: 1.85rem;
-      padding: 0 0.85rem;
-      border-radius: 8px;
-      cursor: pointer;
-      transition: color var(--motion-fast) var(--motion-ease),
-        background var(--motion-fast) var(--motion-ease),
-        border-color var(--motion-fast) var(--motion-ease);
+      box-shadow: none;
     }
-    .inf-subnav-btn:hover {
+    .inf-subnav-btn:hover:not(:disabled) {
       color: var(--text);
       border-color: var(--border);
+      background: color-mix(in srgb, var(--accent-dim) 70%, transparent);
     }
     .inf-subnav-btn.active {
       color: var(--text);
-      background: var(--accent-dim, color-mix(in srgb, var(--accent) 22%, transparent));
-      border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+      background: linear-gradient(90deg, var(--spark-dim), var(--accent-dim));
+      border-color: rgba(61, 214, 198, 0.45);
+      box-shadow: inset 0 0 0 1px rgba(61, 214, 198, 0.12);
     }
     .inf-page {
       display: none;
@@ -664,13 +800,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
     #infPageSensors .content-row {
       flex: 1 1 auto;
       min-height: 0;
-    }
-    .inf-page-sensors-bar {
-      flex: 0 0 auto;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.45rem;
-      align-items: center;
     }
     /* #infPi05Panel (narrow) + aside.inf-split-pose (flex) */
     .inf-split {
@@ -851,6 +980,40 @@ PREVIEW_HTML = """<!DOCTYPE html>
       display: grid;
       gap: 0.55rem;
     }
+    .pp-card.pp-card-hub {
+      display: block;
+      padding: 0.75rem;
+    }
+    .pp-hub {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1.1fr);
+      gap: 0.75rem;
+      align-items: stretch;
+    }
+    .pp-zone {
+      display: grid;
+      gap: 0.5rem;
+      min-width: 0;
+      padding: 0.55rem 0.7rem;
+      border-radius: 10px;
+      border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+      background: color-mix(in srgb, var(--chrome, var(--panel)) 55%, transparent);
+    }
+    .pp-zone h2,
+    .pp-zone h3 {
+      margin: 0;
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+    .pp-zone .pp-row label { min-width: 4.5rem; }
+    .pp-zone .pp-row input.wide { flex: 1 1 8rem; min-width: 6rem; }
+    .pp-zone #ppLog {
+      max-height: 12rem;
+      min-height: 4.5rem;
+    }
+    @media (max-width: 960px) {
+      .pp-hub { grid-template-columns: 1fr; }
+    }
     .pp-card .pp-hint {
       margin: 0;
       color: var(--muted);
@@ -887,25 +1050,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
       min-height: 5rem;
       white-space: pre-wrap;
     }
-    .collect-raw-bar {
-      flex: 0 0 auto;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.45rem;
-      align-items: center;
-    }
-    .inf-banner {
-      margin: 0;
-      padding: 0.45rem 0.65rem;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: var(--panel, rgba(18, 26, 38, 0.55));
-      color: var(--muted);
-      font-size: 0.82rem;
-    }
     .inf-pi05-panel {
       --inf-fs: 0.8125rem;
       --inf-ctrl-h: 1.85rem;
+      --btn-h: var(--inf-ctrl-h);
+      --btn-fs: var(--inf-fs);
+      --btn-pad-x: 0.65rem;
       flex-shrink: 0;
       margin: 0 0 0.65rem;
       padding: 0.55rem 0.65rem 0.65rem;
@@ -946,10 +1096,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
       align-items: center;
       min-height: var(--inf-ctrl-h);
     }
-    .inf-pi05-row.inf-pi05-hints {
-      min-height: 1.35rem;
-      align-items: flex-start;
-    }
     .inf-pi05-panel label,
     .inf-pi05-panel .inf-k,
     .inf-pi05-panel .hint,
@@ -959,12 +1105,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
       font-size: var(--inf-fs);
       font-weight: 500;
       margin: 0;
-    }
-    .inf-pi05-panel button {
-      font-size: var(--inf-fs);
-      height: var(--inf-ctrl-h);
-      padding: 0 0.65rem;
-      line-height: 1;
     }
     .inf-pi05-panel input[type="text"],
     .inf-pi05-panel input[type="number"] {
@@ -981,11 +1121,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
     #infPi05Port { width: 4.75rem; flex: 0 0 auto; }
     #infPi05Prompt { flex: 1 1 8rem; min-width: 6rem; }
     #infArmJoints {
-      flex: 1 1 100%;
-      min-width: 0;
-      width: 100%;
+      flex: 1 1 8rem;
+      min-width: 6rem;
+      width: auto;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: var(--inf-fs);
+    }
+    .inf-pi05-row:has(> .arm-abs-label) {
+      flex-wrap: nowrap;
+    }
+    .inf-pi05-row > .arm-abs-label {
+      flex: 0 0 auto;
+    }
+    .inf-pi05-row > #infArmSend {
+      flex: 0 0 auto;
     }
     .inf-pi05-panel .arm-abs-dur {
       display: inline-flex;
@@ -1010,13 +1159,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
       gap: 0.35rem 0.45rem;
       align-items: center;
       margin: 0;
-    }
-    .inf-pi05-panel .inf-rec-actions button {
-      border-radius: 8px;
-      padding: 0 0.65rem;
-      height: var(--inf-ctrl-h);
-      font-size: var(--inf-fs);
-      font-weight: 550;
     }
     .inf-pi05-panel .inf-rec-actions .quick-collect {
       display: inline-flex;
@@ -1046,16 +1188,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       width: auto;
       max-width: none;
     }
-    .inf-pi05-panel .inf-rec-save button {
-      flex: 0 0 auto;
-      border-radius: 8px;
-      padding: 0 0.65rem;
-      height: var(--inf-ctrl-h);
-      font-size: var(--inf-fs);
-    }
     .inf-pi05-panel .inf-rec-meta {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
       gap: 0.3rem 0.4rem;
       margin: 0;
       width: 100%;
@@ -1081,7 +1216,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
       text-overflow: ellipsis;
       font-size: 0.72rem;
     }
+    .inf-pi05-panel .inf-rec-meta > div:nth-child(1),
+    .inf-pi05-panel .inf-rec-meta > div:nth-child(2) { grid-column: span 3; }
     .inf-pi05-panel .inf-rec-meta > div:nth-child(3) { grid-column: 1 / -1; }
+    .inf-pi05-panel .inf-rec-meta > div:nth-child(n+4) { grid-column: span 2; }
     #infPi05Status {
       display: inline-flex;
       align-items: center;
@@ -1145,14 +1283,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
     .inf-dot.st-ok { background: var(--ok, #3dcc91); }
     .inf-dot.st-warn { background: var(--warn, #d4a017); }
     .inf-dot.st-bad { background: var(--danger, #e07070); }
-    #infPi05Panel button:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-    }
     #infPi05Hint,
-    #infArmProg {
-      flex: 1 1 10rem;
-      min-width: 8rem;
+    #infArmProg,
+    #infRunHint {
+      display: block;
+      flex: 0 0 auto;
+      min-width: 0;
       min-height: 1.35em;
       max-width: 100%;
       white-space: nowrap;
@@ -1195,7 +1331,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center;
       margin-top: 0.35rem;
     }
-    .arm-home-set-row button { font-size: 0.78rem; height: 1.7rem; padding: 0 0.55rem; }
+    .arm-home-set-row button { --btn-h: 1.7rem; --btn-fs: 0.78rem; --btn-pad-x: 0.55rem; }
     #infPi05Out { display: none; }
     .inf-pi05-raw-modal .modal-card,
     .inf-ws-raw-modal .modal-card {
@@ -1300,9 +1436,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
       margin-top: 0.55rem; font-size: 0.82rem;
     }
     .grip-cmd input { width: 7rem; }
-    .grip-cmd button {
-      background: var(--accent-dim); border-color: rgba(61, 214, 198, 0.4);
-    }
     .grip-cmd .cmd-hint { color: var(--muted); font-size: 0.75rem; }
     .arm-cmd {
       display: grid; gap: 0.45rem; margin-top: 0.55rem; font-size: 0.82rem;
@@ -1311,13 +1444,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center;
     }
     .arm-cmd input[type="range"] { width: 10rem; accent-color: var(--accent); }
-    .arm-cmd button {
-      background: var(--accent-dim); border-color: rgba(61, 214, 198, 0.4);
-    }
     .arm-cmd button.arm-estop {
       background: color-mix(in srgb, var(--danger) 28%, var(--chrome)); border-color: var(--danger);
     }
-    .arm-cmd button:disabled { opacity: 0.4; cursor: not-allowed; }
     .arm-cmd .arm-jog-row {
       display: grid; grid-template-columns: 2.8rem auto auto 1fr; gap: 0.4rem; align-items: center;
     }
@@ -1376,10 +1505,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .modal-card h3 { margin: 0 0 0.5rem; font-size: 1rem; font-weight: 600; }
     .modal-card p { margin: 0 0 0.85rem; color: var(--muted); font-size: 0.88rem; line-height: 1.45; white-space: pre-wrap; }
-    .modal-card button {
-      padding: 0.4rem 1rem; border-radius: 999px; border: 1px solid var(--accent);
-      background: var(--accent-dim); color: var(--text); cursor: pointer; font: inherit; font-weight: 550;
-    }
     .path-picker-overlay {
       position: fixed;
       inset: 0;
@@ -1413,15 +1538,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
       border-bottom: 1px solid var(--border);
     }
     .path-picker-head h3 { margin: 0; font-size: 0.95rem; }
-    .path-picker-close {
-      border: 0;
-      background: transparent;
-      color: var(--muted);
-      font-size: 1.4rem;
-      line-height: 1;
-      cursor: pointer;
-      padding: 0 4px;
-    }
     .path-picker-root {
       padding: 8px 16px;
       font-size: 0.7rem;
@@ -1511,23 +1627,21 @@ PREVIEW_HTML = """<!DOCTYPE html>
       gap: 8px;
       padding: 14px 16px 16px;
     }
-    .path-picker-btn {
-      border-radius: 8px;
-      padding: 8px 14px;
-      font: inherit;
-      font-size: 0.8rem;
-      cursor: pointer;
-    }
-    .path-picker-btn.ghost {
+    .path-picker-close {
+      height: auto;
+      min-height: 0;
+      padding: 0 4px;
+      border: 0;
       background: transparent;
-      border: 1px solid var(--border);
-      color: var(--text);
+      color: var(--muted);
+      font-size: 1.4rem;
+      line-height: 1;
+      box-shadow: none;
     }
-    .path-picker-btn.primary {
-      background: var(--accent-dim);
-      border: 1px solid var(--accent);
+    .path-picker-close:hover:not(:disabled) {
+      background: transparent;
+      border-color: transparent;
       color: var(--text);
-      font-weight: 550;
     }
     .cam-section {
       min-width: 0;
@@ -1536,14 +1650,27 @@ PREVIEW_HTML = """<!DOCTYPE html>
       flex-direction: column;
       overflow: hidden;
     }
-    .cam-section h2 {
+    .cam-section-head {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
       margin: 0 0 0.45rem;
       flex-shrink: 0;
+      min-width: 0;
+    }
+    .cam-section-head h2 {
+      margin: 0;
+      flex: 1 1 auto;
+      min-width: 0;
       letter-spacing: 0.04em;
       text-transform: uppercase;
       font-size: 0.72rem;
       color: var(--muted);
       font-weight: 600;
+    }
+    .cam-section-head .ghost {
+      flex: 0 0 auto;
+      margin-left: auto;
     }
     #cam-grid, #infCamGrid {
       flex: 1;
@@ -1617,13 +1744,34 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <button type="button" class="danger" id="btnExit" data-i18n="header.exit">安全退出</button>
     </div>
   </header>
-  <nav class="tabs" role="tablist">
-    <button type="button" class="tab active" id="tabBtnHome" data-tab="home" role="tab" aria-selected="true" data-i18n="tab.home">主页</button>
-    <button type="button" class="tab" id="tabBtnCollect" data-tab="collect" role="tab" aria-selected="false" data-i18n="tab.collect">数据采集</button>
-    <button type="button" class="tab" id="tabBtnInfer" data-tab="infer" role="tab" aria-selected="false" data-i18n="tab.infer">推理</button>
-    <button type="button" class="tab" id="tabBtnPost" data-tab="post" role="tab" aria-selected="false" data-i18n="tab.post">数据后处理</button>
-    <button type="button" class="tab" id="tabBtnSensors" data-tab="sensors" role="tab" aria-selected="false" data-i18n="tab.sensors">传感器状态</button>
+  <div class="app-shell">
+  <nav class="tabs" id="appTabs" role="tablist" aria-label="Tabs" data-i18n-attr="aria-label" data-i18n="nav.tabsAria">
+    <button type="button" class="tabs-toggle" id="tabsToggle" data-i18n-attr="aria-label" data-i18n="nav.tabsExpand" aria-label="展开导航" aria-expanded="false" aria-controls="appTabs">
+      <span class="tabs-toggle-ico" aria-hidden="true">›</span>
+      <span class="tabs-toggle-label" data-i18n="nav.tabsCollapse">收起</span>
+    </button>
+    <button type="button" class="tab" id="tabBtnSensors" data-tab="sensors" role="tab" aria-selected="false" title="传感器状态">
+      <span class="tab-ico" data-i18n="tab.ico.sensors" aria-hidden="true">感</span>
+      <span class="tab-label" data-i18n="tab.sensors">传感器状态</span>
+    </button>
+    <button type="button" class="tab active" id="tabBtnHome" data-tab="home" role="tab" aria-selected="true" title="主页">
+      <span class="tab-ico" data-i18n="tab.ico.home" aria-hidden="true">主</span>
+      <span class="tab-label" data-i18n="tab.home">主页</span>
+    </button>
+    <button type="button" class="tab" id="tabBtnCollect" data-tab="collect" role="tab" aria-selected="false" title="数据采集">
+      <span class="tab-ico" data-i18n="tab.ico.collect" aria-hidden="true">采</span>
+      <span class="tab-label" data-i18n="tab.collect">数据采集</span>
+    </button>
+    <button type="button" class="tab" id="tabBtnPost" data-tab="post" role="tab" aria-selected="false" title="数据后处理">
+      <span class="tab-ico" data-i18n="tab.ico.post" aria-hidden="true">后</span>
+      <span class="tab-label" data-i18n="tab.post">数据后处理</span>
+    </button>
+    <button type="button" class="tab" id="tabBtnInfer" data-tab="infer" role="tab" aria-selected="false" title="推理">
+      <span class="tab-ico" data-i18n="tab.ico.infer" aria-hidden="true">推</span>
+      <span class="tab-label" data-i18n="tab.infer">推理</span>
+    </button>
   </nav>
+  <div class="app-stage">
   <div class="boot-banner" id="bootBanner" role="alert" hidden>
     <strong data-i18n="boot.banner_title">配置错误 — 采集不可用</strong>
     <span id="bootBannerHint" data-i18n="boot.collect_locked">YAML/agent 启动失败，无法进入数据采集。推理与后处理仍可用；请修正配置后重新启动。</span>
@@ -1635,37 +1783,37 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <div class="home-grid">
         <section class="pp-card">
           <h2 data-i18n="home.title">sensors-dcs 是什么</h2>
-          <p class="home-lead" data-i18n="home.lead">面向机器人遥操作 / 多传感器单元的本地数据采集与离线后处理控制台：一边把 GELLO、机械臂、夹爪、RealSense 等写进 episode，一边把落盘数据对齐导出成 hik_dataset。</p>
+          <p class="home-lead" data-i18n="home.lead">本地机器人单元控制台：看传感器状态、录 episode、离线对齐导出 hik_dataset，并连接 pi05 serve 做推理与臂控制。</p>
         </section>
         <section class="pp-card">
           <h2 data-i18n="home.what_title">能做什么</h2>
-          <p data-i18n="home.what_body">在「数据采集」实时预览并录制；在「数据后处理」按常用三步流水线（export-timeline → filter-timeline → export-hik-dataset）处理已落盘 episode。也可勾选「快速采集」，结束/作废后自动跑同一套参数。</p>
+          <p data-i18n="home.what_body">「传感器状态」嵌入 sensors-view；「数据采集」实时预览并录制；「数据后处理」跑 export-timeline → filter-timeline → export-hik-dataset；「推理」连接 serve、单步/LOOP、Home/绝对下发，并可同步录制。快速采集结束/作废后自动跑后处理参数。</p>
         </section>
         <section class="pp-card">
           <h2 data-i18n="home.flow_title">推荐流程</h2>
           <ol class="home-list">
             <li data-i18n="home.flow_1">用含 sensors_config + agents 的 DCS YAML 启动（不要直接拿 sensors_*.yaml 当启动配置）。</li>
-            <li data-i18n="home.flow_2">确认保存路径，在「数据采集」开始 / 结束（或作废）录制一集。</li>
-            <li data-i18n="home.flow_3">到「数据后处理」选 episode，核对 align / master / master-hz 与 camera-map，一键三步或逐步执行。</li>
-            <li data-i18n="home.flow_4">需要连续采多集时，可打开「异步落盘」，上一集写盘未完也能开下一集。</li>
+            <li data-i18n="home.flow_2">在「传感器状态」确认链路；设置里配置 sensors-view 地址。</li>
+            <li data-i18n="home.flow_3">确认保存路径，在「数据采集」或「推理·录制」开始 / 结束（或作废）一集。</li>
+            <li data-i18n="home.flow_4">到「数据后处理」选 episode，核对对齐与 camera-map，一键三步或分步执行；连续采可开「异步落盘」。</li>
           </ol>
         </section>
         <section class="pp-card">
           <h2 data-i18n="home.tips_title">使用提示</h2>
           <ul class="home-list">
             <li data-i18n="home.tips_1">dry_run=true 用合成数据联调 UI；真机请设 dry_run=false 并保证驱动 / 串口 / 相机可用。</li>
-            <li data-i18n="home.tips_2">YAML 或传感器 open 失败时，本页与后处理仍可用，「数据采集」会被锁定并显示错误横幅。</li>
-            <li data-i18n="home.tips_3">主页右上角「设置」可切换语言、退出登录与管理账号；「安全退出」会停录制、关传感器并结束进程。</li>
+            <li data-i18n="home.tips_2">YAML 或传感器 open 失败时，主页与后处理仍可用，「数据采集」会被锁定并显示错误横幅。</li>
+            <li data-i18n="home.tips_3">各页顶栏「设置」可切换语言/主题、改 sensors-view、管理账号；「安全退出」会停录制、关传感器并结束进程。</li>
           </ul>
         </section>
         <section class="pp-card home-cta">
           <h2 data-i18n="home.cta_title">开始使用</h2>
-          <p data-i18n="home.cta_body">从下方进入采集或后处理；右上角「设置」可切换语言与管理账号。</p>
+          <p data-i18n="home.cta_body">从下方进入各功能页；任意页顶栏「设置」可改语言、主题与 sensors-view 地址。</p>
           <div class="pp-actions">
-            <button type="button" class="primary" id="btnHomeCollect" data-i18n="home.cta_collect">进入数据采集</button>
-            <button type="button" id="btnHomeInfer" data-i18n="home.cta_infer">进入推理</button>
-            <button type="button" id="btnHomePost" data-i18n="home.cta_post">进入数据后处理</button>
             <button type="button" id="btnHomeSensors" data-i18n="home.cta_sensors">传感器状态</button>
+            <button type="button" class="primary" id="btnHomeCollect" data-i18n="home.cta_collect">进入数据采集</button>
+            <button type="button" id="btnHomePost" data-i18n="home.cta_post">进入数据后处理</button>
+            <button type="button" id="btnHomeInfer" data-i18n="home.cta_infer">进入推理</button>
           </div>
         </section>
       </div>
@@ -1717,12 +1865,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <div><span data-i18n="meta.hz">前端 hz：</span><strong id="hzFront">—</strong></div>
       <div><span data-i18n="meta.written">已写帧：</span><strong id="written">0</strong></div>
     </div>
-    <div class="collect-raw-bar">
-      <button type="button" id="rawBtn" data-i18n="collect.ws_raw_btn">WS 原始数据</button>
-    </div>
     <div class="content-row">
       <section class="cam-section">
-        <h2 data-i18n="cam.title">Camera preview · 2×2</h2>
+        <div class="cam-section-head">
+          <h2 data-i18n="cam.title">Camera preview · 2×2</h2>
+          <button type="button" class="ghost" id="rawBtn" data-i18n="collect.ws_raw_btn">WS 原始数据</button>
+        </div>
         <div id="cam-grid"></div>
       </section>
       <div id="agents"></div>
@@ -1744,7 +1892,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <button type="button" class="inf-subnav-btn" id="infPageBtnSensors" data-inf-page="sensors" role="tab" aria-selected="false" data-i18n="infer.page_sensors">预览</button>
     </div>
     <div class="inf-page active" id="infPageControl" data-inf-page="control" role="tabpanel">
-    <p class="inf-banner" data-i18n="infer.banner">推理页与采集共用录制；可手动下发 joints（单步调试回填 next_state）。</p>
     <div class="inf-split">
     <div class="inf-pi05-panel" id="infPi05Panel">
       <section class="inf-pi05-sec" aria-labelledby="infSecServe">
@@ -1773,9 +1920,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <button type="button" class="primary" id="infPi05Connect" data-i18n="infer.connect">连接</button>
           <button type="button" id="infPi05Disconnect" data-i18n="infer.disconnect" disabled>断开</button>
         </div>
-        <div class="inf-pi05-row inf-pi05-hints">
-          <span class="hint" id="infPi05Hint" data-i18n="infer.hint_idle">连接后点「单步调试」采集传感器并发给 serve</span>
-        </div>
+        <span class="hint" id="infPi05Hint" data-i18n="infer.hint_idle">连接后点「单步调试」采集传感器并发给 serve</span>
       </section>
       <section class="inf-pi05-sec" aria-labelledby="infSecInfer">
         <h3 class="inf-pi05-sec-title" id="infSecInfer" data-i18n="infer.sec_infer">推理</h3>
@@ -1814,9 +1959,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <input type="text" id="infArmJoints" class="inf-arm-joints" data-i18n-placeholder="arm.abs_ph" placeholder="0.00,0.00,0.00,0.00,0.00,0.00" autocomplete="off" spellcheck="false" />
           <button type="button" id="infArmSend" data-i18n="arm.abs_send">下发</button>
         </div>
-        <div class="inf-pi05-row inf-pi05-hints">
-          <span class="hint" id="infArmProg" data-i18n="arm.abs_idle">绝对下发：空闲</span>
-        </div>
+        <span class="hint" id="infArmProg" data-i18n="arm.abs_idle">绝对下发：空闲</span>
       </section>
       <section class="inf-pi05-sec inf-pi05-sec-rec" aria-labelledby="infSecRec">
         <h3 class="inf-pi05-sec-title" id="infSecRec" data-i18n="infer.sec_rec">录制</h3>
@@ -1833,9 +1976,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <span data-i18n="async.label">异步落盘</span>
           </label>
         </div>
-        <div class="inf-pi05-row inf-pi05-hints">
-          <span class="hint" id="infRunHint" data-i18n="hint.idle">空闲 — 点「开始」录制当前 episode</span>
-        </div>
+        <span class="hint" id="infRunHint" data-i18n="hint.idle">空闲 — 点「开始」录制当前 episode</span>
         <div class="save-path inf-rec-save">
           <label for="infSaveDirInput" data-i18n="save.label">保存路径</label>
           <input type="text" id="infSaveDirInput" data-i18n-placeholder="save.placeholder" placeholder="留空则沿用当前路径" />
@@ -1869,12 +2010,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
     </div>
     </div>
     <div class="inf-page" id="infPageSensors" data-inf-page="sensors" role="tabpanel">
-    <div class="inf-page-sensors-bar">
-      <button type="button" id="infRawBtn" data-i18n="infer.ws_raw_btn">WS 原始数据</button>
-    </div>
     <div class="content-row">
       <section class="cam-section">
-        <h2 data-i18n="cam.title">Camera preview · 2×2</h2>
+        <div class="cam-section-head">
+          <h2 data-i18n="cam.title">Camera preview · 2×2</h2>
+          <button type="button" class="ghost" id="infRawBtn" data-i18n="infer.ws_raw_btn">WS 原始数据</button>
+        </div>
         <div id="infCamGrid"></div>
       </section>
       <div id="infAgents"></div>
@@ -1894,41 +2035,57 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
     <div class="tab-panel" id="tab-post" role="tabpanel">
       <div class="pp-grid">
-        <section class="pp-card">
-          <h2 data-i18n="pp.episode">Episode</h2>
-          <p class="pp-hint" data-i18n="pp.episode_hint">选择已落盘目录，或粘贴完整路径（如 D:\\data_new\\episode_00016）。</p>
-          <div class="pp-row">
-            <label for="ppEpisodeSelect" data-i18n="pp.list">列表</label>
-            <select id="ppEpisodeSelect"></select>
-            <button type="button" id="btnPpRefresh" data-i18n="btn.refresh">刷新</button>
-          </div>
-          <div class="pp-row">
-            <label for="ppEpisode" data-i18n="pp.path">路径</label>
-            <input type="text" class="wide" id="ppEpisode" placeholder="D:\\data_new\\episode_00016" />
-            <button type="button" id="btnPpBrowseEpisode" data-i18n="pp.browse">浏览…</button>
-          </div>
-          <div class="pp-row">
-            <label class="quick-collect"><input type="checkbox" id="ppAllowInvalid" /> <span data-i18n="pp.allow_invalid">allow-invalid（作废 episode 也导出）</span></label>
-          </div>
-        </section>
-
-        <section class="pp-card">
-          <h2 data-i18n="pp.align_title">对齐参数（Step 1 → hik）</h2>
-          <p class="pp-hint" data-i18n="pp.align_hint">master-hz 作用于 export-timeline 下采样；一键三步 / 快速采集转 hik_dataset 时都读这里，不是写死 5。</p>
-          <div class="pp-row">
-            <label for="ppAlign">align</label>
-            <select id="ppAlign">
-              <option value="asof" selected>asof</option>
-              <option value="nearest">nearest</option>
-              <option value="grid">grid</option>
-              <option value="union">union</option>
-            </select>
-            <label for="ppMaster">master</label>
-            <select id="ppMaster">
-              <option value="" data-i18n="pp.master_pick">先选择合格 episode…</option>
-            </select>
-            <label for="ppMasterHz">master-hz</label>
-            <input type="number" id="ppMasterHz" value="5" step="0.1" min="0.1" />
+        <section class="pp-card pp-card-hub">
+          <div class="pp-hub">
+            <div class="pp-zone" aria-labelledby="ppZoneEpisode">
+              <h2 id="ppZoneEpisode" data-i18n="pp.episode">Episode</h2>
+              <p class="pp-hint" data-i18n="pp.episode_hint">选择已落盘目录，或粘贴完整路径（如 D:\\data_new\\episode_00016）。</p>
+              <div class="pp-row">
+                <label for="ppEpisodeSelect" data-i18n="pp.list">列表</label>
+                <select id="ppEpisodeSelect"></select>
+                <button type="button" id="btnPpRefresh" data-i18n="btn.refresh">刷新</button>
+              </div>
+              <div class="pp-row">
+                <label for="ppEpisode" data-i18n="pp.path">路径</label>
+                <input type="text" class="wide" id="ppEpisode" placeholder="D:\\data_new\\episode_00016" />
+                <button type="button" id="btnPpBrowseEpisode" data-i18n="pp.browse">浏览…</button>
+              </div>
+              <div class="pp-row">
+                <label class="quick-collect"><input type="checkbox" id="ppAllowInvalid" /> <span data-i18n="pp.allow_invalid">allow-invalid（作废 episode 也导出）</span></label>
+              </div>
+            </div>
+            <div class="pp-zone" aria-labelledby="ppZoneAlign">
+              <h2 id="ppZoneAlign" data-i18n="pp.align_title">对齐参数（Step 1 → hik）</h2>
+              <p class="pp-hint" data-i18n="pp.align_hint">master-hz 作用于 export-timeline 下采样；一键三步 / 快速采集转 hik_dataset 时都读这里，不是写死 5。</p>
+              <div class="pp-row">
+                <label for="ppAlign">align</label>
+                <select id="ppAlign">
+                  <option value="asof" selected>asof</option>
+                  <option value="nearest">nearest</option>
+                  <option value="grid">grid</option>
+                  <option value="union">union</option>
+                </select>
+              </div>
+              <div class="pp-row">
+                <label for="ppMaster">master</label>
+                <select id="ppMaster">
+                  <option value="" data-i18n="pp.master_pick">先选择合格 episode…</option>
+                </select>
+              </div>
+              <div class="pp-row">
+                <label for="ppMasterHz">master-hz</label>
+                <input type="number" id="ppMasterHz" value="5" step="0.1" min="0.1" />
+              </div>
+            </div>
+            <div class="pp-zone" aria-labelledby="ppZoneRunAll">
+              <h2 id="ppZoneRunAll" data-i18n="pp.run_all_title">一键三步</h2>
+              <p class="pp-hint" data-i18n="pp.run_all_hint">顺序执行下方三步；「快速采集」勾选后结束/作废也会走同一套参数。</p>
+              <div class="pp-actions">
+                <button type="button" class="primary" id="btnPpRunAll" data-i18n="pp.run_all">一键执行三步</button>
+                <span class="hint" id="ppHint"></span>
+              </div>
+              <pre id="ppLog" data-i18n="pp.log_idle">（尚未运行）</pre>
+            </div>
           </div>
         </section>
 
@@ -1976,24 +2133,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <button type="button" id="btnPpHik" data-i18n="pp.run3">运行 Step 3</button>
           </div>
         </section>
-
-        <section class="pp-card">
-          <h2 data-i18n="pp.run_all_title">一键三步</h2>
-          <p class="pp-hint" data-i18n="pp.run_all_hint">顺序执行上述三步；「快速采集」勾选后结束/作废也会走同一套参数。</p>
-          <div class="pp-actions">
-            <button type="button" class="primary" id="btnPpRunAll" data-i18n="pp.run_all">一键执行三步</button>
-            <span class="hint" id="ppHint"></span>
-          </div>
-          <pre id="ppLog" data-i18n="pp.log_idle">（尚未运行）</pre>
-        </section>
       </div>
     </div>
   </main>
+  </div>
+  </div>
   <div class="modal-backdrop" id="appModal" role="dialog" aria-modal="true">
     <div class="modal-card">
       <h3 id="appModalTitle" data-i18n="modal.default_title">提示</h3>
       <p id="appModalBody"></p>
-      <button type="button" id="appModalOk" data-i18n="modal.ok">知道了</button>
+      <button type="button" class="primary" id="appModalOk" data-i18n="modal.ok">知道了</button>
     </div>
   </div>
   <div class="settings-overlay" id="settingsModal" role="presentation">
@@ -2279,6 +2428,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         btn.classList.toggle('active', btn.getAttribute('data-locale') === loc);
       });
       applyDomI18n(document);
+      try { syncSideNavChrome(); } catch (e) {}
       try {
         if (typeof applyRecordUi === 'function' && window.__lastRecordStatus) {
           applyRecordUi(window.__lastRecordStatus);
@@ -4169,9 +4319,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (tabInfer) tabInfer.classList.toggle('active', which === 'infer');
       tabPost.classList.toggle('active', which === 'post');
       if (tabSensors) tabSensors.classList.toggle('active', which === 'sensors');
-      // Embody convention: Settings gear only on the home overview.
-      const gear = document.getElementById('btnSettings');
-      if (gear) gear.hidden = which !== 'home';
       if (which === 'sensors') ensureSensorsIframeMounted();
       if (which === 'infer') {
         try {
@@ -4191,6 +4338,42 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const lsInfPage = localStorage.getItem('dcs.inf.page');
       if (lsInfPage === 'sensors' || lsInfPage === 'control') switchInfPage(lsInfPage);
     } catch (e) {}
+    function syncSideNavChrome() {
+      document.querySelectorAll('#appTabs button.tab').forEach((btn) => {
+        if (btn.disabled || btn.classList.contains('tab-locked')) return;
+        const lab = btn.querySelector('.tab-label');
+        if (lab) btn.title = (lab.textContent || '').trim();
+      });
+      const nav = document.getElementById('appTabs');
+      const toggle = document.getElementById('tabsToggle');
+      if (nav && toggle) {
+        const on = nav.classList.contains('is-expanded');
+        toggle.setAttribute('aria-expanded', on ? 'true' : 'false');
+        toggle.setAttribute('aria-label', on ? t('nav.tabsCollapseAria') : t('nav.tabsExpand'));
+      }
+    }
+    function setTabsExpanded(on) {
+      const nav = document.getElementById('appTabs');
+      if (!nav) return;
+      nav.classList.toggle('is-expanded', !!on);
+      try { localStorage.setItem('dcs.tabs.expanded', on ? '1' : '0'); } catch (e) {}
+      syncSideNavChrome();
+      if (typeof window.__resizeInfPoseViz === 'function') {
+        requestAnimationFrame(() => window.__resizeInfPoseViz());
+      }
+    }
+    const tabsToggle = document.getElementById('tabsToggle');
+    if (tabsToggle) {
+      tabsToggle.addEventListener('click', () => {
+        const nav = document.getElementById('appTabs');
+        setTabsExpanded(!(nav && nav.classList.contains('is-expanded')));
+      });
+    }
+    try {
+      const lsTabs = localStorage.getItem('dcs.tabs.expanded');
+      if (lsTabs === '1') setTabsExpanded(true);
+      else syncSideNavChrome();
+    } catch (e) { syncSideNavChrome(); }
     tabBtnHome.addEventListener('click', () => switchTab('home'));
     tabBtnCollect.addEventListener('click', () => switchTab('collect'));
     if (tabBtnInfer) tabBtnInfer.addEventListener('click', () => switchTab('infer'));
