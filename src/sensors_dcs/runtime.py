@@ -164,10 +164,19 @@ class Orchestrator:
             source = self._home_source
             duration_s = float(self._home_duration_s)
         ok_joints, err = parse_home_joints(joints)
+        cart = None
+        if ok_joints is not None:
+            try:
+                from sensors_dcs.arm_pose import joints_rad_to_xyzrpy
+
+                cart = joints_rad_to_xyzrpy(ok_joints)
+            except Exception:  # noqa: BLE001
+                cart = None
         return {
             "ok": err is None,
             "home_joints_rad": ok_joints,
             "home_duration_s": duration_s,
+            "home_cartesian_xyzrpy": cart,
             "source": source,
             "error": err,
             "configured": ok_joints is not None,
@@ -250,10 +259,11 @@ class Orchestrator:
         duration_s: float | None = None,
         agent_id: str | None = None,
     ) -> dict[str, Any]:
-        """Validate home joints then absolute-ramp via the same arm_command path.
+        """Validate home joints then joint-space absolute ramp to ``home_joints_rad``.
 
-        Uses dedicated ``home_duration_s`` when ``duration_s`` is omitted — never the
-        Infer step / abs-send duration.
+        Home is configured as joints (not a TCP pose). Uses dedicated
+        ``home_duration_s`` when ``duration_s`` is omitted — never the Infer step
+        / abs-send duration.
         """
         st = self.arm_home_status()
         if not st.get("configured"):
@@ -334,10 +344,14 @@ class Orchestrator:
             return {"ok": False, "configured": False, "error": "no pi05 agent in config"}
         return agent.set_prompt(prompt)
 
-    def pi05_step(self, *, agent_id: str | None = None) -> dict[str, Any]:
+    def pi05_step(
+        self, *, agent_id: str | None = None, prompt: str | None = None
+    ) -> dict[str, Any]:
         agent = self._pi05_agent(agent_id)
         if agent is None:
             return {"ok": False, "configured": False, "error": "no pi05 agent in config"}
+        if prompt is not None:
+            agent.set_prompt(prompt)
         print("[sensors-dcs] pi05 step → gathering sensors / querying serve…", flush=True)
         out = agent.step()
         if out.get("ok"):
@@ -1588,7 +1602,11 @@ class Orchestrator:
         duration_s: float = 10.0,
         agent_id: str | None = None,
     ) -> dict[str, Any]:
-        """Timed linear ramp from live arm read → target joints (like gello→arm sync)."""
+        """Timed **joint-space** linear ramp from live arm read → target joints.
+
+        Home / abs-send targets are configured/commanded as ``joints_rad``, so the
+        path is linear in q (same helper as gello→arm sync). Not Cartesian+IK.
+        """
         from sensors_dcs.agents.arm_agent import ArmAgent
         from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
 
@@ -1696,7 +1714,7 @@ class Orchestrator:
             self._abs_ramp_last_ok = None
             self._abs_ramp_last_error = None
             self._abs_ramp_last_message = (
-                f"绝对下发开始：{dur:g}s @ {hz:g}Hz × {n} 点"
+                f"关节空间斜坡：{dur:g}s @ {hz:g}Hz × {n} 点"
             )
             self._abs_ramp_write_count = 0
             self._abs_ramp_last_t_wall = time.time()
@@ -1756,13 +1774,15 @@ class Orchestrator:
                             self._abs_ramp_last_message = (
                                 f"ramp write failed at {k}/{n}: {result.get('error')}"
                             )
+                        else:
+                            self._abs_ramp_last_message = f"关节斜坡 {k}/{n}"
                     if not result.get("ok"):
                         final_error = str(result.get("error") or "ramp write failed")
                         break
                     self._abs_ramp_stop.wait(period)
                 else:
                     completed = True
-                    final_message = f"绝对下发完成：{n} 点已写入"
+                    final_message = f"绝对下发完成：{n} 点已写入（关节空间）"
         except Exception as e:  # noqa: BLE001
             final_error = str(e)
 

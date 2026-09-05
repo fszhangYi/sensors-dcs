@@ -217,7 +217,9 @@ class Pi05ClientAgent(BaseAgent):
     def set_prompt(self, prompt: str) -> dict[str, Any]:
         with self._lock:
             self._prompt = str(prompt or "")
-            return {"ok": True, **self.status_payload()}
+            out = {"ok": True, **self.status_payload()}
+        self._push_status_frame()
+        return out
 
     def step(self) -> dict[str, Any]:
         """Gather obs once, send to serve, store/echo next_state. Manual only."""

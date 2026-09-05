@@ -15,13 +15,16 @@ Server → client:
   4B  reject_flag = uint32
   4B  text_len + UTF-8 status text
 
+``next_state`` is sampled on a deterministic arc or line in TCP xyz
+(anchored to the robot_state at the start of each cycle), not random jitter.
+
 No idle socket timeout (real serve also waits indefinitely between steps).
 """
 
 from __future__ import annotations
 
 import argparse
-import random
+import math
 import signal
 import socket
 import struct
@@ -55,11 +58,61 @@ def _ts() -> str:
     return datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
 
+def _sample_path(
+    origin: list[float],
+    *,
+    phase: int,
+    n_cycle: int,
+    path: str,
+    radius: float,
+    plane: str,
+) -> list[float]:
+    """Return next_state[7] on an arc/line through TCP xyz; rpy+grip from origin.
+
+    ``phase`` is 1..n_cycle within the current big cycle.
+    """
+    n = max(1, int(n_cycle))
+    # Progress in (0, 1]: phase=n → 1.0 (end of segment / full turn).
+    t = float(phase) / float(n)
+    x0, y0, z0 = float(origin[0]), float(origin[1]), float(origin[2])
+    rpy = [float(origin[i]) for i in range(3, 6)]
+    grip = max(0.0, min(1.0, float(origin[6])))
+    r = max(1e-4, float(radius))
+
+    if path == "line":
+        # Straight segment of length ``radius`` along the plane's first axis, then
+        # the orthogonal in-plane axis gets a small coupled offset so the trail
+        # is visible as a short diagonal.
+        if plane == "xz":
+            dx, dy, dz = r * t, 0.0, 0.25 * r * t
+        elif plane == "yz":
+            dx, dy, dz = 0.0, r * t, 0.25 * r * t
+        else:  # xy
+            dx, dy, dz = r * t, 0.25 * r * t, 0.0
+        xyz = [x0 + dx, y0 + dy, z0 + dz]
+    else:
+        # Arc (default): full circle in the chosen plane, radius ``r``,
+        # starting at the origin pose (θ=0 → back to start at θ=2π).
+        theta = 2.0 * math.pi * t
+        c, s = math.cos(theta), math.sin(theta)
+        if plane == "xz":
+            # Center at (x0 - r, y0, z0); θ=0 → (x0, y0, z0).
+            xyz = [x0 - r + r * c, y0, z0 + r * s]
+        elif plane == "yz":
+            xyz = [x0, y0 - r + r * c, z0 + r * s]
+        else:  # xy (robot Z-up horizontal)
+            xyz = [x0 - r + r * c, y0 + r * s, z0]
+
+    return xyz + rpy + [grip]
+
+
 def handle_client(
     conn: socket.socket,
     addr: tuple,
     *,
-    jitter: float,
+    path: str,
+    radius: float,
+    plane: str,
     term_every: int,
 ) -> None:
     global _active_clients, _total_steps
@@ -68,10 +121,13 @@ def handle_client(
         n_cli = _active_clients
     print(
         f"[{_ts()}] ACCEPT  {addr[0]}:{addr[1]}  "
-        f"(active_clients={n_cli})  status=CONNECTED",
+        f"(active_clients={n_cli})  status=CONNECTED  "
+        f"path={path} radius={radius:.4f}m plane={plane}",
         flush=True,
     )
     step = 0
+    origin: list[float] | None = None
+    n_cycle = max(1, int(term_every) if term_every > 0 else 20)
     try:
         # No idle timeout — Connect may sit open until the user clicks Step.
         conn.settimeout(None)
@@ -125,14 +181,26 @@ def handle_client(
                 _total_steps += 1
                 tot = _total_steps
 
-            next_state = [
-                robot_state[i] + random.uniform(-jitter, jitter) for i in range(6)
-            ] + [max(0.0, min(1.0, robot_state[6] + random.uniform(-jitter, jitter)))]
+            phase = ((step - 1) % n_cycle) + 1  # 1..n_cycle
+            if phase == 1 or origin is None:
+                origin = list(robot_state)
 
-            # ~every N steps: terminate so Infer LOOP can exit cleanly.
-            term_flag = 1.0 if (term_every > 0 and step % term_every == 0) else 0.0
+            next_state = _sample_path(
+                origin,
+                phase=phase,
+                n_cycle=n_cycle,
+                path=path,
+                radius=radius,
+                plane=plane,
+            )
+
+            # Last sample of each cycle → terminate so Infer LOOP can exit cleanly.
+            term_flag = 1.0 if (term_every > 0 and phase == n_cycle) else 0.0
             reject_flag = 0
-            msg = f"fake-ok step={step} term={int(term_flag)}"
+            msg = (
+                f"fake-ok step={step} phase={phase}/{n_cycle} "
+                f"path={path} term={int(term_flag)}"
+            )
             msg_b = msg.encode("utf-8")
 
             conn.sendall(struct.pack(">7f", *[float(x) for x in next_state]))
@@ -144,7 +212,7 @@ def handle_client(
             prompt_preview = text.replace("\n", " ")[:60]
             print(
                 f"[{_ts()}] STEP    {addr[0]}:{addr[1]}  "
-                f"session_step={step} total_steps={tot}  "
+                f"session_step={step} phase={phase}/{n_cycle} total_steps={tot}  "
                 f"jpeg={jpeg_lens}  text={prompt_preview!r}  "
                 f"robot=[{', '.join(f'{v:.3f}' for v in robot_state)}]  "
                 f"→ next=[{', '.join(f'{v:.3f}' for v in next_state)}]  "
@@ -172,7 +240,9 @@ def serve_forever(
     host: str,
     port: int,
     *,
-    jitter: float,
+    path: str,
+    radius: float,
+    plane: str,
     term_every: int = 20,
     heartbeat_s: float = 0.0,
 ) -> None:
@@ -183,7 +253,8 @@ def serve_forever(
     srv.listen(8)
     print(
         f"[pi05-fake-serve] LISTEN  {host}:{port}  "
-        f"protocol=pi05_jax_sft.serve  jitter={jitter}  term_every={term_every}  "
+        f"protocol=pi05_jax_sft.serve  path={path} radius={radius:.4f}m "
+        f"plane={plane} term_every={term_every}  "
         f"status=READY (waiting for Infer Connect)",
         flush=True,
     )
@@ -236,7 +307,12 @@ def serve_forever(
             threading.Thread(
                 target=handle_client,
                 args=(conn, addr),
-                kwargs={"jitter": jitter, "term_every": term_every},
+                kwargs={
+                    "path": path,
+                    "radius": radius,
+                    "plane": plane,
+                    "term_every": term_every,
+                },
                 name=f"pi05-fake-{addr[0]}-{addr[1]}",
                 daemon=True,
             ).start()
@@ -255,18 +331,35 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=5000)
     p.add_argument(
-        "--jitter",
+        "--path",
+        choices=("arc", "line"),
+        default="arc",
+        help="Sample next_state on an arc (full circle) or a straight segment.",
+    )
+    p.add_argument(
+        "--radius",
         type=float,
-        default=0.005,
-        help="Small per-step delta around received robot_state (first 6 + gripper).",
+        default=0.04,
+        help="Arc radius / line length in meters (TCP xyz). Default 0.04.",
+    )
+    p.add_argument(
+        "--plane",
+        choices=("xy", "xz", "yz"),
+        default="xy",
+        help="Plane for arc / primary axes for line (robot Z-up). Default xy.",
     )
     p.add_argument(
         "--term-every",
         type=int,
         default=20,
-        help="Set term_flag=1 every N steps (0=never). Default 20.",
+        help="Steps per cycle; term_flag=1 on the last sample (0→use 20, never term).",
     )
-    p.add_argument("--seed", type=int, default=None, help="Optional RNG seed.")
+    p.add_argument(
+        "--jitter",
+        type=float,
+        default=None,
+        help=argparse.SUPPRESS,  # deprecated alias → --radius
+    )
     p.add_argument(
         "--heartbeat",
         type=float,
@@ -274,13 +367,23 @@ def main(argv: list[str] | None = None) -> None:
         help="Seconds between STATUS heartbeats (0=disable).",
     )
     args = p.parse_args(argv)
-    if args.seed is not None:
-        random.seed(args.seed)
+    radius = float(args.radius)
+    if args.jitter is not None:
+        # Old flag meant per-axis noise; map to a small geometric size.
+        radius = max(radius, abs(float(args.jitter)) * 8.0)
+        print(
+            f"[pi05-fake-serve] NOTE  --jitter is deprecated; "
+            f"using path geometry radius={radius:.4f}m",
+            flush=True,
+        )
+    term_every = int(args.term_every)
     serve_forever(
         args.host,
         args.port,
-        jitter=max(0.0, float(args.jitter)),
-        term_every=max(0, int(args.term_every)),
+        path=str(args.path),
+        radius=max(1e-4, radius),
+        plane=str(args.plane),
+        term_every=max(0, term_every),
         heartbeat_s=max(0.0, float(args.heartbeat)),
     )
 

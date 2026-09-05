@@ -123,6 +123,11 @@ class Pi05PromptBody(BaseModel):
     agent_id: str | None = None
 
 
+class Pi05StepBody(BaseModel):
+    agent_id: str | None = None
+    prompt: str | None = None
+
+
 class Pi05RunBody(BaseModel):
     enabled: bool
     agent_id: str | None = None
@@ -588,32 +593,108 @@ PREVIEW_HTML = """<!DOCTYPE html>
     #tab-post.active,
     #tab-home.active { overflow-y: auto; }
     /* Collect/Infer: allow scroll so chrome (esp. Infer pi05 panel) cannot crush sensors. */
-    #tab-collect.active,
-    #tab-infer.active {
+    #tab-collect.active {
       overflow-y: auto;
       overflow-x: hidden;
     }
-    .inf-split {
-      display: grid;
-      grid-template-columns: minmax(0, 1.35fr) minmax(16rem, 0.85fr);
-      gap: 0.75rem;
-      align-items: stretch;
+    #tab-infer.active {
+      overflow: hidden;
+      gap: 0.5rem;
+    }
+    .inf-subnav {
+      flex: 0 0 auto;
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+      align-items: center;
+      padding: 0.15rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--panel) 88%, transparent);
+      width: fit-content;
+      max-width: 100%;
+    }
+    .inf-subnav-btn {
+      appearance: none;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: 0.82rem;
+      font-weight: 550;
+      height: 1.85rem;
+      padding: 0 0.85rem;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: color var(--motion-fast) var(--motion-ease),
+        background var(--motion-fast) var(--motion-ease),
+        border-color var(--motion-fast) var(--motion-ease);
+    }
+    .inf-subnav-btn:hover {
+      color: var(--text);
+      border-color: var(--border);
+    }
+    .inf-subnav-btn.active {
+      color: var(--text);
+      background: var(--accent-dim, color-mix(in srgb, var(--accent) 22%, transparent));
+      border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+    }
+    .inf-page {
+      display: none;
+      flex: 1 1 auto;
+      min-height: 0;
+      flex-direction: column;
+      gap: 0.65rem;
+      overflow: hidden;
+    }
+    .inf-page.active {
+      display: flex;
+    }
+    #infPageControl.active {
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+    #infPageControl .inf-split {
+      flex: 1 1 auto;
+      min-height: 18rem;
+    }
+    #infPageSensors.active {
+      overflow: hidden;
+    }
+    #infPageSensors .content-row {
       flex: 1 1 auto;
       min-height: 0;
     }
-    .inf-split-main {
+    .inf-page-sensors-bar {
+      flex: 0 0 auto;
       display: flex;
-      flex-direction: column;
-      gap: 0.65rem;
-      min-width: 0;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      align-items: center;
+    }
+    /* #infPi05Panel (narrow) + aside.inf-split-pose (flex) */
+    .inf-split {
+      display: grid;
+      grid-template-columns: minmax(17rem, 26rem) minmax(0, 1fr);
+      gap: 0.75rem;
+      align-items: stretch;
+      flex: 0 0 auto;
+      width: 100%;
       min-height: 0;
+    }
+    .inf-split > #infPi05Panel,
+    .inf-split > .inf-pi05-panel {
+      margin: 0;
+      min-width: 0;
+      max-width: 26rem;
+      height: 100%;
     }
     .inf-split-pose {
       display: flex;
       flex-direction: column;
       gap: 0.4rem;
       min-width: 0;
-      min-height: 18rem;
+      min-height: 0;
       border: 1px solid var(--border);
       border-radius: 10px;
       background: color-mix(in srgb, var(--panel) 88%, #000 12%);
@@ -621,6 +702,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .inf-split-pose h2 {
       margin: 0;
+      flex: 0 0 auto;
       font-size: 0.92rem;
       font-weight: 600;
     }
@@ -631,13 +713,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
       border-radius: 8px;
       overflow: hidden;
       background: #0b1018;
+      touch-action: none;
+      cursor: grab;
     }
+    .inf-pose-canvas-wrap:active { cursor: grabbing; }
     #infPoseCanvas {
       display: block;
       width: 100%;
       height: 100%;
+      touch-action: none;
     }
     .inf-pose-hud {
+      flex: 0 0 auto;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 0.72rem;
       color: var(--muted);
@@ -785,7 +872,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .pp-row input.wide { flex: 1 1 16rem; min-width: 12rem; font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem; }
     .pp-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-    pre#ppLog, pre#raw, pre#infRaw {
+    pre#ppLog {
       margin: 0;
       padding: 0.65rem 0.85rem;
       overflow: auto;
@@ -796,16 +883,19 @@ PREVIEW_HTML = """<!DOCTYPE html>
       line-height: 1.4;
       color: var(--text);
       font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+      max-height: 28vh;
+      min-height: 5rem;
+      white-space: pre-wrap;
     }
-    pre#ppLog { max-height: 28vh; min-height: 5rem; white-space: pre-wrap; }
-    pre#raw, pre#infRaw {
-      flex-shrink: 0;
-      width: 100%;
-      max-height: 12vh;
-      min-height: 3rem;
+    .collect-raw-bar {
+      flex: 0 0 auto;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      align-items: center;
     }
     .inf-banner {
-      margin: 0 0 0.55rem;
+      margin: 0;
       padding: 0.45rem 0.65rem;
       border: 1px solid var(--border);
       border-radius: 10px;
@@ -818,22 +908,41 @@ PREVIEW_HTML = """<!DOCTYPE html>
       --inf-ctrl-h: 1.85rem;
       flex-shrink: 0;
       margin: 0 0 0.65rem;
-      padding: 0.65rem 0.75rem;
+      padding: 0.55rem 0.65rem 0.65rem;
       border: 1px solid var(--border);
       border-radius: 10px;
       background: var(--panel, rgba(18, 26, 38, 0.4));
       display: flex;
       flex-direction: column;
-      gap: 0.5rem;
+      gap: 0.55rem;
       font-size: var(--inf-fs);
       line-height: 1.35;
       color: var(--text);
     }
     .inf-pi05-panel * { box-sizing: border-box; }
+    .inf-pi05-sec {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      padding-top: 0.45rem;
+      border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+    }
+    .inf-pi05-sec:first-child {
+      padding-top: 0;
+      border-top: 0;
+    }
+    .inf-pi05-sec-title {
+      margin: 0;
+      font-size: 0.72rem;
+      font-weight: 650;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
     .inf-pi05-row {
       display: flex;
       flex-wrap: wrap;
-      gap: 0.4rem 0.55rem;
+      gap: 0.35rem 0.45rem;
       align-items: center;
       min-height: var(--inf-ctrl-h);
     }
@@ -854,7 +963,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     .inf-pi05-panel button {
       font-size: var(--inf-fs);
       height: var(--inf-ctrl-h);
-      padding: 0 0.7rem;
+      padding: 0 0.65rem;
       line-height: 1;
     }
     .inf-pi05-panel input[type="text"],
@@ -865,40 +974,122 @@ PREVIEW_HTML = """<!DOCTYPE html>
       color: var(--text);
       font-size: var(--inf-fs);
       height: var(--inf-ctrl-h);
-      padding: 0 0.5rem;
+      padding: 0 0.45rem;
       min-width: 0;
     }
-    #infPi05Host { width: 8.5rem; flex: 0 0 auto; }
-    #infPi05Port { width: 5.25rem; flex: 0 0 auto; }
-    #infPi05Prompt { flex: 1 1 12rem; min-width: 10rem; }
+    #infPi05Host { width: 7.5rem; flex: 0 0 auto; }
+    #infPi05Port { width: 4.75rem; flex: 0 0 auto; }
+    #infPi05Prompt { flex: 1 1 8rem; min-width: 6rem; }
     #infArmJoints {
-      flex: 1 1 16rem;
-      min-width: 12rem;
+      flex: 1 1 100%;
+      min-width: 0;
+      width: 100%;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: var(--inf-fs);
     }
     .inf-pi05-panel .arm-abs-dur {
       display: inline-flex;
       align-items: center;
-      gap: 0.35rem;
+      gap: 0.3rem;
       height: var(--inf-ctrl-h);
     }
     .inf-pi05-panel .arm-abs-dur input[type="number"] {
-      width: 4.25rem;
+      width: 3.75rem;
       text-align: right;
     }
     #infArmDurVal {
-      min-width: 3.2rem;
+      min-width: 2.8rem;
       color: var(--muted);
       font-variant-numeric: tabular-nums;
     }
+    /* Record chrome folded into left Infer panel */
+    .inf-pi05-sec-rec { gap: 0.4rem; }
+    .inf-pi05-panel .inf-rec-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem 0.45rem;
+      align-items: center;
+      margin: 0;
+    }
+    .inf-pi05-panel .inf-rec-actions button {
+      border-radius: 8px;
+      padding: 0 0.65rem;
+      height: var(--inf-ctrl-h);
+      font-size: var(--inf-fs);
+      font-weight: 550;
+    }
+    .inf-pi05-panel .inf-rec-actions .quick-collect {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.28rem;
+      margin: 0;
+      font-size: var(--inf-fs);
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .inf-pi05-panel .inf-rec-actions .quick-collect input {
+      margin: 0;
+      width: 0.9rem;
+      height: 0.9rem;
+    }
+    .inf-pi05-panel .inf-rec-save {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem 0.45rem;
+      align-items: center;
+      margin: 0;
+      width: 100%;
+    }
+    .inf-pi05-panel .inf-rec-save input {
+      flex: 1 1 8rem;
+      min-width: 6rem;
+      width: auto;
+      max-width: none;
+    }
+    .inf-pi05-panel .inf-rec-save button {
+      flex: 0 0 auto;
+      border-radius: 8px;
+      padding: 0 0.65rem;
+      height: var(--inf-ctrl-h);
+      font-size: var(--inf-fs);
+    }
+    .inf-pi05-panel .inf-rec-meta {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.3rem 0.4rem;
+      margin: 0;
+      width: 100%;
+      font-size: 0.72rem;
+    }
+    .inf-pi05-panel .inf-rec-meta > div {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      min-width: 0;
+      padding: 0.18rem 0.4rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--chrome, var(--panel)) 88%, transparent);
+      backdrop-filter: none;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+    .inf-pi05-panel .inf-rec-meta > div span { flex: 0 0 auto; color: var(--muted); }
+    .inf-pi05-panel .inf-rec-meta strong {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-size: 0.72rem;
+    }
+    .inf-pi05-panel .inf-rec-meta > div:nth-child(3) { grid-column: 1 / -1; }
     #infPi05Status {
       display: inline-flex;
       align-items: center;
-      min-width: 11.5rem;
-      max-width: 14rem;
+      flex: 1 1 6rem;
+      min-width: 5.5rem;
+      max-width: 100%;
       height: var(--inf-ctrl-h);
-      padding: 0 0.45rem;
+      padding: 0 0.4rem;
       border-radius: 8px;
       border: 1px solid var(--border);
       background: var(--input-bg, rgba(0,0,0,0.12));
@@ -915,11 +1106,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
     .inf-flag {
       display: inline-flex;
       align-items: center;
-      gap: 0.3rem;
-      flex: 0 0 auto;
-      width: 8.6rem;
+      gap: 0.28rem;
+      flex: 0 1 auto;
+      min-width: 0;
+      width: auto;
+      max-width: 100%;
       height: var(--inf-ctrl-h);
-      padding: 0 0.5rem;
+      padding: 0 0.45rem;
       border: 1px solid var(--border);
       border-radius: 999px;
       font-size: var(--inf-fs);
@@ -1004,11 +1197,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .arm-home-set-row button { font-size: 0.78rem; height: 1.7rem; padding: 0 0.55rem; }
     #infPi05Out { display: none; }
-    .inf-pi05-raw-modal .modal-card {
+    .inf-pi05-raw-modal .modal-card,
+    .inf-ws-raw-modal .modal-card {
       max-width: min(44rem, calc(100vw - 2rem));
       width: 44rem;
     }
-    .inf-pi05-raw-modal .modal-body {
+    .inf-ws-raw-modal .modal-card {
+      max-width: min(56rem, calc(100vw - 2rem));
+      width: 56rem;
+    }
+    .inf-pi05-raw-modal .modal-body,
+    .inf-ws-raw-modal .modal-body {
       margin: 0;
       max-height: min(60vh, 28rem);
       overflow: auto;
@@ -1021,6 +1220,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       border-radius: 8px;
       border: 1px solid var(--border);
       background: var(--input-bg);
+    }
+    .inf-ws-raw-modal .modal-body {
+      max-height: min(70vh, 36rem);
     }
     .agent-vals {
       display: flex; flex-wrap: wrap; gap: 0.35rem 0.55rem;
@@ -1515,6 +1717,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <div><span data-i18n="meta.hz">前端 hz：</span><strong id="hzFront">—</strong></div>
       <div><span data-i18n="meta.written">已写帧：</span><strong id="written">0</strong></div>
     </div>
+    <div class="collect-raw-bar">
+      <button type="button" id="rawBtn" data-i18n="collect.ws_raw_btn">WS 原始数据</button>
+    </div>
     <div class="content-row">
       <section class="cam-section">
         <h2 data-i18n="cam.title">Camera preview · 2×2</h2>
@@ -1522,72 +1727,136 @@ PREVIEW_HTML = """<!DOCTYPE html>
       </section>
       <div id="agents"></div>
     </div>
-    <pre id="raw">{}</pre>
+    <div class="modal-backdrop inf-ws-raw-modal" id="rawModal" role="dialog" aria-modal="true" aria-labelledby="rawTitle">
+      <div class="modal-card">
+        <h3 id="rawTitle" data-i18n="collect.ws_raw_title">WebSocket 原始帧</h3>
+        <pre class="modal-body" id="raw">{}</pre>
+        <div style="margin-top:0.75rem;display:flex;justify-content:flex-end;">
+          <button type="button" class="primary" id="rawClose" data-i18n="common.done">完成</button>
+        </div>
+      </div>
+    </div>
     </div>
 
     <div class="tab-panel" id="tab-infer" role="tabpanel">
-    <div class="inf-split">
-    <div class="inf-split-main">
+    <div class="inf-subnav" role="tablist" aria-label="Infer pages">
+      <button type="button" class="inf-subnav-btn active" id="infPageBtnControl" data-inf-page="control" role="tab" aria-selected="true" data-i18n="infer.page_control">控制</button>
+      <button type="button" class="inf-subnav-btn" id="infPageBtnSensors" data-inf-page="sensors" role="tab" aria-selected="false" data-i18n="infer.page_sensors">预览</button>
+    </div>
+    <div class="inf-page active" id="infPageControl" data-inf-page="control" role="tabpanel">
     <p class="inf-banner" data-i18n="infer.banner">推理页与采集共用录制；可手动下发 joints（单步调试回填 next_state）。</p>
+    <div class="inf-split">
     <div class="inf-pi05-panel" id="infPi05Panel">
-      <div class="inf-pi05-row">
-        <span class="inf-k" data-i18n="infer.status_label">Serve：</span>
-        <strong id="infPi05Status" class="st-offline">未连接</strong>
-        <span class="inf-flag" id="infFlagTerm" title="term_flag">
-          <span class="inf-dot st-idle" id="infFlagTermDot"></span>
-          <span class="inf-flag-lab" data-i18n="infer.flag_term">term</span>
-          <span class="inf-flag-val" id="infFlagTermVal" data-i18n="infer.flag_idle">—</span>
-        </span>
-        <span class="inf-flag" id="infFlagReject" title="reject_flag">
-          <span class="inf-dot st-idle" id="infFlagRejectDot"></span>
-          <span class="inf-flag-lab" data-i18n="infer.flag_reject">reject</span>
-          <span class="inf-flag-val" id="infFlagRejectVal" data-i18n="infer.flag_idle">—</span>
-        </span>
-        <button type="button" id="infPi05RawBtn" data-i18n="infer.raw_btn">原始数据</button>
-      </div>
-      <div class="inf-pi05-row">
-        <label for="infPi05Host" data-i18n="infer.host">Host</label>
-        <input type="text" id="infPi05Host" value="127.0.0.1" autocomplete="off" spellcheck="false" />
-        <label for="infPi05Port" data-i18n="infer.port">Port</label>
-        <input type="number" id="infPi05Port" value="5000" min="1" max="65535" step="1" />
-        <button type="button" class="primary" id="infPi05Connect" data-i18n="infer.connect">连接</button>
-        <button type="button" id="infPi05Disconnect" data-i18n="infer.disconnect" disabled>断开</button>
-      </div>
-      <div class="inf-pi05-row">
-        <button type="button" class="primary" id="infPi05Step" data-i18n="infer.step" disabled>单步调试</button>
-        <button type="button" id="infPi05Loop" data-i18n="infer.loop" disabled>LOOP</button>
-          <label class="inf-loop-rounds" data-i18n-title="infer.loop_rounds_hint" title="大循环轮数 1–1000：每轮=LOOP至terminate→Home；开轮前校验已在 Home">
+      <section class="inf-pi05-sec" aria-labelledby="infSecServe">
+        <h3 class="inf-pi05-sec-title" id="infSecServe" data-i18n="infer.sec_serve">Serve</h3>
+        <div class="inf-pi05-row">
+          <strong id="infPi05Status" class="st-offline">未连接</strong>
+          <button type="button" id="infPi05RawBtn" data-i18n="infer.raw_btn">原始数据</button>
+        </div>
+        <div class="inf-pi05-row">
+          <span class="inf-flag" id="infFlagTerm" title="term_flag">
+            <span class="inf-dot st-idle" id="infFlagTermDot"></span>
+            <span class="inf-flag-lab" data-i18n="infer.flag_term">term</span>
+            <span class="inf-flag-val" id="infFlagTermVal" data-i18n="infer.flag_idle">—</span>
+          </span>
+          <span class="inf-flag" id="infFlagReject" title="reject_flag">
+            <span class="inf-dot st-idle" id="infFlagRejectDot"></span>
+            <span class="inf-flag-lab" data-i18n="infer.flag_reject">reject</span>
+            <span class="inf-flag-val" id="infFlagRejectVal" data-i18n="infer.flag_idle">—</span>
+          </span>
+        </div>
+        <div class="inf-pi05-row">
+          <label for="infPi05Host" data-i18n="infer.host">Host</label>
+          <input type="text" id="infPi05Host" value="127.0.0.1" autocomplete="off" spellcheck="false" />
+          <label for="infPi05Port" data-i18n="infer.port">Port</label>
+          <input type="number" id="infPi05Port" value="5000" min="1" max="65535" step="1" />
+          <button type="button" class="primary" id="infPi05Connect" data-i18n="infer.connect">连接</button>
+          <button type="button" id="infPi05Disconnect" data-i18n="infer.disconnect" disabled>断开</button>
+        </div>
+        <div class="inf-pi05-row inf-pi05-hints">
+          <span class="hint" id="infPi05Hint" data-i18n="infer.hint_idle">连接后点「单步调试」采集传感器并发给 serve</span>
+        </div>
+      </section>
+      <section class="inf-pi05-sec" aria-labelledby="infSecInfer">
+        <h3 class="inf-pi05-sec-title" id="infSecInfer" data-i18n="infer.sec_infer">推理</h3>
+        <div class="inf-pi05-row">
+          <button type="button" class="primary" id="infPi05Step" data-i18n="infer.step" disabled>单步调试</button>
+          <button type="button" id="infPi05Loop" data-i18n="infer.loop" disabled>LOOP</button>
+          <label class="inf-loop-rounds" data-i18n-title="infer.loop_rounds_hint" title="大循环轮数：勾选自动复位时可用；每轮=LOOP至terminate→Home">
             <span data-i18n="infer.loop_rounds">轮数</span>
             <input type="number" id="infLoopRounds" min="1" max="1000" step="1" value="1" />
             <span class="inf-loop-round-idx" id="infLoopRoundIdx">—</span>
           </label>
-        <label class="inf-auto-home" title="terminate 后自动回 Home">
-          <input type="checkbox" id="infAutoHome" />
-          <span data-i18n="infer.auto_home">自动复位</span>
-        </label>
-        <button type="button" id="infArmHome" data-i18n="arm.home">Home</button>
-        <label for="infArmJoints" class="arm-abs-label" data-i18n="arm.abs_label" data-i18n-title="infer.joints_tip" title="单步后 IK(next_state→joints) 回填；下发为 joints_rad">joints</label>
-        <input type="text" id="infArmJoints" class="inf-arm-joints" data-i18n-placeholder="arm.abs_ph" placeholder="0.00,0.00,0.00,0.00,0.00,0.00" autocomplete="off" spellcheck="false" />
-        <button type="button" id="infArmSend" data-i18n="arm.abs_send">下发</button>
-        <label class="arm-abs-dur" data-i18n-title="arm.abs_dur_hint" title="1–300（100ms–30s）">
-          <span data-i18n="arm.abs_dur">到达</span>
-          <input type="number" id="infArmDur" min="1" max="300" step="1" value="100" />
-          <span data-i18n="arm.abs_dur_unit">×100ms</span>
-          <span id="infArmDurVal">10.0s</span>
-        </label>
-      </div>
-      <div class="inf-pi05-row inf-pi05-hints">
-        <span class="hint" id="infArmProg" data-i18n="arm.abs_idle">绝对下发：空闲</span>
-      </div>
-      <div class="inf-pi05-row">
-        <label for="infPi05Prompt" data-i18n="infer.prompt">Prompt</label>
-        <input type="text" id="infPi05Prompt" data-i18n-placeholder="infer.prompt_ph" placeholder="任务描述（可空）" autocomplete="off" />
-        <button type="button" id="infPi05PromptApply" data-i18n="btn.apply">应用</button>
-      </div>
-      <div class="inf-pi05-row inf-pi05-hints">
-        <span class="hint" id="infPi05Hint" data-i18n="infer.hint_idle">连接后点「单步调试」采集传感器并发给 serve</span>
-      </div>
+          <label class="inf-auto-home" data-i18n-title="infer.auto_home_hint" title="勾选：terminate 后回 Home，并可设多轮；不勾选：不回 Home，轮数固定为 1">
+            <input type="checkbox" id="infAutoHome" />
+            <span data-i18n="infer.auto_home">自动复位</span>
+          </label>
+        </div>
+        <div class="inf-pi05-row">
+          <label for="infPi05Prompt" data-i18n="infer.prompt">Prompt</label>
+          <input type="text" id="infPi05Prompt" data-i18n-placeholder="infer.prompt_ph" placeholder="任务描述（可空）" autocomplete="off" />
+          <button type="button" id="infPi05PromptApply" data-i18n="btn.apply">应用</button>
+        </div>
+      </section>
+      <section class="inf-pi05-sec" aria-labelledby="infSecArm">
+        <h3 class="inf-pi05-sec-title" id="infSecArm" data-i18n="infer.sec_arm">臂控制</h3>
+        <div class="inf-pi05-row">
+          <button type="button" id="infArmHome" data-i18n="arm.home">Home</button>
+          <label class="arm-abs-dur" data-i18n-title="arm.abs_dur_hint" title="1–300（100ms–30s）">
+            <span data-i18n="arm.abs_dur">到达</span>
+            <input type="number" id="infArmDur" min="1" max="300" step="1" value="100" />
+            <span data-i18n="arm.abs_dur_unit">×100ms</span>
+            <span id="infArmDurVal">10.0s</span>
+          </label>
+        </div>
+        <div class="inf-pi05-row">
+          <label for="infArmJoints" class="arm-abs-label" data-i18n="arm.abs_label" data-i18n-title="infer.joints_tip" title="单步后 IK(next_state→joints) 回填；下发为 joints_rad">joints</label>
+          <input type="text" id="infArmJoints" class="inf-arm-joints" data-i18n-placeholder="arm.abs_ph" placeholder="0.00,0.00,0.00,0.00,0.00,0.00" autocomplete="off" spellcheck="false" />
+          <button type="button" id="infArmSend" data-i18n="arm.abs_send">下发</button>
+        </div>
+        <div class="inf-pi05-row inf-pi05-hints">
+          <span class="hint" id="infArmProg" data-i18n="arm.abs_idle">绝对下发：空闲</span>
+        </div>
+      </section>
+      <section class="inf-pi05-sec inf-pi05-sec-rec" aria-labelledby="infSecRec">
+        <h3 class="inf-pi05-sec-title" id="infSecRec" data-i18n="infer.sec_rec">录制</h3>
+        <div class="actions inf-rec-actions">
+          <button type="button" class="primary" id="infBtnStart" data-i18n="btn.start">开始</button>
+          <button type="button" id="infBtnStop" disabled data-i18n="btn.stop">结束</button>
+          <button type="button" class="discard" id="infBtnDiscard" disabled data-i18n="btn.discard">作废</button>
+          <label class="quick-collect" data-i18n-title="quick.title" title="结束或作废后自动执行后处理三步（参数见「数据后处理」Tab）">
+            <input type="checkbox" id="infChkQuickCollect" />
+            <span data-i18n="quick.label">快速采集</span>
+          </label>
+          <label class="quick-collect" data-i18n-title="async.title" title="结束/作废后后台落盘；未写完也可开始下一集">
+            <input type="checkbox" id="infChkAsyncFlush" />
+            <span data-i18n="async.label">异步落盘</span>
+          </label>
+        </div>
+        <div class="inf-pi05-row inf-pi05-hints">
+          <span class="hint" id="infRunHint" data-i18n="hint.idle">空闲 — 点「开始」录制当前 episode</span>
+        </div>
+        <div class="save-path inf-rec-save">
+          <label for="infSaveDirInput" data-i18n="save.label">保存路径</label>
+          <input type="text" id="infSaveDirInput" data-i18n-placeholder="save.placeholder" placeholder="留空则沿用当前路径" />
+          <button type="button" id="infBtnSaveDir" data-i18n="btn.apply">应用</button>
+        </div>
+        <div class="meta inf-rec-meta">
+          <div><span data-i18n="meta.conn">连接：</span><strong id="infStatus" class="st-connecting">connecting…</strong></div>
+          <div><span data-i18n="meta.rec">录制：</span><strong id="infRecState">idle</strong></div>
+          <div><span data-i18n="meta.save">保存路径：</span><strong id="infSaveDir">—</strong></div>
+          <div><span data-i18n="meta.episode">episode：</span><strong id="infEpisode">—</strong></div>
+          <div><span data-i18n="meta.hz">前端 hz：</span><strong id="infHzFront">—</strong></div>
+          <div><span data-i18n="meta.written">已写帧：</span><strong id="infWritten">0</strong></div>
+        </div>
+      </section>
       <pre class="inf-pi05-out" id="infPi05Out" hidden>{}</pre>
+    </div>
+    <aside class="inf-split-pose" aria-label="End-effector pose">
+      <h2 data-i18n="infer.pose_title">末端位姿</h2>
+      <div class="inf-pose-canvas-wrap"><canvas id="infPoseCanvas"></canvas></div>
+      <div class="inf-pose-hud" id="infPoseHud" data-i18n="infer.pose_idle">等待 arm · Read…</div>
+    </aside>
     </div>
     <div class="modal-backdrop inf-pi05-raw-modal" id="infPi05RawModal" role="dialog" aria-modal="true" aria-labelledby="infPi05RawTitle">
       <div class="modal-card">
@@ -1598,32 +1867,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         </div>
       </div>
     </div>
-    <div class="actions">
-      <button type="button" class="primary" id="infBtnStart" data-i18n="btn.start">开始</button>
-      <button type="button" id="infBtnStop" disabled data-i18n="btn.stop">结束</button>
-      <button type="button" class="discard" id="infBtnDiscard" disabled data-i18n="btn.discard">作废</button>
-      <label class="quick-collect" data-i18n-title="quick.title" title="结束或作废后自动执行后处理三步（参数见「数据后处理」Tab）">
-        <input type="checkbox" id="infChkQuickCollect" />
-        <span data-i18n="quick.label">快速采集</span>
-      </label>
-      <label class="quick-collect" data-i18n-title="async.title" title="结束/作废后后台落盘；未写完也可开始下一集">
-        <input type="checkbox" id="infChkAsyncFlush" />
-        <span data-i18n="async.label">异步落盘</span>
-      </label>
-      <span class="hint" id="infRunHint" data-i18n="hint.idle">空闲 — 点「开始」录制当前 episode</span>
     </div>
-    <div class="save-path">
-      <label for="infSaveDirInput" data-i18n="save.label">保存路径</label>
-      <input type="text" id="infSaveDirInput" data-i18n-placeholder="save.placeholder" placeholder="留空则沿用当前路径" />
-      <button type="button" id="infBtnSaveDir" data-i18n="btn.apply">应用</button>
-    </div>
-    <div class="meta">
-      <div><span data-i18n="meta.conn">连接：</span><strong id="infStatus" class="st-connecting">connecting…</strong></div>
-      <div><span data-i18n="meta.rec">录制：</span><strong id="infRecState">idle</strong></div>
-      <div><span data-i18n="meta.save">保存路径：</span><strong id="infSaveDir">—</strong></div>
-      <div><span data-i18n="meta.episode">episode：</span><strong id="infEpisode">—</strong></div>
-      <div><span data-i18n="meta.hz">前端 hz：</span><strong id="infHzFront">—</strong></div>
-      <div><span data-i18n="meta.written">已写帧：</span><strong id="infWritten">0</strong></div>
+    <div class="inf-page" id="infPageSensors" data-inf-page="sensors" role="tabpanel">
+    <div class="inf-page-sensors-bar">
+      <button type="button" id="infRawBtn" data-i18n="infer.ws_raw_btn">WS 原始数据</button>
     </div>
     <div class="content-row">
       <section class="cam-section">
@@ -1632,13 +1879,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
       </section>
       <div id="infAgents"></div>
     </div>
-    <pre id="infRaw">{}</pre>
+    <div class="modal-backdrop inf-ws-raw-modal" id="infRawModal" role="dialog" aria-modal="true" aria-labelledby="infRawTitle">
+      <div class="modal-card">
+        <h3 id="infRawTitle" data-i18n="infer.ws_raw_title">WS 原始数据</h3>
+        <pre class="modal-body" id="infRaw">{}</pre>
+        <div style="margin-top:0.75rem;display:flex;justify-content:flex-end;">
+          <button type="button" class="primary" id="infRawClose" data-i18n="common.done">完成</button>
+        </div>
+      </div>
     </div>
-    <aside class="inf-split-pose" aria-label="End-effector pose">
-      <h2 data-i18n="infer.pose_title">末端位姿</h2>
-      <div class="inf-pose-canvas-wrap"><canvas id="infPoseCanvas"></canvas></div>
-      <div class="inf-pose-hud" id="infPoseHud" data-i18n="infer.pose_idle">等待 arm · Read…</div>
-    </aside>
     </div>
     </div>
 
@@ -2115,9 +2364,32 @@ PREVIEW_HTML = """<!DOCTYPE html>
         inp.value = formatHomeJointsCsv(joints);
       }
       const durInp = document.getElementById('settingsHomeDur');
-      if (durInp && document.activeElement !== durInp) {
+      if (durInp && document.activeElement !== durInp && !durInp.dataset.dirty) {
         durInp.value = String(homeDurationHundredMsFromState(st));
         updateSettingsHomeDurLabel();
+      }
+      if (typeof window.__setInfPoseHome === 'function') {
+        window.__setInfPoseHome((st && st.home_cartesian_xyzrpy) || null);
+      }
+    }
+    async function pushHomeDurationFromUi() {
+      const durInp = document.getElementById('settingsHomeDur');
+      updateSettingsHomeDurLabel();
+      const duration_s = homeDurationSecondsFromUi();
+      try {
+        const r = await fetch('/api/arm/home/set', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ duration_s: duration_s }),
+        }).then((x) => x.json());
+        if (r && r.ok !== false) {
+          window.__armHome = r;
+          if (durInp) delete durInp.dataset.dirty;
+          syncSettingsHomeFromState(r);
+        }
+        return r;
+      } catch (e) {
+        return { ok: false, error: String(e) };
       }
     }
     async function refreshArmHomeState() {
@@ -2149,6 +2421,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
       dur = Math.max(0.1, Math.min(30, Number(dur)));
       const agentId = window.__armWriteAgentId || null;
+      if (progEl) progEl.textContent = t('arm.home_planning', { dur: Number(dur).toFixed(1) });
       try {
         const r = await fetch('/api/arm/home/go', {
           method: 'POST',
@@ -2168,7 +2441,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
           if (progEl) progEl.textContent = t('arm.home_fail', { error: r.error || JSON.stringify(r) });
         } else {
           if (progEl) {
-            progEl.textContent = t('arm.home_ok', { dur: Number(usedDur).toFixed(1) });
+            const phase = (r && r.phase) || '';
+            progEl.textContent = (phase === 'planning')
+              ? t('arm.home_planning', { dur: Number(usedDur).toFixed(1) })
+              : t('arm.home_ok', { dur: Number(usedDur).toFixed(1) });
           }
           if (r) window.__armAbsRamp = r;
         }
@@ -2509,6 +2785,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         connected: p.connected,
         host: p.host,
         port: p.port,
+        prompt: p.prompt,
         step: p.step,
         latency_ms: p.latency_ms,
         robot_state: p.robot_state,
@@ -2588,6 +2865,40 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (e.target === infPi05RawModal) closePi05RawModal();
       });
     }
+    const infRawBtn = document.getElementById('infRawBtn');
+    const infRawModal = document.getElementById('infRawModal');
+    const infRawClose = document.getElementById('infRawClose');
+    function openInfRawModal() {
+      if (!infRawModal) return;
+      infRawModal.classList.add('show');
+    }
+    function closeInfRawModal() {
+      if (infRawModal) infRawModal.classList.remove('show');
+    }
+    if (infRawBtn) infRawBtn.addEventListener('click', openInfRawModal);
+    if (infRawClose) infRawClose.addEventListener('click', closeInfRawModal);
+    if (infRawModal) {
+      infRawModal.addEventListener('click', (e) => {
+        if (e.target === infRawModal) closeInfRawModal();
+      });
+    }
+    const rawBtn = document.getElementById('rawBtn');
+    const rawModal = document.getElementById('rawModal');
+    const rawClose = document.getElementById('rawClose');
+    function openCollectRawModal() {
+      if (!rawModal) return;
+      rawModal.classList.add('show');
+    }
+    function closeCollectRawModal() {
+      if (rawModal) rawModal.classList.remove('show');
+    }
+    if (rawBtn) rawBtn.addEventListener('click', openCollectRawModal);
+    if (rawClose) rawClose.addEventListener('click', closeCollectRawModal);
+    if (rawModal) {
+      rawModal.addEventListener('click', (e) => {
+        if (e.target === rawModal) closeCollectRawModal();
+      });
+    }
     function fillInfArmJointsFromStep(r) {
       if (!infArmJoints || !r) return false;
       const joints = r.next_joints_rad;
@@ -2641,6 +2952,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (infPi05Port) infPi05Port.disabled = true;
         setPi05RawPayload(p);
         updatePi05Flags(p);
+        if (p && p.next_state && typeof window.__setInfPoseGoal === 'function') {
+          window.__pi05NextState = p.next_state;
+          window.__setInfPoseGoal(p.next_state);
+        }
         return;
       }
       if (infPi05Host) infPi05Host.disabled = connected || pi05LoopRunning;
@@ -2648,7 +2963,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (infPi05Connect) infPi05Connect.disabled = connected || pi05LoopRunning;
       if (infPi05Disconnect) infPi05Disconnect.disabled = !connected || pi05LoopRunning;
       if (infPi05Step) infPi05Step.disabled = !connected || pi05StepBusy || pi05LoopRunning;
-      if (infLoopRounds) infLoopRounds.disabled = pi05LoopRunning;
+      if (typeof syncAutoHomeRoundsUi === 'function') syncAutoHomeRoundsUi();
+      else if (infLoopRounds) infLoopRounds.disabled = pi05LoopRunning;
       if (infPi05Loop) {
         infPi05Loop.disabled = !connected || (pi05StepBusy && !pi05LoopRunning);
         infPi05Loop.textContent = pi05LoopRunning ? t('infer.loop_stop') : t('infer.loop');
@@ -2677,10 +2993,22 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (p && p.port != null && infPi05Port && document.activeElement !== infPi05Port && !connected) {
         infPi05Port.value = String(p.port);
       }
-      if (p && p.prompt != null && infPi05Prompt && document.activeElement !== infPi05Prompt) {
+      // Do not clobber in-progress edits; WS/status often still has "" until Apply/step sync.
+      if (
+        p && p.prompt != null
+        && infPi05Prompt
+        && document.activeElement !== infPi05Prompt
+        && !infPi05Prompt.dataset.dirty
+      ) {
         infPi05Prompt.value = p.prompt;
       }
       updatePi05Flags(p);
+      if (p && Array.isArray(p.next_state) && p.next_state.length >= 3) {
+        window.__pi05NextState = p.next_state;
+        if (typeof window.__setInfPoseGoal === 'function') {
+          window.__setInfPoseGoal(p.next_state);
+        }
+      }
     }
     async function postPi05(path, body) {
       savePi05Form();
@@ -2689,9 +3017,51 @@ PREVIEW_HTML = """<!DOCTYPE html>
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body || {}),
       }).then((x) => x.json());
+      if (path === '/api/pi05/prompt' && r && r.ok !== false && infPi05Prompt) {
+        delete infPi05Prompt.dataset.dirty;
+      }
       applyPi05PanelFromPayload(r);
       if (infPi05Hint && r.error && !r.ok) infPi05Hint.textContent = r.error;
       return r;
+    }
+    function currentPi05Prompt() {
+      return (infPi05Prompt && infPi05Prompt.value != null) ? String(infPi05Prompt.value) : '';
+    }
+    async function pushPi05PromptFromUi(opts) {
+      const silent = !!(opts && opts.silent);
+      const prompt = currentPi05Prompt();
+      savePi05Form();
+      try {
+        const r = await fetch('/api/pi05/prompt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt: prompt }),
+        }).then((x) => x.json());
+        if (r && r.ok !== false) {
+          if (infPi05Prompt) {
+            delete infPi05Prompt.dataset.dirty;
+            if (r.prompt != null) infPi05Prompt.value = r.prompt;
+          }
+          applyPi05PanelFromPayload(r);
+          if (!silent && infPi05Hint) {
+            const shown = (r.prompt != null) ? String(r.prompt) : prompt;
+            infPi05Hint.textContent = shown
+              ? t('infer.hint_prompt_ok', { prompt: shown })
+              : t('infer.hint_prompt_empty');
+            infPi05Hint.title = infPi05Hint.textContent || '';
+          }
+        } else if (!silent && infPi05Hint) {
+          infPi05Hint.textContent = (r && r.error) || t('infer.hint_prompt_fail');
+          infPi05Hint.title = infPi05Hint.textContent || '';
+        }
+        return r;
+      } catch (e) {
+        if (!silent && infPi05Hint) {
+          infPi05Hint.textContent = String(e);
+          infPi05Hint.title = infPi05Hint.textContent || '';
+        }
+        return { ok: false, error: String(e) };
+      }
     }
     async function postInfArm(body) {
       const agentId = window.__armWriteAgentId || null;
@@ -2703,12 +3073,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
       return r;
     }
     loadPi05Form();
-    fetch('/api/pi05/status').then((r) => r.json()).then(applyPi05PanelFromPayload).catch(() => {});
+    // localStorage prompt must not be wiped by the initial empty server status.
+    if (infPi05Prompt && currentPi05Prompt()) infPi05Prompt.dataset.dirty = '1';
+    fetch('/api/pi05/status').then((r) => r.json()).then(async (p) => {
+      applyPi05PanelFromPayload(p);
+      if (infPi05Prompt && infPi05Prompt.dataset.dirty) {
+        await pushPi05PromptFromUi({ silent: true });
+      }
+    }).catch(() => {});
     if (infPi05Connect) {
       infPi05Connect.addEventListener('click', async () => {
         setPi05StatusEl('st-connecting', t('infer.status_connecting'));
         if (infPi05Connect) infPi05Connect.disabled = true;
         try {
+          await pushPi05PromptFromUi({ silent: true });
           await postPi05('/api/pi05/connect', {
             host: (infPi05Host && infPi05Host.value) || '127.0.0.1',
             port: Number((infPi05Port && infPi05Port.value) || 5000),
@@ -2730,7 +3108,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const canvas = document.getElementById('infPoseCanvas');
       const hud = document.getElementById('infPoseHud');
       if (!canvas || typeof THREE === 'undefined') {
-        if (hud) hud.textContent = t('infer.pose_idle');
+        if (hud) hud.textContent = t('infer.pose_no_three');
         return;
       }
       const wrap = canvas.parentElement;
@@ -2738,104 +3116,278 @@ PREVIEW_HTML = """<!DOCTYPE html>
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       renderer.setClearColor(0x0b1018, 1);
       const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 20);
-      camera.position.set(0.55, 0.45, 0.75);
-      camera.lookAt(0.3, 0.0, 0.2);
-      scene.add(new THREE.AmbientLight(0xffffff, 0.75));
-      const grid = new THREE.GridHelper(1.2, 12, 0x3dd6c6, 0x1c2736);
-      grid.position.y = 0;
+      const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 40);
+      // Robot base is Z-up (x forward, y left, z up). Three.js is Y-up → map (x,y,z)→(x,z,-y).
+      const orbitTarget = new THREE.Vector3(0.4, 0.15, 0.0);
+      const spherical = new THREE.Spherical(1.15, 1.05, 0.85);
+      function applyCam() {
+        camera.position.setFromSpherical(spherical).add(orbitTarget);
+        camera.lookAt(orbitTarget);
+      }
+      applyCam();
+      scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+      const dir = new THREE.DirectionalLight(0xffffff, 0.65);
+      dir.position.set(0.8, 1.2, 0.4);
+      scene.add(dir);
+      const grid = new THREE.GridHelper(1.6, 16, 0x3dd6c6, 0x1c2736);
       scene.add(grid);
-      const axes = new THREE.AxesHelper(0.25);
+      const axes = new THREE.AxesHelper(0.3);
       scene.add(axes);
-      const marker = new THREE.Mesh(
-        new THREE.SphereGeometry(0.025, 20, 20),
-        new THREE.MeshStandardMaterial({ color: 0xf0b429, emissive: 0x6a4a10, metalness: 0.2, roughness: 0.45 }),
+      // Live TCP — small amber
+      const tcpMarker = new THREE.Mesh(
+        new THREE.SphereGeometry(0.005, 12, 12),
+        new THREE.MeshBasicMaterial({ color: 0xf0b429 }),
       );
-      const tipAxes = new THREE.AxesHelper(0.1);
-      marker.add(tipAxes);
-      scene.add(marker);
-      scene.add(new THREE.DirectionalLight(0xffffff, 0.55));
-      const trailGeom = new THREE.BufferGeometry();
-      const trailMax = 120;
-      const trailPos = new Float32Array(trailMax * 3);
-      trailGeom.setAttribute('position', new THREE.BufferAttribute(trailPos, 3));
-      trailGeom.setDrawRange(0, 0);
-      const trail = new THREE.Line(
-        trailGeom,
-        new THREE.LineBasicMaterial({ color: 0x3dd6c6, transparent: true, opacity: 0.65 }),
+      const tipAxes = new THREE.AxesHelper(0.035);
+      tcpMarker.add(tipAxes);
+      scene.add(tcpMarker);
+      // Current server goal — small red/pink (latest)
+      const goalMarker = new THREE.Mesh(
+        new THREE.SphereGeometry(0.006, 12, 12),
+        new THREE.MeshBasicMaterial({ color: 0xff5c8a }),
       );
-      scene.add(trail);
-      let trailN = 0;
-      let trailI = 0;
+      goalMarker.visible = false;
+      scene.add(goalMarker);
+      // Configured Home TCP — small blue (synced with YAML / 设为 home)
+      const homeMarker = new THREE.Mesh(
+        new THREE.SphereGeometry(0.0055, 12, 12),
+        new THREE.MeshBasicMaterial({ color: 0x4ea1ff }),
+      );
+      homeMarker.visible = false;
+      scene.add(homeMarker);
+      // Goal history: ----o----o----o---- (kept across LOOP rounds)
+      const WAYPOINT_MAX = 400;
+      const WAYPOINT_MIN_DIST = 0.0008;
+      const waypointGeom = new THREE.SphereGeometry(0.0035, 10, 10);
+      const waypointMat = new THREE.MeshBasicMaterial({ color: 0x3dd6c6 });
+      const waypointGroup = new THREE.Group();
+      scene.add(waypointGroup);
+      const trailPosArr = [];
+      const trailLineGeom = new THREE.BufferGeometry();
+      const trailLinePos = new Float32Array(WAYPOINT_MAX * 3);
+      trailLineGeom.setAttribute('position', new THREE.BufferAttribute(trailLinePos, 3));
+      trailLineGeom.setDrawRange(0, 0);
+      const trailLine = new THREE.Line(
+        trailLineGeom,
+        new THREE.LineBasicMaterial({ color: 0x3dd6c6, transparent: true, opacity: 0.85 }),
+      );
+      scene.add(trailLine);
+      let hasTcp = false;
+      let lastGoal = null;
+      let lastGoalKey = '';
+      let followTcp = true;
+      function robotToThree(x, y, z) {
+        return { x: x, y: z, z: -y };
+      }
+      function parseXyz(arr) {
+        if (!Array.isArray(arr) || arr.length < 3) return null;
+        const x = Number(arr[0]);
+        const y = Number(arr[1]);
+        const z = Number(arr[2]);
+        if (![x, y, z].every(Number.isFinite)) return null;
+        return { x: x, y: y, z: z };
+      }
       function resize() {
         if (!wrap) return;
         const w = Math.max(1, wrap.clientWidth || canvas.clientWidth || 320);
         const h = Math.max(1, wrap.clientHeight || 240);
+        if (w < 2 || h < 2) return;
         renderer.setSize(w, h, false);
         camera.aspect = w / h;
         camera.updateProjectionMatrix();
       }
-      function pushTrail(x, y, z) {
-        trailPos[trailI * 3] = x;
-        trailPos[trailI * 3 + 1] = y;
-        trailPos[trailI * 3 + 2] = z;
-        trailI = (trailI + 1) % trailMax;
-        trailN = Math.min(trailMax, trailN + 1);
-        // Rebuild contiguous order for Line (simple ring → copy)
-        const ordered = new Float32Array(trailN * 3);
-        for (let k = 0; k < trailN; k++) {
-          const src = (trailI - trailN + k + trailMax) % trailMax;
-          ordered[k * 3] = trailPos[src * 3];
-          ordered[k * 3 + 1] = trailPos[src * 3 + 1];
-          ordered[k * 3 + 2] = trailPos[src * 3 + 2];
+      function rebuildTrailLine() {
+        const n = trailPosArr.length;
+        for (let i = 0; i < n; i++) {
+          const p = trailPosArr[i];
+          trailLinePos[i * 3] = p.x;
+          trailLinePos[i * 3 + 1] = p.y;
+          trailLinePos[i * 3 + 2] = p.z;
         }
-        trailGeom.setAttribute('position', new THREE.BufferAttribute(ordered, 3));
-        trailGeom.setDrawRange(0, trailN);
-        trailGeom.attributes.position.needsUpdate = true;
+        const attr = trailLineGeom.getAttribute('position');
+        attr.needsUpdate = true;
+        trailLineGeom.setDrawRange(0, n);
+        if (typeof trailLineGeom.computeBoundingSphere === 'function') {
+          trailLineGeom.computeBoundingSphere();
+        }
+      }
+      function pushGoalWaypoint(x, y, z) {
+        const last = trailPosArr.length ? trailPosArr[trailPosArr.length - 1] : null;
+        if (last) {
+          const dx = x - last.x;
+          const dy = y - last.y;
+          const dz = z - last.z;
+          if ((dx * dx + dy * dy + dz * dz) < (WAYPOINT_MIN_DIST * WAYPOINT_MIN_DIST)) {
+            return false;
+          }
+        }
+        if (trailPosArr.length >= WAYPOINT_MAX) {
+          trailPosArr.shift();
+          const oldest = waypointGroup.children[0];
+          if (oldest) {
+            waypointGroup.remove(oldest);
+          }
+        }
+        trailPosArr.push({ x: x, y: y, z: z });
+        const bead = new THREE.Mesh(waypointGeom, waypointMat);
+        bead.position.set(x, y, z);
+        waypointGroup.add(bead);
+        rebuildTrailLine();
+        return true;
       }
       function fmt(v) {
         const n = Number(v);
         return Number.isFinite(n) ? n.toFixed(3) : '—';
       }
-      function setPose(xyzrpy) {
-        if (!Array.isArray(xyzrpy) || xyzrpy.length < 6) {
-          if (hud) hud.textContent = t('infer.pose_idle');
-          return;
-        }
-        const x = Number(xyzrpy[0]);
-        const y = Number(xyzrpy[1]);
-        const z = Number(xyzrpy[2]);
+      function refreshHud(tcp, goal) {
+        if (!hud) return;
+        const tcpPart = tcp
+          ? t('infer.pose_hud_tcp', { x: fmt(tcp.x), y: fmt(tcp.y), z: fmt(tcp.z) })
+          : t('infer.pose_idle');
+        const goalPart = goal
+          ? t('infer.pose_hud_goal', { x: fmt(goal.x), y: fmt(goal.y), z: fmt(goal.z) })
+          : t('infer.pose_hud_goal_idle');
+        hud.textContent = tcpPart + '\\n' + goalPart;
+      }
+      function setTcpPose(xyzrpy) {
+        const xyz = parseXyz(xyzrpy);
+        if (!xyz) return false;
         const rx = Number(xyzrpy[3]);
         const ry = Number(xyzrpy[4]);
         const rz = Number(xyzrpy[5]);
-        if (![x, y, z, rx, ry, rz].every(Number.isFinite)) {
-          if (hud) hud.textContent = t('infer.pose_idle');
-          return;
+        const p = robotToThree(xyz.x, xyz.y, xyz.z);
+        tcpMarker.position.set(p.x, p.y, p.z);
+        if ([rx, ry, rz].every(Number.isFinite)) {
+          tcpMarker.rotation.set(rx, rz, -ry, 'XYZ');
         }
-        marker.position.set(x, y, z);
-        marker.rotation.set(rx, ry, rz, 'XYZ');
-        pushTrail(x, y, z);
-        if (hud) {
-          hud.textContent = t('infer.pose_hud', {
-            x: fmt(x), y: fmt(y), z: fmt(z),
-            rx: fmt(rx), ry: fmt(ry), rz: fmt(rz),
-          });
+        if (followTcp || !hasTcp) {
+          orbitTarget.set(p.x, p.y, p.z);
+          applyCam();
         }
+        hasTcp = true;
+        refreshHud(xyz, lastGoal);
+        return true;
       }
+      function setGoalPose(nextState) {
+        const xyz = parseXyz(nextState);
+        if (!xyz) {
+          goalMarker.visible = false;
+          lastGoal = null;
+          lastGoalKey = '';
+          refreshHud(parseXyz(window.__armReadCartesian), null);
+          return false;
+        }
+        const p = robotToThree(xyz.x, xyz.y, xyz.z);
+        goalMarker.position.set(p.x, p.y, p.z);
+        goalMarker.visible = true;
+        lastGoal = xyz;
+        window.__pi05GoalCartesian = [xyz.x, xyz.y, xyz.z];
+        const key = [xyz.x, xyz.y, xyz.z].map((v) => v.toFixed(5)).join(',');
+        // Always try to append — even on later LOOP rounds (do not gate on a sticky "done").
+        if (key !== lastGoalKey) {
+          lastGoalKey = key;
+          pushGoalWaypoint(p.x, p.y, p.z);
+        }
+        refreshHud(parseXyz(window.__armReadCartesian), xyz);
+        return true;
+      }
+      let dragMode = null;
+      let lastPx = 0;
+      let lastPy = 0;
+      const panWorld = new THREE.Vector3();
+      const right = new THREE.Vector3();
+      const up = new THREE.Vector3();
+      function onPointerDown(ev) {
+        if (ev.button === 2 || ev.button === 1) dragMode = 'pan';
+        else if (ev.button === 0) dragMode = 'orbit';
+        else return;
+        followTcp = false;
+        lastPx = ev.clientX;
+        lastPy = ev.clientY;
+        try { canvas.setPointerCapture(ev.pointerId); } catch (_) {}
+        ev.preventDefault();
+      }
+      function onPointerMove(ev) {
+        if (!dragMode) return;
+        const dx = ev.clientX - lastPx;
+        const dy = ev.clientY - lastPy;
+        lastPx = ev.clientX;
+        lastPy = ev.clientY;
+        if (dragMode === 'orbit') {
+          spherical.theta -= dx * 0.008;
+          spherical.phi -= dy * 0.008;
+          spherical.phi = Math.max(0.08, Math.min(Math.PI - 0.08, spherical.phi));
+          applyCam();
+        } else if (dragMode === 'pan') {
+          const dist = Math.max(0.15, spherical.radius);
+          const scale = dist * 0.0018;
+          right.setFromMatrixColumn(camera.matrix, 0);
+          up.setFromMatrixColumn(camera.matrix, 1);
+          panWorld.copy(right).multiplyScalar(-dx * scale);
+          panWorld.addScaledVector(up, dy * scale);
+          orbitTarget.add(panWorld);
+          applyCam();
+        }
+        ev.preventDefault();
+      }
+      function onPointerUp(ev) {
+        dragMode = null;
+        try { canvas.releasePointerCapture(ev.pointerId); } catch (_) {}
+      }
+      function onWheel(ev) {
+        followTcp = false;
+        const factor = Math.exp(ev.deltaY * 0.0012);
+        spherical.radius = Math.max(0.2, Math.min(12, spherical.radius * factor));
+        applyCam();
+        ev.preventDefault();
+      }
+      canvas.addEventListener('pointerdown', onPointerDown);
+      canvas.addEventListener('pointermove', onPointerMove);
+      canvas.addEventListener('pointerup', onPointerUp);
+      canvas.addEventListener('pointercancel', onPointerUp);
+      canvas.addEventListener('wheel', onWheel, { passive: false });
+      canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
+      canvas.addEventListener('dblclick', () => {
+        followTcp = true;
+        if (hasTcp) {
+          orbitTarget.copy(tcpMarker.position);
+          applyCam();
+        }
+      });
       function tick() {
+        if (window.__armReadCartesian) setTcpPose(window.__armReadCartesian);
         renderer.render(scene, camera);
         requestAnimationFrame(tick);
       }
-      window.__updateInfPoseViz = setPose;
+      function setHomePose(xyzrpy) {
+        const xyz = parseXyz(xyzrpy);
+        if (!xyz) {
+          homeMarker.visible = false;
+          return false;
+        }
+        const p = robotToThree(xyz.x, xyz.y, xyz.z);
+        homeMarker.position.set(p.x, p.y, p.z);
+        homeMarker.visible = true;
+        return true;
+      }
+      window.__updateInfPoseViz = setTcpPose;
+      window.__setInfPoseGoal = setGoalPose;
+      window.__setInfPoseHome = setHomePose;
       window.__resizeInfPoseViz = resize;
       resize();
       if (typeof ResizeObserver !== 'undefined' && wrap) {
         new ResizeObserver(() => resize()).observe(wrap);
       }
       window.addEventListener('resize', resize);
-      if (window.__armReadCartesian) setPose(window.__armReadCartesian);
+      if (window.__armReadCartesian) setTcpPose(window.__armReadCartesian);
+      else refreshHud(null, null);
+      if (window.__pi05NextState) setGoalPose(window.__pi05NextState);
+      if (window.__armHome && window.__armHome.home_cartesian_xyzrpy) {
+        setHomePose(window.__armHome.home_cartesian_xyzrpy);
+      }
       tick();
     })();
+
     function parseInfArmJoints6() {
       const raw = ((infArmJoints && infArmJoints.value) || '').trim();
       const parts = raw.split(/[,\s;]+/).filter(Boolean);
@@ -2846,7 +3398,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     async function runInfPi05StepOnce() {
       if (infPi05Hint) infPi05Hint.textContent = t('infer.hint_stepping');
-      const r = await postPi05('/api/pi05/step', {});
+      // Always push the input box text with the step so serve never sees a stale "".
+      const r = await postPi05('/api/pi05/step', { prompt: currentPi05Prompt() });
+      if (r && r.ok !== false && infPi05Prompt) {
+        delete infPi05Prompt.dataset.dirty;
+        if (r.prompt != null) infPi05Prompt.value = r.prompt;
+      }
       if (r && r.ok && fillInfArmJointsFromStep(r)) {
         if (infArmProg) infArmProg.textContent = t('infer.joints_filled');
       } else if (r && r.ok && r.ik_ok === false) {
@@ -2966,7 +3523,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       pi05LoopGen += 1;
       syncPi05LoopButton();
       setLoopRoundIdx(null, null);
-      if (infLoopRounds) infLoopRounds.disabled = false;
+      if (typeof syncAutoHomeRoundsUi === 'function') syncAutoHomeRoundsUi();
+      else if (infLoopRounds) infLoopRounds.disabled = false;
       const ramp = window.__armAbsRamp || {};
       if (ramp.enabled) {
         try {
@@ -3115,7 +3673,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
             }
             return;
           }
-          // Big round = LOOP-until-term + Home (always; next round will re-check near Home).
+          // Big round ends with Home only when「自动复位」is checked
+          // (unchecked ⇒ rounds locked to 1, so no between-round Home either).
+          const autoHomeOn = !!(infAutoHome && infAutoHome.checked);
+          if (!autoHomeOn) {
+            if (infPi05Hint) {
+              infPi05Hint.textContent = t('infer.hint_round_done', {
+                r: r, R: roundTotal, n: once.steps || 0,
+              });
+            }
+            continue;
+          }
           if (infPi05Hint) infPi05Hint.textContent = t('infer.hint_auto_home');
           const homeGo = await goArmHomeWithDuration(null, infArmProg);
           if (!pi05LoopRunning || gen !== pi05LoopGen) break;
@@ -3144,13 +3712,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
           }
         }
       } finally {
-        if (infLoopRounds && !pi05LoopRunning) infLoopRounds.disabled = false;
+        if (typeof syncAutoHomeRoundsUi === 'function') syncAutoHomeRoundsUi();
       }
       if (pi05LoopRunning && gen === pi05LoopGen) {
         await stopPi05Loop(t('infer.hint_rounds_done', { R: roundTotal }));
       } else if (!pi05LoopRunning) {
         setLoopRoundIdx(null, null);
-        if (infLoopRounds) infLoopRounds.disabled = false;
+        if (typeof syncAutoHomeRoundsUi === 'function') syncAutoHomeRoundsUi();
       } else {
         const st = await fetch('/api/pi05/status').then((x) => x.json()).catch(() => ({}));
         applyPi05PanelFromPayload(st);
@@ -3211,9 +3779,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
       });
     }
     if (infPi05PromptApply) {
-      infPi05PromptApply.addEventListener('click', () => postPi05('/api/pi05/prompt', {
-        prompt: (infPi05Prompt && infPi05Prompt.value) || '',
-      }));
+      infPi05PromptApply.addEventListener('click', () => pushPi05PromptFromUi());
+    }
+    if (infPi05Prompt) {
+      infPi05Prompt.addEventListener('input', () => {
+        infPi05Prompt.dataset.dirty = '1';
+        savePi05Form();
+      });
+      infPi05Prompt.addEventListener('change', () => {
+        infPi05Prompt.dataset.dirty = '1';
+        pushPi05PromptFromUi({ silent: true });
+      });
     }
     if (infArmSend) {
       infArmSend.addEventListener('click', async () => {
@@ -3252,17 +3828,33 @@ PREVIEW_HTML = """<!DOCTYPE html>
       });
     }
     const infAutoHome = document.getElementById('infAutoHome');
+    function syncAutoHomeRoundsUi() {
+      const autoEl = document.getElementById('infAutoHome');
+      const autoOn = !!(autoEl && autoEl.checked);
+      if (!autoOn && infLoopRounds) {
+        infLoopRounds.value = '1';
+        try { localStorage.setItem('dcs.inf.loopRounds', '1'); } catch (e) {}
+      }
+      if (infLoopRounds) {
+        // Unchecked ⇒ rounds fixed at 1; also disable while LOOP is running.
+        infLoopRounds.disabled = (!autoOn) || !!pi05LoopRunning;
+      }
+      syncLoopRoundsInput();
+    }
     try {
       const lsAuto = localStorage.getItem('dcs.inf.autoHome');
-      if (infAutoHome && lsAuto === '1') infAutoHome.checked = true;
+      // Default unchecked: no post-term Home; rounds locked to 1.
+      if (infAutoHome) infAutoHome.checked = (lsAuto === '1');
     } catch (e) {}
     if (infAutoHome) {
       infAutoHome.addEventListener('change', () => {
         try {
           localStorage.setItem('dcs.inf.autoHome', infAutoHome.checked ? '1' : '0');
         } catch (e) {}
+        syncAutoHomeRoundsUi();
       });
     }
+    syncAutoHomeRoundsUi();
     refreshArmHomeState();
 
     // ---- tabs + postprocess ----
@@ -3530,6 +4122,27 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
     }
 
+    function switchInfPage(name) {
+      const which = (name === 'sensors') ? 'sensors' : 'control';
+      const pageControl = document.getElementById('infPageControl');
+      const pageSensors = document.getElementById('infPageSensors');
+      const btnControl = document.getElementById('infPageBtnControl');
+      const btnSensors = document.getElementById('infPageBtnSensors');
+      if (pageControl) pageControl.classList.toggle('active', which === 'control');
+      if (pageSensors) pageSensors.classList.toggle('active', which === 'sensors');
+      if (btnControl) {
+        btnControl.classList.toggle('active', which === 'control');
+        btnControl.setAttribute('aria-selected', which === 'control' ? 'true' : 'false');
+      }
+      if (btnSensors) {
+        btnSensors.classList.toggle('active', which === 'sensors');
+        btnSensors.setAttribute('aria-selected', which === 'sensors' ? 'true' : 'false');
+      }
+      try { localStorage.setItem('dcs.inf.page', which); } catch (e) {}
+      if (which === 'control' && typeof window.__resizeInfPoseViz === 'function') {
+        requestAnimationFrame(() => window.__resizeInfPoseViz());
+      }
+    }
     function switchTab(name) {
       if (name === 'collect' && !collectOk) {
         if (runHint) runHint.textContent = t('boot.collect_locked');
@@ -3560,10 +4173,24 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const gear = document.getElementById('btnSettings');
       if (gear) gear.hidden = which !== 'home';
       if (which === 'sensors') ensureSensorsIframeMounted();
-      if (which === 'infer' && typeof window.__resizeInfPoseViz === 'function') {
-        requestAnimationFrame(() => window.__resizeInfPoseViz());
+      if (which === 'infer') {
+        try {
+          const ls = localStorage.getItem('dcs.inf.page');
+          if (ls === 'sensors' || ls === 'control') switchInfPage(ls);
+        } catch (e) {}
+        if (typeof window.__resizeInfPoseViz === 'function') {
+          requestAnimationFrame(() => window.__resizeInfPoseViz());
+        }
       }
     }
+    const infPageBtnControl = document.getElementById('infPageBtnControl');
+    const infPageBtnSensors = document.getElementById('infPageBtnSensors');
+    if (infPageBtnControl) infPageBtnControl.addEventListener('click', () => switchInfPage('control'));
+    if (infPageBtnSensors) infPageBtnSensors.addEventListener('click', () => switchInfPage('sensors'));
+    try {
+      const lsInfPage = localStorage.getItem('dcs.inf.page');
+      if (lsInfPage === 'sensors' || lsInfPage === 'control') switchInfPage(lsInfPage);
+    } catch (e) {}
     tabBtnHome.addEventListener('click', () => switchTab('home'));
     tabBtnCollect.addEventListener('click', () => switchTab('collect'));
     if (tabBtnInfer) tabBtnInfer.addEventListener('click', () => switchTab('infer'));
@@ -4401,8 +5028,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const btnSettingsHomeReload = document.getElementById('btnSettingsHomeReload');
     const btnSettingsHomeSave = document.getElementById('btnSettingsHomeSave');
     if (settingsHomeDur) {
-      settingsHomeDur.addEventListener('input', updateSettingsHomeDurLabel);
-      settingsHomeDur.addEventListener('change', updateSettingsHomeDurLabel);
+      settingsHomeDur.addEventListener('input', () => {
+        settingsHomeDur.dataset.dirty = '1';
+        updateSettingsHomeDurLabel();
+      });
+      settingsHomeDur.addEventListener('change', () => {
+        settingsHomeDur.dataset.dirty = '1';
+        pushHomeDurationFromUi();
+      });
       updateSettingsHomeDurLabel();
     }
     if (btnSettingsHomeReload) {
@@ -4438,6 +5071,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             return;
           }
           window.__armHome = setR;
+          if (settingsHomeDur) delete settingsHomeDur.dataset.dirty;
           syncSettingsHomeFromState(setR);
           const path = (settingsConfigPath && settingsConfigPath.value) || null;
           const saveR = await fetch('/api/arm/home/save', {
@@ -5481,7 +6115,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
           }
           if (absProg) {
             const hz = Number(absRamp.hz) || 5;
-            if (absRamp.phase === 'ramping' && absRamp.ramp_n) {
+            if (absRamp.phase === 'planning') {
+              absProg.textContent = absRamp.message || t('arm.abs_planning', {
+                dur: Number(absRamp.duration_s || 0).toFixed(1),
+                n: absRamp.ramp_n || 0,
+              });
+            } else if (absRamp.phase === 'ramping' && absRamp.ramp_n) {
               const left = Math.max(0, (Number(absRamp.ramp_n) - Number(absRamp.ramp_index || 0)) / hz);
               absProg.textContent =
                 t('arm.abs_ramping', {
@@ -5814,6 +6453,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         }
       }
       if (msg.arm_abs_ramp) {
+        const prevAbs = window.__armAbsRamp || {};
         window.__armAbsRamp = msg.arm_abs_ramp;
         const sendBtn = document.getElementById('infArmSend');
         const prog = document.getElementById('infArmProg');
@@ -5823,7 +6463,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
         }
         if (prog) {
           const hz = Number(absRamp.hz) || 5;
-          if (absRamp.phase === 'ramping' && absRamp.ramp_n) {
+          if (absRamp.phase === 'planning') {
+            prog.textContent = absRamp.message || t('arm.abs_planning', {
+              dur: Number(absRamp.duration_s || 0).toFixed(1),
+              n: absRamp.ramp_n || 0,
+            });
+          } else if (absRamp.phase === 'ramping' && absRamp.ramp_n) {
             const left = Math.max(0, (Number(absRamp.ramp_n) - Number(absRamp.ramp_index || 0)) / hz);
             prog.textContent = t('arm.abs_ramping', {
               i: absRamp.ramp_index || 0,
@@ -5836,6 +6481,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
           } else if (absRamp.phase === 'error' && absRamp.last_error) {
             prog.textContent = t('arm.abs_fail', { error: absRamp.last_error });
           }
+        }
+        if (
+          prevAbs.phase !== 'error'
+          && absRamp.phase === 'error'
+          && absRamp.last_error
+        ) {
+          showAppModal(t('arm.home_bad_title'), absRamp.last_error);
         }
       }
       if (msg.arm_home) {
@@ -6538,11 +7190,13 @@ def create_viz_app(
         )
 
     @app.post("/api/pi05/step")
-    async def pi05_step_set(req: Pi05AgentIdBody | None = None) -> dict[str, Any]:
+    async def pi05_step_set(req: Pi05StepBody | None = None) -> dict[str, Any]:
         if pi05_step is None:
             return {"ok": False, "configured": False, "error": "pi05 unavailable"}
-        body = req or Pi05AgentIdBody()
-        return await asyncio.to_thread(pi05_step, agent_id=body.agent_id)
+        body = req or Pi05StepBody()
+        return await asyncio.to_thread(
+            pi05_step, agent_id=body.agent_id, prompt=body.prompt
+        )
 
     @app.get("/api/arm/home")
     async def arm_home_get() -> dict[str, Any]:
