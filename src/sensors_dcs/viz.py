@@ -2953,6 +2953,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
         next_joints_rad: p.next_joints_rad,
         ik_ok: p.ik_ok,
         ik_error: p.ik_error,
+        next_grip: p.next_grip,
+        grip_ok: p.grip_ok,
+        grip_error: p.grip_error,
         term_flag: p.term_flag,
         reject_flag: p.reject_flag,
         server_text: p.server_text,
@@ -3615,6 +3618,19 @@ PREVIEW_HTML = """<!DOCTYPE html>
             error: r.ik_error || 'IK failed',
           });
         }
+      }
+      if (r && r.ok && r.grip_ok === false && infPi05Hint) {
+        const gerr = r.grip_error || 'grip failed';
+        const base = infPi05Hint.textContent || '';
+        infPi05Hint.textContent = base
+          ? (base + ' · ' + t('infer.grip_fail', { error: gerr }))
+          : t('infer.grip_fail', { error: gerr });
+        infPi05Hint.title = infPi05Hint.textContent || '';
+      } else if (r && r.ok && r.grip_ok && r.next_grip != null && infPi05Hint) {
+        const base = infPi05Hint.textContent || '';
+        const note = t('infer.grip_sent', { grip: Number(r.next_grip).toFixed(3) });
+        infPi05Hint.textContent = base ? (base + ' · ' + note) : note;
+        infPi05Hint.title = infPi05Hint.textContent || '';
       }
       return r;
     }

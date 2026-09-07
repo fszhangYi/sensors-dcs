@@ -374,11 +374,36 @@ class Orchestrator:
                 )
             else:
                 print(f"[sensors-dcs] pi05 IK failed: {ik.get('error')}", flush=True)
+            # Dim 7 = gripper position_norm → gripper_write (step + LOOP share this path).
+            grip = self._next_state_grip(ns)
+            out["next_grip"] = grip
+            if grip is None:
+                out["grip_ok"] = False
+                out["grip_error"] = "next_state missing grip (need len>=7)"
+            else:
+                gcmd = self.gripper_command(
+                    position_norm=grip, allow_during_sync=True
+                )
+                out["grip_ok"] = bool(gcmd.get("ok"))
+                out["grip_error"] = gcmd.get("error")
+                if gcmd.get("ok"):
+                    print(
+                        f"[sensors-dcs] pi05 grip ok  position_norm={grip}",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"[sensors-dcs] pi05 grip failed: {gcmd.get('error')}",
+                        flush=True,
+                    )
         else:
             print(f"[sensors-dcs] pi05 step failed: {out.get('error')}", flush=True)
             out.setdefault("next_joints_rad", None)
             out.setdefault("ik_ok", False)
             out.setdefault("ik_error", out.get("error"))
+            out.setdefault("next_grip", None)
+            out.setdefault("grip_ok", False)
+            out.setdefault("grip_error", out.get("error"))
         return out
 
     def _next_state_to_joints(self, next_state: Any) -> dict[str, Any]:
@@ -399,6 +424,19 @@ class Orchestrator:
                 "joints_rad": None,
             }
         return xyzrpy_to_joints_rad(list(next_state)[:6], q_seed_rad=seed)
+
+    @staticmethod
+    def _next_state_grip(next_state: Any) -> float | None:
+        """Extract gripper ``position_norm`` from serve ``next_state[6]``."""
+        if not isinstance(next_state, (list, tuple)) or len(next_state) < 7:
+            return None
+        try:
+            g = float(next_state[6])
+        except (TypeError, ValueError):
+            return None
+        if g != g or g in (float("inf"), float("-inf")):  # NaN / inf
+            return None
+        return g
 
     def start(self) -> None:
         for agent in self.agents.values():
@@ -1526,11 +1564,12 @@ class Orchestrator:
         position_norm: float | None = None,
         position_raw: int | None = None,
         initialize: bool = False,
+        allow_during_sync: bool = False,
     ) -> dict[str, Any]:
         """Dispatch init / absolute gripper target to a ``gripper_write`` agent."""
         from sensors_dcs.agents.gripper_write_agent import GripperWriteAgent
 
-        if self._sync_enabled and not initialize:
+        if self._sync_enabled and not initialize and not allow_during_sync:
             return {
                 "ok": False,
                 "error": "gello sync active; cancel sync before manual command",
