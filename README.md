@@ -16,6 +16,7 @@ sensors-dcs/
   docs/hik-dataset-actions.md       # steps.actions 怎么算 / 能否采集
   docs/gello-joint-affine.md        # Gello 关节仿射标定（offsets/signs）
   docs/arm-write.md                 # Elite arm_write 安全计划与点动 UI
+  docs/elite-monitor-reconnect.md   # Elite 8056 断线/久置重连计划与运维
   docs/gello-arm-sync.md            # Gello→Arm 一次性对齐同步（非遥操作）
   docs/gello-arm-teleop.md          # Gello→Arm 摇操（遥操作）
   configs/hik_camera_map.yaml       # serial→hik 相机名（export-hik-dataset）
@@ -618,6 +619,12 @@ sensors-dcs.exe export-hik-dataset -e episode_00000 --camera-map configs\hik_cam
 - 20260902 之后的桌面包应已内置 `elite`（来自 PyPI `elirobots`）。
 - 确认 `_internal/elite/` 存在；若没有，请用最新完整 `.zip` 重装，不要只靠旧版 delta。
 - 仍失败时重新 `./build.sh --target windows` 打新包。
+
+**Elite 报 `struct.error: unpack requires a buffer of 4 bytes`（Elibot monitor thread）**
+
+- 控制口已连上，但 **TCP 8056 监控握手**失败（断线再连 / 久置后再开常见）。
+- 新版 `hik-sensors` 会对监控连接做有限次重试（`monitor_retries`，默认 3）。
+- 运维：关 DCS 后等 3～5 秒再开；勿双开连同一 IP；仍失败则重启控制器网络。详见 `docs/elite-monitor-reconnect.md`。
 
 **真机零 Python 依赖说明**
 
