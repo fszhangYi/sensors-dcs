@@ -634,6 +634,7 @@ sensors-dcs.exe export-hik-dataset -e episode_00000 --camera-map configs\hik_cam
 | Gello / 串口 | `dynamixel-sdk`, `pyserial` | 是 | |
 | `--ui` 窗口 | `pywebview`（import 名 `webview`） | 是 | 失败时回退系统浏览器 |
 | 时间轴导出 | `pandas`, `pyarrow` | 是 | `requirements-desktop.txt` |
+| Infer IK（pose→joints） | `scipy` | **是** | `ik_flange` / `arm_pose`；缺则桌面版无法解析 `next_state` |
 | 真机 RealSense | `pyrealsense2` | **是** | 桌面包已内置；USB 相机仍需 Intel 驱动 |
 | Elite 机械臂真机读 | `elite`（via `elirobots`） | **是** | 桌面包已内置；配置 `robot_ip`，监控端口 8056 |
 

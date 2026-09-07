@@ -25,6 +25,11 @@ HARDWARE_PACKAGES = (
 # pyproject [realsense] alias — bundled via HARDWARE_PACKAGES for desktop
 TARGET_OPTIONAL: tuple[str, ...] = ()
 
+# Infer / arm IK (requirements-desktop.txt; sensors.kinematics.ik)
+KINEMATICS_PACKAGES = (
+    "scipy",
+)
+
 # export-timeline / filter-timeline (requirements-desktop.txt / pyproject [export])
 EXPORT_PACKAGES = (
     "pandas",
@@ -48,6 +53,9 @@ _TEST_PATH_MARKERS = (
     "/numpy/typing/tests/",
     "/pandas/tests/",
     "/pyarrow/tests/",
+    "/scipy/stats/tests/",
+    "/scipy/optimize/tests/",
+    "/scipy/spatial/tests/",
 )
 
 
@@ -74,7 +82,7 @@ def _collect_package(
     except Exception as exc:  # noqa: BLE001
         missing.append(f"{pkg} ({exc})")
         return
-    if pkg in CORE_PACKAGES or pkg in EXPORT_PACKAGES:
+    if pkg in CORE_PACKAGES or pkg in EXPORT_PACKAGES or pkg in KINEMATICS_PACKAGES:
         d = _filter_test_artifacts(d)
     datas += d
     binaries += b
@@ -110,6 +118,7 @@ def extend_analysis(
     for pkg in (
         *CORE_PACKAGES,
         *HARDWARE_PACKAGES,
+        *KINEMATICS_PACKAGES,
         *EXPORT_PACKAGES,
         *UI_PACKAGES,
         *RUNTIME_PACKAGES,
@@ -122,6 +131,13 @@ def extend_analysis(
         "numpy.version",
         "numpy.core",
         "numpy.core._multiarray_umath",
+        "scipy",
+        "scipy.optimize",
+        "scipy.optimize._lsq",
+        "scipy.optimize._lsq.least_squares",
+        "scipy.spatial",
+        "scipy.spatial.transform",
+        "scipy.spatial.transform._rotation_groups",
         "pandas",
         "pyarrow",
         "pyarrow.lib",
@@ -148,20 +164,24 @@ def extend_analysis(
         "websockets",
         "watchfiles",
         "sensors_dcs.ui_serve",
+        "sensors_dcs.arm_pose",
         "sensors_dcs.export",
         "sensors_dcs.export.timeline",
         "sensors_dcs.export.filter",
         "sensors_dcs.export.parquet_io",
+        "sensors.kinematics",
+        "sensors.kinematics.ik",
+        "sensors.kinematics.fk",
     ]
-    for pkg in EXPORT_PACKAGES:
+    for pkg in (*EXPORT_PACKAGES, *KINEMATICS_PACKAGES):
         _collect_libs_folder(pkg, datas=datas)
 
-    for pkg in (*HARDWARE_PACKAGES, *EXPORT_PACKAGES):
+    for pkg in (*HARDWARE_PACKAGES, *KINEMATICS_PACKAGES, *EXPORT_PACKAGES):
         try:
             datas += copy_metadata(pkg)
         except Exception:  # noqa: BLE001
             pass
-        if pkg in ("pyrealsense2", "cv2", "pyarrow", "pandas"):
+        if pkg in ("pyrealsense2", "cv2", "pyarrow", "pandas", "scipy"):
             try:
                 binaries += collect_dynamic_libs(pkg)
             except Exception:  # noqa: BLE001

@@ -9,6 +9,7 @@ import sys
 # (import_name, feature, required_for_desktop_build)
 CHECKS: list[tuple[str, str, bool]] = [
     ("numpy", "core / viz / export", True),
+    ("scipy", "Infer IK (pose → joints via ik_flange)", True),
     ("yaml", "YAML config", True),
     ("pydantic", "config schema", True),
     ("pydantic_core", "pydantic v2 runtime", True),

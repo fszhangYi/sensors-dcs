@@ -54,6 +54,9 @@ hiddenimports = [
     "watchfiles",
     "webview",
     "numpy",
+    "scipy",
+    "scipy.optimize",
+    "scipy.spatial.transform",
     "pandas",
     "pyarrow",
     "pyarrow.lib",
@@ -69,6 +72,7 @@ hiddenimports = [
     "sensors_dcs.config",
     "sensors_dcs.desktop_main",
     "sensors_dcs.ui_serve",
+    "sensors_dcs.arm_pose",
     "sensors_dcs.export",
     "sensors_dcs.export.timeline",
     "sensors_dcs.export.filter",
@@ -95,10 +99,14 @@ hiddenimports = [
     "sensors.runtime",
     "sensors.runtime.manager",
     "sensors.drivers",
+    "sensors.kinematics",
+    "sensors.kinematics.ik",
+    "sensors.kinematics.fk",
 ]
 hiddenimports += collect_submodules("sensors.drivers")
 hiddenimports += collect_submodules("sensors.kinematics")
 hiddenimports += collect_submodules("sensors_dcs")
+hiddenimports += collect_submodules("scipy")
 hiddenimports += collect_submodules("pyarrow")
 hiddenimports += collect_submodules("pandas")
 datas, binaries, hiddenimports = extend_analysis(datas, binaries, hiddenimports)

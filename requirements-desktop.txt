@@ -1,6 +1,9 @@
 pyinstaller>=6.3
 pywebview>=5.0
 numpy==1.23.5
+# Infer IK: sensors.kinematics.ik_flange → scipy.optimize.least_squares
+# Cap <1.12 so Wine/desktop numpy==1.23.5 stays importable after the build pin.
+scipy>=1.10,<1.12
 # timeline export-timeline / filter-timeline (pyproject [export])
 pandas>=2.0,<3
 pyarrow>=14.0

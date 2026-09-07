@@ -121,6 +121,7 @@ def _verify_bundled_imports(py_cmd: list[str], *, env: dict | None = None) -> No
         "dynamixel_sdk",
         "serial",
         "numpy",
+        "scipy",
         "pandas",
         "pyarrow",
         "elite",
@@ -148,6 +149,8 @@ def _verify_bundled_imports(py_cmd: list[str], *, env: dict | None = None) -> No
                 "    sys.exit('missing ' + str(missing))",
                 "import pandas as pd",
                 "import pyarrow",
+                "from scipy.optimize import least_squares",
+                "from scipy.spatial.transform import Rotation",
                 "from elite import EC",
                 "import pyrealsense2",
                 'p = os.path.join(tempfile.gettempdir(), "sensors_dcs_parquet_smoke.parquet")',
@@ -190,10 +193,10 @@ def _verify_bundled_pyarrow(release: Path) -> None:
 
 
 def _bundle_native_libs(built: Path, py_dir: Path) -> None:
-    """Copy ``*.libs`` MSVC runtime folders PyInstaller often drops for pyarrow/pandas."""
+    """Copy ``*.libs`` MSVC runtime folders PyInstaller often drops for pyarrow/pandas/scipy."""
     internal = built / "_internal"
     site = py_dir / "Lib" / "site-packages"
-    for name in ("pyarrow", "pandas"):
+    for name in ("pyarrow", "pandas", "scipy"):
         src = site / f"{name}.libs"
         dst = internal / f"{name}.libs"
         if not src.is_dir():
@@ -207,6 +210,22 @@ def _bundle_native_libs(built: Path, py_dir: Path) -> None:
             shutil.rmtree(dst)
         shutil.copytree(src, dst)
         print(f"[postprocess] bundled {name}.libs ({len(list(dst.glob('*.dll')))} dlls)")
+
+
+def _verify_bundled_scipy(release: Path) -> None:
+    internal = release / "_internal"
+    scipy_dir = internal / "scipy"
+    if not scipy_dir.is_dir():
+        raise SystemExit(
+            f"build verification failed: missing {scipy_dir} — "
+            "scipy was not collected (Infer IK needs scipy.optimize.least_squares)"
+        )
+    has_ext = any(scipy_dir.rglob("*.pyd")) or any(scipy_dir.rglob("*.so"))
+    if not has_ext:
+        raise SystemExit(
+            f"build verification failed: no scipy binary modules under {scipy_dir}"
+        )
+    print(f"[verify] scipy bundled ({len(list(scipy_dir.rglob('*')))} files)")
 
 
 def _verify_frozen_parquet_smoke(
@@ -372,7 +391,21 @@ def build_windows(*, skip_frontend: bool = True, delta: bool = True) -> Path:
     _run([wine, py_wine, "-m", "pip", "install", "-i", PIP_INDEX, "-r", req], env=env)
     _run([wine, py_wine, "-m", "pip", "install", "-i", PIP_INDEX, "-r", req_d], env=env)
     _run([wine, py_wine, "-m", "pip", "install", "-i", PIP_INDEX, "-r", req_h], env=env)
-    _run([wine, py_wine, "-m", "pip", "install", "-i", PIP_INDEX, "numpy==1.23.5"], env=env)
+    # Force numpy pin last, then reinstall scipy in the range compatible with 1.23.5.
+    _run(
+        [
+            wine,
+            py_wine,
+            "-m",
+            "pip",
+            "install",
+            "-i",
+            PIP_INDEX,
+            "numpy==1.23.5",
+            "scipy>=1.10,<1.12",
+        ],
+        env=env,
+    )
     _verify_bundled_imports([wine, py_wine], env=env)
 
     TMP_BASE.mkdir(parents=True, exist_ok=True)
@@ -409,6 +442,7 @@ def build_windows(*, skip_frontend: bool = True, delta: bool = True) -> Path:
 
     _postprocess_windows(built, py_dir)
     _verify_bundled_pyarrow(built)
+    _verify_bundled_scipy(built)
     _verify_bundled_robot_sdk(built)
     _verify_frozen_parquet_smoke(wine, py_dir, built, env)
 
@@ -530,6 +564,7 @@ def build_linux(*, skip_frontend: bool = True, delta: bool = True) -> Path:
     except subprocess.CalledProcessError as e:
         print(f"[linux] warn: hardware requirements install failed ({e}); continuing", flush=True)
     _run([str(py), "-m", "pip", "install", "-i", PIP_INDEX, "pyinstaller"], env=env)
+    _verify_bundled_imports([str(py)], env=env)
 
     TMP_BASE.mkdir(parents=True, exist_ok=True)
     dist = TMP_BASE / "sensors-dcs-dist-linux"
@@ -559,6 +594,8 @@ def build_linux(*, skip_frontend: bool = True, delta: bool = True) -> Path:
     built = dist / APP_EXE
     if not built.is_dir():
         raise SystemExit(f"PyInstaller output missing: {built}")
+
+    _verify_bundled_scipy(built)
 
     stamp = _utc_stamp()
     release = ROOT / "release" / f"{APP_ID}-desktop-linux-x64-{stamp}"

@@ -20,6 +20,7 @@ def _apply() -> None:
         root / "numpy.libs",
         root / "pyarrow.libs",
         root / "pandas.libs",
+        root / "scipy.libs",
     ]
     prepend = [str(p) for p in lib_dirs if p.is_dir()]
 
