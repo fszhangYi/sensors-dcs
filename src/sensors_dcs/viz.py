@@ -1774,7 +1774,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
   <div class="app-stage">
   <div class="boot-banner" id="bootBanner" role="alert" hidden>
     <strong data-i18n="boot.banner_title">配置错误 — 采集不可用</strong>
-    <span id="bootBannerHint" data-i18n="boot.collect_locked">YAML/agent 启动失败，无法进入数据采集。推理与后处理仍可用；请修正配置后重新启动。</span>
+    <span id="bootBannerHint" data-i18n="boot.collect_locked">YAML/agent 启动失败，无法进入数据采集与推理。后处理仍可用；请修正配置后重新启动。</span>
     <div class="boot-path" id="bootBannerPath"></div>
     <pre id="bootBannerErr"></pre>
   </div>
@@ -1802,7 +1802,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <h2 data-i18n="home.tips_title">使用提示</h2>
           <ul class="home-list">
             <li data-i18n="home.tips_1">dry_run=true 用合成数据联调 UI；真机请设 dry_run=false 并保证驱动 / 串口 / 相机可用。</li>
-            <li data-i18n="home.tips_2">YAML 或传感器 open 失败时，主页与后处理仍可用，「数据采集」会被锁定并显示错误横幅。</li>
+            <li data-i18n="home.tips_2">YAML 或传感器 open 失败时，主页与后处理仍可用，「数据采集」与「推理」会被锁定并显示错误横幅。</li>
             <li data-i18n="home.tips_3">各页顶栏「设置」可切换语言/主题、改 sensors-view、管理账号；「安全退出」会停录制、关传感器并结束进程。</li>
           </ul>
         </section>
@@ -2437,8 +2437,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
       try {
         const b = document.getElementById('btnHomeCollect');
         const tc = document.getElementById('tabBtnCollect');
+        const bi = document.getElementById('btnHomeInfer');
+        const ti = document.getElementById('tabBtnInfer');
         if (b && b.disabled) b.title = t('boot.collect_title');
         if (tc && tc.disabled) tc.title = t('boot.collect_title');
+        if (bi && bi.disabled) bi.title = t('boot.infer_title');
+        if (ti && ti.disabled) ti.title = t('boot.infer_title');
       } catch (e) {}
       try {
         if (typeof pushSensorsEmbedPrefs === 'function') pushSensorsEmbedPrefs();
@@ -4299,11 +4303,23 @@ PREVIEW_HTML = """<!DOCTYPE html>
       tabBtnCollect.disabled = !collectOk;
       tabBtnCollect.setAttribute('aria-disabled', collectOk ? 'false' : 'true');
       tabBtnCollect.title = collectOk ? '' : t('boot.collect_title');
+      if (tabBtnInfer) {
+        tabBtnInfer.classList.toggle('tab-locked', !collectOk);
+        tabBtnInfer.disabled = !collectOk;
+        tabBtnInfer.setAttribute('aria-disabled', collectOk ? 'false' : 'true');
+        tabBtnInfer.title = collectOk ? '' : t('boot.infer_title');
+      }
       const btnHomeCollect = document.getElementById('btnHomeCollect');
       if (btnHomeCollect) {
         btnHomeCollect.disabled = !collectOk;
         btnHomeCollect.setAttribute('aria-disabled', collectOk ? 'false' : 'true');
         btnHomeCollect.title = collectOk ? '' : t('boot.collect_title');
+      }
+      const btnHomeInfer = document.getElementById('btnHomeInfer');
+      if (btnHomeInfer) {
+        btnHomeInfer.disabled = !collectOk;
+        btnHomeInfer.setAttribute('aria-disabled', collectOk ? 'false' : 'true');
+        btnHomeInfer.title = collectOk ? '' : t('boot.infer_title');
       }
       if (!collectOk) {
         if (bootBanner) {
@@ -4312,7 +4328,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
           if (bootBannerPath) bootBannerPath.textContent = (info && info.config_path) || '';
           if (bootBannerErr) bootBannerErr.textContent = (info && info.error) || '';
         }
-        if (tabCollect && tabCollect.classList.contains('active')) {
+        if (
+          (tabCollect && tabCollect.classList.contains('active'))
+          || (tabInfer && tabInfer.classList.contains('active'))
+        ) {
           switchTab('home');
         }
       } else if (bootBanner) {
@@ -4344,6 +4363,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     function switchTab(name) {
       if (name === 'collect' && !collectOk) {
+        if (runHint) runHint.textContent = t('boot.collect_locked');
+        return;
+      }
+      if (name === 'infer' && !collectOk) {
         if (runHint) runHint.textContent = t('boot.collect_locked');
         return;
       }
@@ -7391,12 +7414,27 @@ def create_viz_app(
 
     @app.get("/api/pi05/status")
     async def pi05_status_get() -> dict[str, Any]:
+        if _current_boot_error() is not None:
+            return {
+                "ok": False,
+                "configured": False,
+                "error": "infer unavailable (boot error)",
+                "boot_error": True,
+                "connected": False,
+            }
         if pi05_status is None:
             return {"ok": False, "configured": False, "error": "pi05 unavailable"}
         return await asyncio.to_thread(pi05_status)
 
     @app.post("/api/pi05/connect")
     async def pi05_connect_set(req: Pi05ConnectBody) -> dict[str, Any]:
+        if _current_boot_error() is not None:
+            return {
+                "ok": False,
+                "configured": False,
+                "error": "infer unavailable (boot error)",
+                "boot_error": True,
+            }
         if pi05_connect is None:
             return {"ok": False, "configured": False, "error": "pi05 unavailable"}
         return await asyncio.to_thread(
@@ -7408,6 +7446,13 @@ def create_viz_app(
 
     @app.post("/api/pi05/disconnect")
     async def pi05_disconnect_set(req: Pi05AgentIdBody | None = None) -> dict[str, Any]:
+        if _current_boot_error() is not None:
+            return {
+                "ok": False,
+                "configured": False,
+                "error": "infer unavailable (boot error)",
+                "boot_error": True,
+            }
         if pi05_disconnect is None:
             return {"ok": False, "configured": False, "error": "pi05 unavailable"}
         body = req or Pi05AgentIdBody()
@@ -7415,6 +7460,13 @@ def create_viz_app(
 
     @app.post("/api/pi05/prompt")
     async def pi05_prompt_set(req: Pi05PromptBody) -> dict[str, Any]:
+        if _current_boot_error() is not None:
+            return {
+                "ok": False,
+                "configured": False,
+                "error": "infer unavailable (boot error)",
+                "boot_error": True,
+            }
         if pi05_set_prompt is None:
             return {"ok": False, "configured": False, "error": "pi05 unavailable"}
         return await asyncio.to_thread(
@@ -7423,6 +7475,13 @@ def create_viz_app(
 
     @app.post("/api/pi05/step")
     async def pi05_step_set(req: Pi05StepBody | None = None) -> dict[str, Any]:
+        if _current_boot_error() is not None:
+            return {
+                "ok": False,
+                "configured": False,
+                "error": "infer unavailable (boot error)",
+                "boot_error": True,
+            }
         if pi05_step is None:
             return {"ok": False, "configured": False, "error": "pi05 unavailable"}
         body = req or Pi05StepBody()
