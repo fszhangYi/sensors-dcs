@@ -130,23 +130,30 @@ def _verify_bundled_imports(py_cmd: list[str], *, env: dict | None = None) -> No
         "webview",
         "httptools",
         "websockets",
-        "watchfiles",
         "pydantic_core",
+        "pydantic",
         "fastapi",
         "uvicorn",
     ]
+    # watchfiles is optional under Wine (Rust extension often fails DLL load); still try.
+    optional = ["watchfiles"]
     script = TMP_BASE / "_verify_wine_imports.py"
     script.write_text(
         "\n".join(
             [
+                "import importlib",
                 "import importlib.util as u",
                 "import os",
                 "import sys",
                 "import tempfile",
                 f"mods = {required!r}",
+                f"optional = {optional!r}",
                 "missing = [m for m in mods if u.find_spec(m) is None]",
                 "if missing:",
                 "    sys.exit('missing ' + str(missing))",
+                "import pydantic",
+                "import pydantic_core",
+                "import fastapi",
                 "import pandas as pd",
                 "import pyarrow",
                 "from scipy.optimize import least_squares",
@@ -156,7 +163,14 @@ def _verify_bundled_imports(py_cmd: list[str], *, env: dict | None = None) -> No
                 'p = os.path.join(tempfile.gettempdir(), "sensors_dcs_parquet_smoke.parquet")',
                 'pd.DataFrame({"x": [1]}).to_parquet(p, index=False, engine="pyarrow")',
                 "os.remove(p)",
-                "print('bundled_ok', len(mods))",
+                "opt_ok = []",
+                "for m in optional:",
+                "    try:",
+                "        importlib.import_module(m)",
+                "        opt_ok.append(m)",
+                "    except Exception as e:",
+                "        print('optional_skip', m, type(e).__name__, e)",
+                "print('bundled_ok', len(mods), 'optional', opt_ok, 'pydantic', pydantic.__version__, 'core', pydantic_core.__version__)",
             ]
         )
         + "\n",
@@ -403,6 +417,24 @@ def build_windows(*, skip_frontend: bool = True, delta: bool = True) -> Path:
             PIP_INDEX,
             "numpy==1.23.5",
             "scipy>=1.10,<1.12",
+        ],
+        env=env,
+    )
+    # Wine 6 / Win7-ish prefixes lack bcryptprimitives.dll; pydantic-core>=2.18 links it
+    # and breaks PyInstaller Analysis (`import pydantic` → DLL load failed). Pin a stack
+    # that still uses bcrypt.dll (present under Wine). Real Win10+ targets are fine either way.
+    _run(
+        [
+            wine,
+            py_wine,
+            "-m",
+            "pip",
+            "install",
+            "-i",
+            PIP_INDEX,
+            "pydantic-core==2.14.6",
+            "pydantic==2.5.3",
+            "fastapi==0.115.6",
         ],
         env=env,
     )

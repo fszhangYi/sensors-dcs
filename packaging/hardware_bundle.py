@@ -39,10 +39,13 @@ EXPORT_PACKAGES = (
 # --ui pywebview window (requirements-desktop.txt; import name is webview)
 UI_PACKAGES = ("webview",)
 
-# Installed via requirements.txt uvicorn[standard] — collect for frozen WS server
+# Installed via requirements.txt uvicorn[standard] — collect for frozen WS server.
+# watchfiles is soft: its Rust extension often fails under Wine Analysis (DLL load).
 RUNTIME_PACKAGES = (
     "httptools",
     "websockets",
+)
+RUNTIME_OPTIONAL_PACKAGES = (
     "watchfiles",
 )
 
@@ -124,6 +127,19 @@ def extend_analysis(
         *RUNTIME_PACKAGES,
     ):
         _collect_package(pkg, datas=datas, binaries=binaries, hiddenimports=hiddenimports, missing=missing)
+
+    soft_missing: list[str] = []
+    for pkg in RUNTIME_OPTIONAL_PACKAGES:
+        _collect_package(
+            pkg, datas=datas, binaries=binaries, hiddenimports=hiddenimports, missing=soft_missing
+        )
+    if soft_missing:
+        print(
+            "[hardware_bundle] optional package collect skipped (Wine/DLL ok to miss): "
+            + "; ".join(soft_missing)
+        )
+        # Still list the top-level name so frozen uvicorn can try to import it.
+        hiddenimports += list(RUNTIME_OPTIONAL_PACKAGES)
 
     hiddenimports += [
         "numpy",

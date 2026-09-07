@@ -107,8 +107,10 @@ hiddenimports += collect_submodules("sensors.drivers")
 hiddenimports += collect_submodules("sensors.kinematics")
 hiddenimports += collect_submodules("sensors_dcs")
 hiddenimports += collect_submodules("scipy")
-hiddenimports += collect_submodules("pyarrow")
-hiddenimports += collect_submodules("pandas")
+# Skip *.tests trees (need pytest) under Wine Analysis.
+_no_tests = lambda name: ".tests" not in name and not name.endswith(".tests")  # noqa: E731
+hiddenimports += collect_submodules("pyarrow", filter=_no_tests)
+hiddenimports += collect_submodules("pandas", filter=_no_tests)
 datas, binaries, hiddenimports = extend_analysis(datas, binaries, hiddenimports)
 
 pathex = [str(SRC)]
