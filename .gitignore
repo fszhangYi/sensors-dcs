@@ -29,6 +29,10 @@ data/
 **/episode_*/
 NEXT_EPISODE
 
+# Local job-prep / portfolio materials (not part of product repo)
+docs/portfolio/
+docs/job-prep-60d/
+
 # Auth secrets (local user store)
 **/configs/users.json
 **/configs/.auth.json
