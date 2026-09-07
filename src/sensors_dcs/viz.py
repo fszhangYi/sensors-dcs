@@ -2914,8 +2914,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const raw = localStorage.getItem(LS_PI05);
         if (!raw) return;
         const j = JSON.parse(raw);
-        if (infPi05Host && j.host) infPi05Host.value = j.host;
-        if (infPi05Port && j.port != null) infPi05Port.value = String(j.port);
+        if (infPi05Host && j.host) {
+          infPi05Host.value = j.host;
+          infPi05Host.dataset.dirty = '1';
+        }
+        if (infPi05Port && j.port != null) {
+          infPi05Port.value = String(j.port);
+          infPi05Port.dataset.dirty = '1';
+        }
         if (infPi05Prompt && j.prompt != null) infPi05Prompt.value = j.prompt;
       } catch (e) {}
     }
@@ -3137,11 +3143,38 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (infPi05Hint) infPi05Hint.title = infPi05Hint.textContent || '';
       if (infArmProg) infArmProg.title = infArmProg.textContent || '';
       setPi05RawPayload(p);
-      if (p && p.host && infPi05Host && document.activeElement !== infPi05Host && !connected) {
+      // Prefer UI / localStorage host:port; never clobber dirty edits or overwrite
+      // right before connect (prompt sync / WS status used to reset YAML defaults).
+      if (
+        p && p.host
+        && infPi05Host
+        && document.activeElement !== infPi05Host
+        && !connected
+        && !infPi05Host.dataset.dirty
+        && !(infPi05Host.value || '').trim()
+      ) {
         infPi05Host.value = p.host;
       }
-      if (p && p.port != null && infPi05Port && document.activeElement !== infPi05Port && !connected) {
+      if (
+        p && p.port != null
+        && infPi05Port
+        && document.activeElement !== infPi05Port
+        && !connected
+        && !infPi05Port.dataset.dirty
+        && !(infPi05Port.value || '').trim()
+      ) {
         infPi05Port.value = String(p.port);
+      }
+      // After a successful connect, reflect the endpoint actually used.
+      if (connected && p && p.ok !== false) {
+        if (infPi05Host && p.host) {
+          infPi05Host.value = p.host;
+          delete infPi05Host.dataset.dirty;
+        }
+        if (infPi05Port && p.port != null) {
+          infPi05Port.value = String(p.port);
+          delete infPi05Port.dataset.dirty;
+        }
       }
       // Do not clobber in-progress edits; WS/status often still has "" until Apply/step sync.
       if (
@@ -3231,16 +3264,32 @@ PREVIEW_HTML = """<!DOCTYPE html>
         await pushPi05PromptFromUi({ silent: true });
       }
     }).catch(() => {});
+    function markPi05EndpointDirty() {
+      if (infPi05Host) infPi05Host.dataset.dirty = '1';
+      if (infPi05Port) infPi05Port.dataset.dirty = '1';
+      savePi05Form();
+    }
+    if (infPi05Host) {
+      infPi05Host.addEventListener('input', markPi05EndpointDirty);
+      infPi05Host.addEventListener('change', markPi05EndpointDirty);
+    }
+    if (infPi05Port) {
+      infPi05Port.addEventListener('input', markPi05EndpointDirty);
+      infPi05Port.addEventListener('change', markPi05EndpointDirty);
+    }
     if (infPi05Connect) {
       infPi05Connect.addEventListener('click', async () => {
+        // Snapshot before any await — prompt sync / status apply must not rewrite these.
+        const host = String((infPi05Host && infPi05Host.value) || '127.0.0.1').trim() || '127.0.0.1';
+        const portRaw = Number((infPi05Port && infPi05Port.value) || 5000);
+        const port = Number.isFinite(portRaw) ? Math.max(1, Math.min(65535, Math.trunc(portRaw))) : 5000;
+        if (infPi05Host) infPi05Host.value = host;
+        if (infPi05Port) infPi05Port.value = String(port);
         setPi05StatusEl('st-connecting', t('infer.status_connecting'));
         if (infPi05Connect) infPi05Connect.disabled = true;
         try {
           await pushPi05PromptFromUi({ silent: true });
-          await postPi05('/api/pi05/connect', {
-            host: (infPi05Host && infPi05Host.value) || '127.0.0.1',
-            port: Number((infPi05Port && infPi05Port.value) || 5000),
-          });
+          await postPi05('/api/pi05/connect', { host: host, port: port });
         } catch (e) {
           setPi05StatusEl('st-error', t('infer.status_error'));
           if (infPi05Hint) infPi05Hint.textContent = String(e);
