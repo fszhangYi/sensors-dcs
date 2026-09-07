@@ -44,6 +44,10 @@ class ArmCommandBody(BaseModel):
     jog_joint: int | None = None
     delta_rad: float | None = None
     delta_deg: float | None = None
+    timing: str | None = None
+    t_min_s: float | None = None
+    t_max_s: float | None = None
+    v_norm_rad_s: float | None = None
 
 
 class PostprocessBody(BaseModel):
@@ -1136,20 +1140,30 @@ PREVIEW_HTML = """<!DOCTYPE html>
     .inf-pi05-row > #infArmSend {
       flex: 0 0 auto;
     }
-    .inf-pi05-panel .arm-abs-dur {
+    .inf-pi05-panel .arm-abs-timing,
+    .arm-abs-timing {
+      display: inline-flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.35rem 0.55rem;
+    }
+    .inf-pi05-panel .arm-abs-timing label,
+    .arm-abs-timing label {
       display: inline-flex;
       align-items: center;
-      gap: 0.3rem;
-      height: var(--inf-ctrl-h);
+      gap: 0.25rem;
+      height: var(--inf-ctrl-h, 2rem);
+      font-size: 0.78rem;
+      color: var(--muted);
     }
-    .inf-pi05-panel .arm-abs-dur input[type="number"] {
-      width: 3.75rem;
+    .inf-pi05-panel .arm-abs-timing input[type="number"],
+    .arm-abs-timing input[type="number"] {
+      width: 4.2rem;
       text-align: right;
     }
-    #infArmDurVal {
-      min-width: 2.8rem;
+    .arm-abs-timing .arm-abs-unit {
       color: var(--muted);
-      font-variant-numeric: tabular-nums;
+      font-size: 0.72rem;
     }
     /* Record chrome folded into left Infer panel */
     .inf-pi05-sec-rec { gap: 0.4rem; }
@@ -1947,12 +1961,23 @@ PREVIEW_HTML = """<!DOCTYPE html>
         <h3 class="inf-pi05-sec-title" id="infSecArm" data-i18n="infer.sec_arm">臂控制</h3>
         <div class="inf-pi05-row">
           <button type="button" id="infArmHome" data-i18n="arm.home">Home</button>
-          <label class="arm-abs-dur" data-i18n-title="arm.abs_dur_hint" title="1–300（100ms–30s）">
-            <span data-i18n="arm.abs_dur">到达</span>
-            <input type="number" id="infArmDur" min="1" max="300" step="1" value="100" />
-            <span data-i18n="arm.abs_dur_unit">×100ms</span>
-            <span id="infArmDurVal">10.0s</span>
-          </label>
+          <div class="arm-abs-timing" data-i18n-title="arm.abs_timing_hint" title="T=clamp(d/v_norm, t_min, t_max)">
+            <label>
+              <span data-i18n="arm.abs_t_min">t_min</span>
+              <input type="number" id="infArmTMin" class="arm-abs-t-min" min="0.1" max="30" step="0.1" value="0.1" />
+              <span class="arm-abs-unit" data-i18n="arm.abs_t_unit">s</span>
+            </label>
+            <label>
+              <span data-i18n="arm.abs_t_max">t_max</span>
+              <input type="number" id="infArmTMax" class="arm-abs-t-max" min="0.1" max="30" step="0.1" value="30" />
+              <span class="arm-abs-unit" data-i18n="arm.abs_t_unit">s</span>
+            </label>
+            <label>
+              <span data-i18n="arm.abs_v_norm">v_norm</span>
+              <input type="number" id="infArmVNorm" class="arm-abs-v-norm" min="0.001" max="5" step="0.001" value="0.02" />
+              <span class="arm-abs-unit" data-i18n="arm.abs_v_unit">rad/s</span>
+            </label>
+          </div>
         </div>
         <div class="inf-pi05-row">
           <label for="infArmJoints" class="arm-abs-label" data-i18n="arm.abs_label" data-i18n-title="infer.joints_tip" title="单步后 IK(next_state→joints) 回填；下发为 joints_rad">joints</label>
@@ -2905,9 +2930,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const infArmJoints = document.getElementById('infArmJoints');
     let pi05LastRawText = '{}';
     const infArmSend = document.getElementById('infArmSend');
-    const infArmDur = document.getElementById('infArmDur');
-    const infArmDurVal = document.getElementById('infArmDurVal');
+    const infArmTMin = document.getElementById('infArmTMin');
+    const infArmTMax = document.getElementById('infArmTMax');
+    const infArmVNorm = document.getElementById('infArmVNorm');
     const infArmProg = document.getElementById('infArmProg');
+    window.__armAbsTiming = window.__armAbsTiming || { t_min_s: 0.1, t_max_s: 30.0, v_norm_rad_s: 0.02 };
     const LS_PI05 = 'dcs.inf.pi05';
     let pi05StepBusy = false;
     let pi05LoopRunning = false;
@@ -3075,26 +3102,60 @@ PREVIEW_HTML = """<!DOCTYPE html>
       infArmJoints.value = vals.join(',');
       return true;
     }
-    function updateInfArmDurLabel() {
-      if (!infArmDur) return;
-      let n = Math.round(Number(infArmDur.value));
-      if (!Number.isFinite(n)) n = 100;
-      n = Math.max(1, Math.min(300, n));
-      if (String(infArmDur.value) !== String(n)) infArmDur.value = String(n);
-      if (infArmDurVal) infArmDurVal.textContent = (n * 0.1).toFixed(1) + 's';
+    function clampArmAbsTiming(tMin, tMax, vNorm) {
+      let t_min_s = Number(tMin);
+      let t_max_s = Number(tMax);
+      let v_norm_rad_s = Number(vNorm);
+      if (!Number.isFinite(t_min_s)) t_min_s = 0.1;
+      if (!Number.isFinite(t_max_s)) t_max_s = 30.0;
+      if (!Number.isFinite(v_norm_rad_s) || v_norm_rad_s <= 0) v_norm_rad_s = 0.02;
+      t_min_s = Math.max(0.1, Math.min(30, t_min_s));
+      t_max_s = Math.max(0.1, Math.min(30, t_max_s));
+      if (t_min_s > t_max_s) {
+        const tmp = t_min_s; t_min_s = t_max_s; t_max_s = tmp;
+      }
+      v_norm_rad_s = Math.max(0.001, Math.min(5, v_norm_rad_s));
+      return { t_min_s: t_min_s, t_max_s: t_max_s, v_norm_rad_s: v_norm_rad_s };
     }
-    function infArmDurSeconds() {
-      if (!infArmDur) return 10;
-      let n = Math.round(Number(infArmDur.value));
-      if (!Number.isFinite(n)) n = 100;
-      n = Math.max(1, Math.min(300, n));
-      return n * 0.1;
+    function readArmAbsTimingFrom(root) {
+      const tMinEl = root ? root.querySelector('.arm-abs-t-min') : infArmTMin;
+      const tMaxEl = root ? root.querySelector('.arm-abs-t-max') : infArmTMax;
+      const vEl = root ? root.querySelector('.arm-abs-v-norm') : infArmVNorm;
+      const cur = window.__armAbsTiming || {};
+      return clampArmAbsTiming(
+        tMinEl ? tMinEl.value : cur.t_min_s,
+        tMaxEl ? tMaxEl.value : cur.t_max_s,
+        vEl ? vEl.value : cur.v_norm_rad_s
+      );
     }
-    if (infArmDur) {
-      infArmDur.addEventListener('input', updateInfArmDurLabel);
-      infArmDur.addEventListener('change', updateInfArmDurLabel);
-      updateInfArmDurLabel();
+    function applyArmAbsTimingTo(root, timing) {
+      const t = timing || window.__armAbsTiming || {};
+      const tMinEl = root ? root.querySelector('.arm-abs-t-min') : infArmTMin;
+      const tMaxEl = root ? root.querySelector('.arm-abs-t-max') : infArmTMax;
+      const vEl = root ? root.querySelector('.arm-abs-v-norm') : infArmVNorm;
+      if (tMinEl && t.t_min_s != null) tMinEl.value = String(t.t_min_s);
+      if (tMaxEl && t.t_max_s != null) tMaxEl.value = String(t.t_max_s);
+      if (vEl && t.v_norm_rad_s != null) vEl.value = String(t.v_norm_rad_s);
     }
+    function syncArmAbsTimingFromUi(root) {
+      const t = readArmAbsTimingFrom(root || null);
+      window.__armAbsTiming = t;
+      applyArmAbsTimingTo(null, t);
+      document.querySelectorAll('.arm-abs-timing').forEach((el) => applyArmAbsTimingTo(el, t));
+      return t;
+    }
+    function wireArmAbsTimingInputs(root) {
+      const els = root
+        ? root.querySelectorAll('.arm-abs-t-min, .arm-abs-t-max, .arm-abs-v-norm')
+        : [infArmTMin, infArmTMax, infArmVNorm].filter(Boolean);
+      els.forEach((el) => {
+        if (!el || el.dataset.timingWired === '1') return;
+        el.dataset.timingWired = '1';
+        el.addEventListener('change', () => syncArmAbsTimingFromUi(root || null));
+      });
+    }
+    wireArmAbsTimingInputs(null);
+    applyArmAbsTimingTo(null, window.__armAbsTiming);
     function applyPi05PanelFromPayload(p) {
       if (!infPi05Hint) return;
       const configured = !(p && p.configured === false);
@@ -3643,15 +3704,22 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (!window.__armWriteAgentId) {
         return { ok: false, error: t('infer.arm_need_writer') };
       }
-      const duration_s = infArmDurSeconds();
-      const r = await postInfArm({ joints_rad: parsed.joints, duration_s: duration_s });
+      const timing = syncArmAbsTimingFromUi(null);
+      const r = await postInfArm({
+        joints_rad: parsed.joints,
+        timing: 'scale_by_d',
+        t_min_s: timing.t_min_s,
+        t_max_s: timing.t_max_s,
+        v_norm_rad_s: timing.v_norm_rad_s,
+      });
+      const usedDur = (r && r.duration_s != null) ? Number(r.duration_s) : timing.t_min_s;
       if (infArmProg) {
         infArmProg.textContent = r.ok
-          ? t('arm.abs_ok', { dur: Number(duration_s).toFixed(1) })
+          ? t('arm.abs_ok', { dur: Number(usedDur).toFixed(1) })
           : t('arm.abs_fail', { error: r.error || JSON.stringify(r) });
       }
       if (r.ok) window.__armAbsRamp = r;
-      return Object.assign({ duration_s: duration_s }, r);
+      return Object.assign({ duration_s: usedDur }, r);
     }
     async function waitInfArmArrive(gen, duration_s) {
       const timeoutMs = Math.max(5000, (Number(duration_s) || 10) * 1500 + 2000);
@@ -6248,12 +6316,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
             '<input type="text" class="arm-abs-input" data-i18n-placeholder="arm.abs_ph" placeholder="0.00,0.00,0.00,0.00,0.00,0.00" autocomplete="off" spellcheck="false" />' +
             '<button type="button" class="arm-abs-send" data-i18n="arm.abs_send">下发</button>' +
             '<button type="button" class="arm-home-go" data-i18n="arm.home">Home</button>' +
-            '<label class="arm-abs-dur" data-i18n-title="arm.abs_dur_hint" title="1–300（100ms–30s）">' +
-              '<span data-i18n="arm.abs_dur">到达</span>' +
-              '<input type="number" class="arm-abs-dur-range" min="1" max="300" step="1" value="100" />' +
-              '<span data-i18n="arm.abs_dur_unit">×100ms</span>' +
-              '<span class="arm-abs-dur-val">10.0s</span>' +
-            '</label>' +
+            '<div class="arm-abs-timing" data-i18n-title="arm.abs_timing_hint" title="T=clamp(d/v_norm, t_min, t_max)">' +
+              '<label><span data-i18n="arm.abs_t_min">t_min</span>' +
+              '<input type="number" class="arm-abs-t-min" min="0.1" max="30" step="0.1" value="0.1" />' +
+              '<span class="arm-abs-unit" data-i18n="arm.abs_t_unit">s</span></label>' +
+              '<label><span data-i18n="arm.abs_t_max">t_max</span>' +
+              '<input type="number" class="arm-abs-t-max" min="0.1" max="30" step="0.1" value="30" />' +
+              '<span class="arm-abs-unit" data-i18n="arm.abs_t_unit">s</span></label>' +
+              '<label><span data-i18n="arm.abs_v_norm">v_norm</span>' +
+              '<input type="number" class="arm-abs-v-norm" min="0.001" max="5" step="0.001" value="0.02" />' +
+              '<span class="arm-abs-unit" data-i18n="arm.abs_v_unit">rad/s</span></label>' +
+            '</div>' +
           '</div>' +
           '<div class="arm-abs-prog" data-i18n="arm.abs_idle">绝对下发：空闲</div>' +
           (inferScope
@@ -6275,9 +6348,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const absSend = box.querySelector('.arm-abs-send');
         const absHome = box.querySelector('.arm-home-go');
         const absLabel = box.querySelector('.arm-abs-label');
-        const absDur = box.querySelector('.arm-abs-dur-range');
-        const absDurVal = box.querySelector('.arm-abs-dur-val');
+        const absTiming = box.querySelector('.arm-abs-timing');
         const absProg = box.querySelector('.arm-abs-prog');
+        applyArmAbsTimingTo(box, window.__armAbsTiming);
+        wireArmAbsTimingInputs(box);
         const fillAbsFromRead = () => {
           const ref = window.__armReadJoints;
           if (!Array.isArray(ref) || ref.length < 6) {
@@ -6306,20 +6380,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const updateDeltaLabel = () => {
           deltaVal.textContent = Number(delta.value).toFixed(1) + '°';
         };
-        const updateAbsDurLabel = () => {
-          if (!absDur) return;
-          let n = Math.round(Number(absDur.value));
-          if (!Number.isFinite(n)) n = 100;
-          n = Math.max(1, Math.min(300, n));
-          if (String(absDur.value) !== String(n)) absDur.value = String(n);
-          if (absDurVal) absDurVal.textContent = (n * 0.1).toFixed(1) + 's';
-        };
         delta.addEventListener('input', updateDeltaLabel);
-        if (absDur) {
-          absDur.addEventListener('input', updateAbsDurLabel);
-          absDur.addEventListener('change', updateAbsDurLabel);
-        }
-        updateAbsDurLabel();
         const postArm = async (body) => {
           const r = await fetch('/api/arm/command', {
             method: 'POST',
@@ -6331,7 +6392,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const setJogEnabled = (on) => {
           box.querySelectorAll('.arm-minus, .arm-plus').forEach((b) => { b.disabled = !on; });
           if (absInput) absInput.disabled = !on;
-          if (absDur) absDur.disabled = !on;
+          if (absTiming) {
+            absTiming.querySelectorAll('input').forEach((inp) => { inp.disabled = !on; });
+          }
           if (absSend) absSend.disabled = !on;
           if (absHome) absHome.disabled = !on || !!(window.__armAbsRamp && window.__armAbsRamp.enabled);
         };
@@ -6580,14 +6643,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
               runHint.textContent = t('arm.need_read');
               return;
             }
-            let durN = absDur ? Math.round(Number(absDur.value)) : 100;
-            if (!Number.isFinite(durN)) durN = 100;
-            durN = Math.max(1, Math.min(300, durN));
-            const duration_s = durN * 0.1;
+            const timing = syncArmAbsTimingFromUi(box);
             try {
-              const r = await postArm({ joints_rad: joints, duration_s: duration_s });
+              const r = await postArm({
+                joints_rad: joints,
+                timing: 'scale_by_d',
+                t_min_s: timing.t_min_s,
+                t_max_s: timing.t_max_s,
+                v_norm_rad_s: timing.v_norm_rad_s,
+              });
+              const usedDur = (r && r.duration_s != null) ? Number(r.duration_s) : timing.t_min_s;
               runHint.textContent = r.ok
-                ? t('arm.abs_ok', { dur: Number(duration_s).toFixed(1) })
+                ? t('arm.abs_ok', { dur: Number(usedDur).toFixed(1) })
                 : t('arm.abs_fail', { error: r.error || JSON.stringify(r) });
               if (r.armed === false) box._applyArmUi(false);
               if (r.ok) {
@@ -6726,6 +6793,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (msg.arm_abs_ramp) {
         const prevAbs = window.__armAbsRamp || {};
         window.__armAbsRamp = msg.arm_abs_ramp;
+        if (msg.arm_abs_ramp.params && !window.__armAbsTimingSeeded) {
+          window.__armAbsTimingSeeded = true;
+          window.__armAbsTiming = {
+            t_min_s: Number(msg.arm_abs_ramp.params.t_min_s),
+            t_max_s: Number(msg.arm_abs_ramp.params.t_max_s),
+            v_norm_rad_s: Number(msg.arm_abs_ramp.params.v_norm_rad_s),
+          };
+          if (typeof applyArmAbsTimingTo === 'function') {
+            applyArmAbsTimingTo(null, window.__armAbsTiming);
+            document.querySelectorAll('.arm-abs-timing').forEach((el) => {
+              applyArmAbsTimingTo(el, window.__armAbsTiming);
+            });
+          }
+        }
         const sendBtn = document.getElementById('infArmSend');
         const prog = document.getElementById('infArmProg');
         const absRamp = msg.arm_abs_ramp;
@@ -7390,6 +7471,10 @@ def create_viz_app(
             jog_joint=req.jog_joint,
             delta_rad=req.delta_rad,
             delta_deg=req.delta_deg,
+            timing=req.timing,
+            t_min_s=req.t_min_s,
+            t_max_s=req.t_max_s,
+            v_norm_rad_s=req.v_norm_rad_s,
         )
 
     @app.get("/api/arm/gello-sync")

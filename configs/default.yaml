@@ -27,6 +27,13 @@ gello_arm_sync:
   sync_done_eps_rad: 0.03
   max_ramp_rounds: 3
 
+# Abs send (Infer/Collect「下发」): T=clamp(d/v_norm, t_min, t_max) + cosine S-curve. Home 仍用固定 home_duration_s.
+arm_abs_ramp:
+  t_min_s: 0.1
+  t_max_s: 30.0
+  v_norm_rad_s: 0.02
+  profile: cosine
+
 record:
   save_dir: D:\data_new
   episode_index: 5

@@ -134,6 +134,8 @@ class Orchestrator:
         self._abs_ramp_write_count = 0
         self._abs_ramp_last_t_wall: float | None = None
         self._abs_ramp_target_joints: list[float] | None = None
+        self._abs_ramp_timing: str | None = None
+        self._abs_ramp_delta_max: float | None = None
         # Home pose (rad); seeded from YAML, updatable at runtime / via settings save.
         self._home_lock = threading.Lock()
         hj, _herr = parse_home_joints(getattr(cfg, "home_joints_rad", None))
@@ -262,8 +264,8 @@ class Orchestrator:
         """Validate home joints then joint-space absolute ramp to ``home_joints_rad``.
 
         Home is configured as joints (not a TCP pose). Uses dedicated
-        ``home_duration_s`` when ``duration_s`` is omitted — never the Infer step
-        / abs-send duration.
+        ``home_duration_s`` when ``duration_s`` is omitted — never abs-send
+        ``t_min``/``t_max``/``v_norm``. Fixed duration + S-curve profile.
         """
         st = self.arm_home_status()
         if not st.get("configured"):
@@ -280,10 +282,11 @@ class Orchestrator:
             agent_id=agent_id,
             joints_rad=list(st["home_joints_rad"]),
             duration_s=dur,
+            timing="fixed",
         )
         out = dict(out)
         out["home"] = self.arm_home_status()
-        out["duration_s"] = dur
+        out["duration_s"] = float(out.get("duration_s", dur))
         return out
 
     def _pi05_agent(self, agent_id: str | None = None) -> Pi05ClientAgent | None:
@@ -864,14 +867,69 @@ class Orchestrator:
         return best_d, best_i
 
     @staticmethod
-    def _interp_path(qa: list[float], qg: list[float], n: int) -> list[list[float]]:
-        """Linear path q_a → q_g with N points (k=1..N); last == q_g."""
+    def _s_curve_alpha(u: float) -> float:
+        """Cosine ease-in-out in [0, 1] (S-curve approximation)."""
+        import math
+
+        u = max(0.0, min(1.0, float(u)))
+        return 0.5 * (1.0 - math.cos(math.pi * u))
+
+    @staticmethod
+    def _interp_path(
+        qa: list[float],
+        qg: list[float],
+        n: int,
+        *,
+        profile: str = "linear",
+    ) -> list[list[float]]:
+        """Path q_a → q_g with N points (k=1..N); last == q_g.
+
+        ``profile=linear``: uniform α=k/N (gello sync).
+        ``profile=cosine``: shared S-curve α (abs send).
+        """
         n = max(1, int(n))
+        use_s = str(profile or "linear").strip().lower() == "cosine"
         out: list[list[float]] = []
         for k in range(1, n + 1):
-            a = k / n
-            out.append([float(qa[i]) + a * (float(qg[i]) - float(qa[i])) for i in range(6)])
+            u = k / n
+            a = Orchestrator._s_curve_alpha(u) if use_s else u
+            out.append(
+                [float(qa[i]) + a * (float(qg[i]) - float(qa[i])) for i in range(6)]
+            )
         return out
+
+    @staticmethod
+    def _path_peak_step(qa: list[float], path: list[list[float]]) -> float:
+        """Max ∞-norm joint step along path (including first step from qa)."""
+        prev = qa
+        peak = 0.0
+        for qk in path:
+            step = max(abs(float(qk[i]) - float(prev[i])) for i in range(6))
+            if step > peak:
+                peak = step
+            prev = qk
+        return peak
+
+    @staticmethod
+    def _abs_move_duration_s(
+        *,
+        d_rad: float,
+        v_norm_rad_s: float,
+        t_min_s: float,
+        t_max_s: float,
+    ) -> float:
+        """T = clamp(d/v_norm, t_min, t_max); tiny d → t_min."""
+        t_min = max(0.1, min(30.0, float(t_min_s)))
+        t_max = max(0.1, min(30.0, float(t_max_s)))
+        if t_min > t_max:
+            t_min, t_max = t_max, t_min
+        v = float(v_norm_rad_s)
+        if not (v == v) or v <= 0:
+            v = 0.02
+        d = max(0.0, float(d_rad))
+        if d < 1e-9:
+            return t_min
+        return max(t_min, min(t_max, d / v))
 
     def _resolve_gello_arm_agents(
         self,
@@ -1594,6 +1652,13 @@ class Orchestrator:
         )
 
     def arm_abs_ramp_status(self) -> dict[str, Any]:
+        cfg = getattr(self.cfg, "arm_abs_ramp", None)
+        defaults = {
+            "t_min_s": float(getattr(cfg, "t_min_s", 0.1) if cfg else 0.1),
+            "t_max_s": float(getattr(cfg, "t_max_s", 30.0) if cfg else 30.0),
+            "v_norm_rad_s": float(getattr(cfg, "v_norm_rad_s", 0.02) if cfg else 0.02),
+            "profile": str(getattr(cfg, "profile", "cosine") if cfg else "cosine"),
+        }
         with self._abs_ramp_lock:
             return {
                 "enabled": self._abs_ramp_enabled,
@@ -1614,6 +1679,9 @@ class Orchestrator:
                     if self._abs_ramp_target_joints is not None
                     else None
                 ),
+                "timing": getattr(self, "_abs_ramp_timing", None),
+                "delta_max": getattr(self, "_abs_ramp_delta_max", None),
+                "params": defaults,
             }
 
     def cancel_arm_abs_ramp(self, *, message: str | None = None) -> dict[str, Any]:
@@ -1638,13 +1706,18 @@ class Orchestrator:
         self,
         *,
         joints_rad: list[float],
-        duration_s: float = 10.0,
+        duration_s: float | None = None,
         agent_id: str | None = None,
+        timing: str = "scale_by_d",
+        t_min_s: float | None = None,
+        t_max_s: float | None = None,
+        v_norm_rad_s: float | None = None,
     ) -> dict[str, Any]:
-        """Timed **joint-space** linear ramp from live arm read → target joints.
+        """Timed **joint-space** ramp from live arm read → target joints.
 
-        Home / abs-send targets are configured/commanded as ``joints_rad``, so the
-        path is linear in q (same helper as gello→arm sync). Not Cartesian+IK.
+        - ``timing=scale_by_d`` (abs send): ``T=clamp(d/v_norm, t_min, t_max)`` + S-curve.
+        - ``timing=fixed`` (Home): use ``duration_s`` as total T + same S-curve profile.
+        Path is linear in q with shared α(t). Not Cartesian+IK.
         """
         from sensors_dcs.agents.arm_agent import ArmAgent
         from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
@@ -1709,30 +1782,61 @@ class Orchestrator:
                 "error": "no live arm read joints; refuse absolute ramp without current pose",
             }
 
-        dur = float(duration_s)
-        if not (dur == dur):  # NaN
-            dur = 10.0
-        dur = max(1.0, min(30.0, dur))
+        cfg = getattr(self.cfg, "arm_abs_ramp", None)
+        t_min = float(t_min_s if t_min_s is not None else getattr(cfg, "t_min_s", 0.1))
+        t_max = float(t_max_s if t_max_s is not None else getattr(cfg, "t_max_s", 30.0))
+        v_norm = float(
+            v_norm_rad_s
+            if v_norm_rad_s is not None
+            else getattr(cfg, "v_norm_rad_s", 0.02)
+        )
+        profile = str(getattr(cfg, "profile", "cosine") or "cosine")
+        mode = str(timing or "scale_by_d").strip().lower()
+        if mode not in ("scale_by_d", "fixed"):
+            mode = "scale_by_d"
+
+        dmax, ji = self._delta_max_joint(qa0, q_star)
+        if mode == "fixed":
+            dur = 10.0 if duration_s is None else float(duration_s)
+            if not (dur == dur):
+                dur = 10.0
+            dur = max(0.1, min(30.0, dur))
+        else:
+            dur = self._abs_move_duration_s(
+                d_rad=dmax,
+                v_norm_rad_s=v_norm,
+                t_min_s=t_min,
+                t_max_s=t_max,
+            )
+
         hz = float(getattr(self.cfg.gello_arm_sync, "ramp_hz", 5.0) or 5.0)
         hz = max(0.1, hz)
         n = max(1, int(round(dur * hz)))
 
-        dmax, ji = self._delta_max_joint(qa0, q_star)
-        step = dmax / n
+        path = self._interp_path(qa0, q_star, n, profile=profile)
+        peak = self._path_peak_step(qa0, path)
         max_delta = float(getattr(writer.sensor, "max_delta_rad", 0.0) or 0.0)
-        if max_delta > 0 and step > max_delta + 1e-12:
-            need_s = (dmax / max_delta) / hz
+        if max_delta > 0 and peak > max_delta + 1e-12:
+            need_n = max(1, int((dmax / max_delta) + 0.999999))
+            scale = peak / max(dmax / n, 1e-12)
+            need_n_s = max(need_n, int((scale * dmax / max_delta) + 0.999999))
+            need_s = need_n_s / hz
             return {
                 "ok": False,
                 "error": (
-                    f"ramp step ≈{step:.4f} rad (joint {ji}) exceeds driver max_delta="
-                    f"{max_delta:.4f} rad at {dur:g}s×{hz:g}Hz; "
-                    f"increase duration to ≥{need_s:.1f}s (max 30)"
+                    f"ramp peak step ≈{peak:.4f} rad (joint {ji}) exceeds driver max_delta="
+                    f"{max_delta:.4f} rad at {dur:g}s×{hz:g}Hz ({profile}); "
+                    f"increase t_max / lower v_norm or use duration ≥{need_s:.1f}s (max 30)"
                 ),
                 "delta_max": dmax,
+                "peak_step": peak,
                 "worst_joint": ji,
                 "ramp_n": n,
                 "duration_s": dur,
+                "t_min_s": t_min,
+                "t_max_s": t_max,
+                "v_norm_rad_s": v_norm,
+                "timing": mode,
             }
 
         # Replace any in-flight abs ramp.
@@ -1753,21 +1857,32 @@ class Orchestrator:
             self._abs_ramp_last_ok = None
             self._abs_ramp_last_error = None
             self._abs_ramp_last_message = (
-                f"关节空间斜坡：{dur:g}s @ {hz:g}Hz × {n} 点"
+                f"关节斜坡开始：{dur:g}s @ {hz:g}Hz × {n} 点 ({mode}, {profile})"
             )
             self._abs_ramp_write_count = 0
             self._abs_ramp_last_t_wall = time.time()
             self._abs_ramp_target_joints = list(q_star)
+            self._abs_ramp_timing = mode
+            self._abs_ramp_delta_max = dmax
 
         self._abs_ramp_stop.clear()
         self._abs_ramp_thread = threading.Thread(
             target=self._arm_abs_ramp_loop,
             name="arm-abs-ramp",
-            args=(reader.agent_id, writer.agent_id, list(qa0), list(q_star), n, hz),
+            args=(reader.agent_id, writer.agent_id, list(qa0), list(q_star), n, hz, profile),
             daemon=True,
         )
         self._abs_ramp_thread.start()
-        return {"ok": True, **self.arm_abs_ramp_status()}
+        return {
+            "ok": True,
+            "t_min_s": t_min,
+            "t_max_s": t_max,
+            "v_norm_rad_s": v_norm,
+            "timing": mode,
+            "delta_max": dmax,
+            "peak_step": peak,
+            **self.arm_abs_ramp_status(),
+        }
 
     def _arm_abs_ramp_loop(
         self,
@@ -1777,12 +1892,13 @@ class Orchestrator:
         q_star: list[float],
         n: int,
         hz: float,
+        profile: str = "cosine",
     ) -> None:
         from sensors_dcs.agents.arm_agent import ArmAgent
         from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
 
         period = 1.0 / max(0.1, float(hz))
-        path = self._interp_path(qa0, q_star, n)
+        path = self._interp_path(qa0, q_star, n, profile=profile)
         final_error: str | None = None
         final_message: str | None = None
         completed = False
@@ -1821,9 +1937,9 @@ class Orchestrator:
                     self._abs_ramp_stop.wait(period)
                 else:
                     completed = True
-                    final_message = f"绝对下发完成：{n} 点已写入（关节空间）"
-        except Exception as e:  # noqa: BLE001
-            final_error = str(e)
+                    final_message = f"绝对下发完成：{n} 点已写入（关节空间/{profile}）"
+        except Exception as e:  # noqa: BLE001 — surface to status
+            final_error = f"abs ramp exception: {e}"
 
         with self._abs_ramp_lock:
             self._abs_ramp_enabled = False
@@ -1858,6 +1974,10 @@ class Orchestrator:
         jog_joint: int | None = None,
         delta_rad: float | None = None,
         delta_deg: float | None = None,
+        timing: str | None = None,
+        t_min_s: float | None = None,
+        t_max_s: float | None = None,
+        v_norm_rad_s: float | None = None,
     ) -> dict[str, Any]:
         """Dispatch arm/disarm/jog to ``arm_write``; absolute joints use timed ramp."""
         import math
@@ -1965,11 +2085,25 @@ class Orchestrator:
             return agent.command(joints_rad=target, reference_joints_rad=base)
 
         if joints_rad is not None:
-            dur = 10.0 if duration_s is None else float(duration_s)
+            mode = timing
+            if mode is None:
+                if (
+                    duration_s is not None
+                    and t_min_s is None
+                    and t_max_s is None
+                    and v_norm_rad_s is None
+                ):
+                    mode = "fixed"
+                else:
+                    mode = "scale_by_d"
             return self.start_arm_abs_ramp(
                 joints_rad=list(joints_rad),
-                duration_s=dur,
+                duration_s=duration_s,
                 agent_id=agent.agent_id,
+                timing=mode,
+                t_min_s=t_min_s,
+                t_max_s=t_max_s,
+                v_norm_rad_s=v_norm_rad_s,
             )
 
         return {"ok": False, "error": "arm, disarm/stop, joints_rad, or jog_joint required"}

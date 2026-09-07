@@ -75,6 +75,51 @@ class GelloArmTeleopConfig(BaseModel):
     teleop_write_fail_max: int = 5
 
 
+class ArmAbsRampConfig(BaseModel):
+    """Joint-space abs send: T=clamp(d/v_norm, t_min, t_max) + S-curve (see docs/arm-abs-ramp-enhance.md)."""
+
+    t_min_s: float = 0.1
+    t_max_s: float = 30.0
+    # Max-joint-rad speed used for T≈d/v_norm (rad/s). UI label: v_norm.
+    v_norm_rad_s: float = 0.02
+    # cosine = ease-in-out S-curve approx; linear kept for callers that opt in.
+    profile: str = "cosine"
+
+    @field_validator("t_min_s", "t_max_s", mode="before")
+    @classmethod
+    def _t_bounds(cls, v: Any) -> float:
+        if v is None or v == "":
+            raise ValueError("t_min_s/t_max_s required")
+        f = float(v)
+        if f != f or f in (float("inf"), float("-inf")):
+            raise ValueError("t_min_s/t_max_s must be finite")
+        return max(0.1, min(30.0, f))
+
+    @field_validator("v_norm_rad_s", mode="before")
+    @classmethod
+    def _v_norm(cls, v: Any) -> float:
+        if v is None or v == "":
+            return 0.02
+        f = float(v)
+        if f != f or f in (float("inf"), float("-inf")) or f <= 0:
+            raise ValueError("v_norm_rad_s must be a positive finite float")
+        return f
+
+    @field_validator("profile", mode="before")
+    @classmethod
+    def _profile(cls, v: Any) -> str:
+        s = str(v or "cosine").strip().lower()
+        if s not in ("cosine", "linear"):
+            raise ValueError("arm_abs_ramp.profile must be cosine or linear")
+        return s
+
+    @model_validator(mode="after")
+    def _t_min_le_t_max(self) -> ArmAbsRampConfig:
+        if self.t_min_s > self.t_max_s:
+            raise ValueError("arm_abs_ramp.t_min_s must be <= t_max_s")
+        return self
+
+
 class RecordConfig(BaseModel):
     save_dir: str | None = "./data"
     episode_index: int = 0
@@ -94,6 +139,7 @@ class DcsConfig(BaseModel):
     record: RecordConfig = Field(default_factory=RecordConfig)
     gello_arm_sync: GelloArmSyncConfig = Field(default_factory=GelloArmSyncConfig)
     gello_arm_teleop: GelloArmTeleopConfig = Field(default_factory=GelloArmTeleopConfig)
+    arm_abs_ramp: ArmAbsRampConfig = Field(default_factory=ArmAbsRampConfig)
     agents: list[AgentConfig] = Field(default_factory=list)
 
     @field_validator("home_joints_rad", mode="before")
@@ -215,6 +261,7 @@ def config_summary(cfg: DcsConfig) -> dict[str, Any]:
         "record": cfg.record.model_dump(),
         "gello_arm_sync": cfg.gello_arm_sync.model_dump(),
         "gello_arm_teleop": cfg.gello_arm_teleop.model_dump(),
+        "arm_abs_ramp": cfg.arm_abs_ramp.model_dump(),
         "agents": [a.model_dump() for a in cfg.agents],
     }
 
