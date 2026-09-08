@@ -133,6 +133,8 @@ class Pi05PromptBody(BaseModel):
 class Pi05StepBody(BaseModel):
     agent_id: str | None = None
     prompt: str | None = None
+    robot_state_format: str | None = None
+    next_state_format: str | None = None
 
 
 class Pi05RunBody(BaseModel):
@@ -1128,7 +1130,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       margin: 0;
     }
     .inf-pi05-panel input[type="text"],
-    .inf-pi05-panel input[type="number"] {
+    .inf-pi05-panel input[type="number"],
+    .inf-pi05-panel select {
       background: var(--input-bg);
       border: 1px solid var(--border);
       border-radius: 8px;
@@ -1137,6 +1140,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
       height: var(--inf-ctrl-h);
       padding: 0 0.45rem;
       min-width: 0;
+    }
+    .inf-wire-fmt-row select {
+      width: 7.5rem;
+      flex: 0 0 auto;
     }
     #infPi05Host { width: 7.5rem; flex: 0 0 auto; }
     #infPi05Port { width: 4.75rem; flex: 0 0 auto; }
@@ -1972,6 +1979,19 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <label for="infPi05Prompt" data-i18n="infer.prompt">Prompt</label>
           <input type="text" id="infPi05Prompt" data-i18n-placeholder="infer.prompt_ph" placeholder="任务描述（可空）" autocomplete="off" />
           <button type="button" id="infPi05PromptApply" data-i18n="btn.apply">应用</button>
+        </div>
+        <div class="inf-pi05-row inf-wire-fmt-row">
+          <label for="infSendFmt" data-i18n="infer.send_fmt" data-i18n-title="infer.send_fmt_tip" title="发给 serve 的 robot_state 编码（方案 A：发送不含 delta_pose）">发送</label>
+          <select id="infSendFmt" data-i18n-title="infer.send_fmt_tip" title="发给 serve 的 robot_state 编码（方案 A：发送不含 delta_pose）">
+            <option value="pose" selected>pose</option>
+            <option value="joints">joints</option>
+          </select>
+          <label for="infRecvFmt" data-i18n="infer.recv_fmt" data-i18n-title="infer.recv_fmt_tip" title="serve 返回的 next_state 编码；delta_pose 会与当前 TCP 左乘合成绝对位姿再 IK">接收</label>
+          <select id="infRecvFmt" data-i18n-title="infer.recv_fmt_tip" title="serve 返回的 next_state 编码；delta_pose 会与当前 TCP 左乘合成绝对位姿再 IK">
+            <option value="pose" selected>pose</option>
+            <option value="joints">joints</option>
+            <option value="delta_pose">delta_pose</option>
+          </select>
         </div>
       </section>
       <section class="inf-pi05-sec" aria-labelledby="infSecArm">
@@ -2889,6 +2909,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const infPi05RawBody = document.getElementById('infPi05RawBody');
     const infPi05RawClose = document.getElementById('infPi05RawClose');
     const infArmJoints = document.getElementById('infArmJoints');
+    const infSendFmt = document.getElementById('infSendFmt');
+    const infRecvFmt = document.getElementById('infRecvFmt');
     let pi05LastRawText = '{}';
     const infArmSend = document.getElementById('infArmSend');
     const infArmTMin = document.getElementById('infArmTMin');
@@ -2915,6 +2937,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
           infPi05Port.dataset.dirty = '1';
         }
         if (infPi05Prompt && j.prompt != null) infPi05Prompt.value = j.prompt;
+        if (infSendFmt && (j.robot_state_format === 'pose' || j.robot_state_format === 'joints')) {
+          infSendFmt.value = j.robot_state_format;
+        }
+        if (infRecvFmt && (j.next_state_format === 'pose' || j.next_state_format === 'joints' || j.next_state_format === 'delta_pose')) {
+          infRecvFmt.value = j.next_state_format;
+        }
       } catch (e) {}
     }
     function savePi05Form() {
@@ -2923,8 +2951,43 @@ PREVIEW_HTML = """<!DOCTYPE html>
           host: (infPi05Host && infPi05Host.value) || '127.0.0.1',
           port: Number((infPi05Port && infPi05Port.value) || 5000),
           prompt: (infPi05Prompt && infPi05Prompt.value) || '',
+          robot_state_format: getInfSendFmt(),
+          next_state_format: getInfRecvFmt(),
         }));
       } catch (e) {}
+    }
+    function getInfSendFmt() {
+      const v = (infSendFmt && infSendFmt.value) || 'pose';
+      return (v === 'joints') ? 'joints' : 'pose';
+    }
+    function getInfRecvFmt() {
+      const v = (infRecvFmt && infRecvFmt.value) || 'pose';
+      if (v === 'joints' || v === 'delta_pose') return v;
+      return 'pose';
+    }
+    function currentWireFormats() {
+      return {
+        robot_state_format: getInfSendFmt(),
+        next_state_format: getInfRecvFmt(),
+      };
+    }
+    function applyInfPoseGoalFromPayload(p) {
+      if (!p) return;
+      let goal = null;
+      if (Array.isArray(p.goal_xyzrpy) && p.goal_xyzrpy.length >= 3) {
+        goal = p.goal_xyzrpy;
+      } else if (
+        (p.next_state_format || getInfRecvFmt()) === 'pose'
+        && Array.isArray(p.next_state)
+        && p.next_state.length >= 3
+      ) {
+        goal = p.next_state;
+      }
+      if (!goal) return;
+      window.__pi05NextState = goal;
+      if (typeof window.__setInfPoseGoal === 'function') {
+        window.__setInfPoseGoal(goal);
+      }
     }
     function formatPi05Out(p) {
       if (!p) return '{}';
@@ -2936,8 +2999,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
         prompt: p.prompt,
         step: p.step,
         latency_ms: p.latency_ms,
+        robot_state_format: p.robot_state_format,
+        next_state_format: p.next_state_format,
         robot_state: p.robot_state,
         next_state: p.next_state,
+        goal_xyzrpy: p.goal_xyzrpy,
         next_joints_rad: p.next_joints_rad,
         ik_ok: p.ik_ok,
         ik_error: p.ik_error,
@@ -3138,8 +3204,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         setPi05RawPayload(p);
         updatePi05Flags(p);
         if (p && p.next_state && typeof window.__setInfPoseGoal === 'function') {
-          window.__pi05NextState = p.next_state;
-          window.__setInfPoseGoal(p.next_state);
+          applyInfPoseGoalFromPayload(p);
         }
         return;
       }
@@ -3215,12 +3280,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         infPi05Prompt.value = p.prompt;
       }
       updatePi05Flags(p);
-      if (p && Array.isArray(p.next_state) && p.next_state.length >= 3) {
-        window.__pi05NextState = p.next_state;
-        if (typeof window.__setInfPoseGoal === 'function') {
-          window.__setInfPoseGoal(p.next_state);
-        }
-      }
+      applyInfPoseGoalFromPayload(p);
     }
     async function postPi05(path, body) {
       savePi05Form();
@@ -3643,11 +3703,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
     async function runInfPi05StepOnce() {
       if (infPi05Hint) infPi05Hint.textContent = t('infer.hint_stepping');
       // Always push the input box text with the step so serve never sees a stale "".
-      const r = await postPi05('/api/pi05/step', { prompt: currentPi05Prompt() });
+      const r = await postPi05('/api/pi05/step', Object.assign({
+        prompt: currentPi05Prompt(),
+      }, currentWireFormats()));
       if (r && r.ok !== false && infPi05Prompt) {
         delete infPi05Prompt.dataset.dirty;
         if (r.prompt != null) infPi05Prompt.value = r.prompt;
       }
+      applyInfPoseGoalFromPayload(r);
       if (r && r.ok && fillInfArmJointsFromStep(r)) {
         if (infArmProg) infArmProg.textContent = t('infer.joints_filled');
       } else if (r && r.ok && r.ik_ok === false) {
@@ -4055,6 +4118,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         pushPi05PromptFromUi({ silent: true });
       });
     }
+    [infSendFmt, infRecvFmt].forEach((el) => {
+      if (!el) return;
+      el.addEventListener('change', () => savePi05Form());
+    });
     if (infArmSend) {
       infArmSend.addEventListener('click', async () => {
         if (pi05LoopRunning) {
@@ -7549,7 +7616,11 @@ def create_viz_app(
             return {"ok": False, "configured": False, "error": "pi05 unavailable"}
         body = req or Pi05StepBody()
         return await asyncio.to_thread(
-            pi05_step, agent_id=body.agent_id, prompt=body.prompt
+            pi05_step,
+            agent_id=body.agent_id,
+            prompt=body.prompt,
+            robot_state_format=body.robot_state_format,
+            next_state_format=body.next_state_format,
         )
 
     @app.get("/api/arm/home")

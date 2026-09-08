@@ -140,10 +140,14 @@ class Pi05ClientAgent(BaseAgent):
         self._last_latency_ms: float | None = None
         self._last_robot_state: list[float] | None = None
         self._last_next_state: list[float] | None = None
+        self._last_goal_xyzrpy: list[float] | None = None
+        self._last_robot_state_format: str | None = None
+        self._last_next_state_format: str | None = None
         self._last_term: float | None = None
         self._last_reject: int | None = None
         self._last_server_text: str | None = None
         self._last_ok: bool | None = None
+        self._last_error: str | None = None
         self._last_jpeg_lens: dict[str, int] = {}
 
     def bind_peers(self, agents: dict[str, BaseAgent]) -> None:
@@ -161,6 +165,9 @@ class Pi05ClientAgent(BaseAgent):
                 "latency_ms": self._last_latency_ms,
                 "robot_state": list(self._last_robot_state) if self._last_robot_state else None,
                 "next_state": list(self._last_next_state) if self._last_next_state else None,
+                "goal_xyzrpy": list(self._last_goal_xyzrpy) if self._last_goal_xyzrpy else None,
+                "robot_state_format": self._last_robot_state_format,
+                "next_state_format": self._last_next_state_format,
                 "term_flag": self._last_term,
                 "reject_flag": self._last_reject,
                 "server_text": self._last_server_text,
@@ -221,8 +228,40 @@ class Pi05ClientAgent(BaseAgent):
         self._push_status_frame()
         return out
 
-    def step(self) -> dict[str, Any]:
+    def note_wire_meta(
+        self,
+        *,
+        goal_xyzrpy: list[float] | None = None,
+        robot_state_format: str | None = None,
+        next_state_format: str | None = None,
+    ) -> None:
+        """Runtime fills absolute TCP goal after decode/IK (for pose HUD / WS)."""
+        with self._lock:
+            if goal_xyzrpy is not None:
+                self._last_goal_xyzrpy = list(goal_xyzrpy)
+            if robot_state_format is not None:
+                self._last_robot_state_format = str(robot_state_format)
+            if next_state_format is not None:
+                self._last_next_state_format = str(next_state_format)
+
+    def step(self, *, robot_state_format: str | None = None) -> dict[str, Any]:
         """Gather obs once, send to serve, store/echo next_state. Manual only."""
+        from sensors_dcs.arm_pose import (
+            DEFAULT_SEND_STATE_FORMAT,
+            normalize_send_state_format,
+        )
+
+        try:
+            send_fmt = normalize_send_state_format(
+                robot_state_format or DEFAULT_SEND_STATE_FORMAT
+            )
+        except ValueError as e:
+            with self._lock:
+                self._last_ok = False
+                self._last_error = str(e)
+            self._push_status_frame()
+            return {"ok": False, "error": str(e), **self.status_payload()}
+
         with self._lock:
             if not self._connected or self._sock is None:
                 return {
@@ -235,7 +274,7 @@ class Pi05ClientAgent(BaseAgent):
 
         try:
             jpegs, jpeg_lens = self._gather_jpegs()
-            robot_state = self._gather_robot_state()
+            robot_state = self._gather_robot_state(state_format=send_fmt)
             req = pack_serve_request(
                 top_jpeg=jpegs["top"],
                 chest_jpeg=jpegs["chest"],
@@ -253,6 +292,8 @@ class Pi05ClientAgent(BaseAgent):
             latency_ms = (time.perf_counter() - t0) * 1000.0
             if resp is None:
                 raise ConnectionError("serve disconnected during response")
+            with self._lock:
+                self._last_robot_state_format = send_fmt
             frame = self._push_result_frame(
                 robot_state=robot_state,
                 resp=resp,
@@ -261,9 +302,11 @@ class Pi05ClientAgent(BaseAgent):
                 prompt=prompt,
                 ok=True,
                 error=None,
+                robot_state_format=send_fmt,
             )
             out = {"ok": True, **self.status_payload()}
             out["frame_seq"] = frame.seq
+            out["robot_state_format"] = send_fmt
             return out
         except ConnectionError as e:
             with self._lock:
@@ -334,6 +377,9 @@ class Pi05ClientAgent(BaseAgent):
                 "step": self._step,
                 "robot_state": list(self._last_robot_state) if self._last_robot_state else None,
                 "next_state": list(self._last_next_state) if self._last_next_state else None,
+                "goal_xyzrpy": list(self._last_goal_xyzrpy) if self._last_goal_xyzrpy else None,
+                "robot_state_format": self._last_robot_state_format,
+                "next_state_format": self._last_next_state_format,
                 "term_flag": self._last_term,
                 "reject_flag": self._last_reject,
                 "server_text": self._last_server_text,
@@ -366,6 +412,7 @@ class Pi05ClientAgent(BaseAgent):
         prompt: str,
         ok: bool,
         error: str | None,
+        robot_state_format: str | None = None,
     ) -> Frame:
         t_wall = time.time()
         t_mono = time.perf_counter()
@@ -374,6 +421,8 @@ class Pi05ClientAgent(BaseAgent):
             self._step += 1
             self._last_robot_state = list(robot_state)
             self._last_next_state = list(resp["next_state"])
+            if robot_state_format is not None:
+                self._last_robot_state_format = str(robot_state_format)
             self._last_term = float(resp["term_flag"])
             self._last_reject = int(resp["reject_flag"])
             self._last_server_text = str(resp["server_text"] or "")
@@ -386,6 +435,11 @@ class Pi05ClientAgent(BaseAgent):
             host = self._host
             port = self._port
             camera_map = dict(self._camera_map)
+            goal_xyzrpy = (
+                list(self._last_goal_xyzrpy) if self._last_goal_xyzrpy else None
+            )
+            send_fmt = self._last_robot_state_format
+            recv_fmt = self._last_next_state_format
         payload = {
             "connected": connected,
             "host": host,
@@ -395,6 +449,9 @@ class Pi05ClientAgent(BaseAgent):
             "step": step,
             "robot_state": list(robot_state),
             "next_state": list(resp["next_state"]),
+            "goal_xyzrpy": goal_xyzrpy,
+            "robot_state_format": send_fmt,
+            "next_state_format": recv_fmt,
             "term_flag": float(resp["term_flag"]),
             "reject_flag": int(resp["reject_flag"]),
             "server_text": str(resp["server_text"] or ""),
@@ -464,7 +521,10 @@ class Pi05ClientAgent(BaseAgent):
         except Exception:  # noqa: BLE001
             return None
 
-    def _gather_robot_state(self) -> list[float]:
+    def _gather_robot_state(self, *, state_format: str = "pose") -> list[float]:
+        from sensors_dcs.arm_pose import normalize_send_state_format
+
+        fmt = normalize_send_state_format(state_format)
         peers = self._peers
         arm = None
         if self._arm_agent_id and self._arm_agent_id in peers:
@@ -479,9 +539,17 @@ class Pi05ClientAgent(BaseAgent):
         fr = arm.ring.latest.get()
         if fr is None:
             raise RuntimeError("no live arm_read frame")
-        xyzrpy = (fr.payload or {}).get("cartesian_xyzrpy")
-        if not isinstance(xyzrpy, (list, tuple)) or len(xyzrpy) < 6:
-            raise RuntimeError("arm_read missing cartesian_xyzrpy")
+        payload = fr.payload or {}
+        if fmt == "joints":
+            joints = payload.get("joints_rad")
+            if not isinstance(joints, (list, tuple)) or len(joints) < 6:
+                raise RuntimeError("arm_read missing joints_rad")
+            core = [float(joints[i]) for i in range(6)]
+        else:
+            xyzrpy = payload.get("cartesian_xyzrpy")
+            if not isinstance(xyzrpy, (list, tuple)) or len(xyzrpy) < 6:
+                raise RuntimeError("arm_read missing cartesian_xyzrpy")
+            core = [float(xyzrpy[i]) for i in range(6)]
         grip = 0.0
         g_agent = None
         if self._gripper_agent_id and self._gripper_agent_id in peers:
@@ -497,7 +565,7 @@ class Pi05ClientAgent(BaseAgent):
                 gn = (gfr.payload or {}).get("position_norm")
                 if gn is not None and _finite(gn):
                     grip = float(gn)
-        state = [float(xyzrpy[i]) for i in range(6)] + [grip]
+        state = core + [grip]
         if not all(_finite(x) for x in state):
             raise RuntimeError("robot_state has non-finite values")
         return state

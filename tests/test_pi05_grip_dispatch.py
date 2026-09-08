@@ -29,7 +29,7 @@ def test_pi05_step_commands_gripper(monkeypatch) -> None:
         def set_prompt(self, prompt: str) -> dict:
             return {"ok": True}
 
-        def step(self) -> dict:
+        def step(self, **kwargs) -> dict:
             return {
                 "ok": True,
                 "connected": True,
@@ -39,6 +39,12 @@ def test_pi05_step_commands_gripper(monkeypatch) -> None:
                 "reject_flag": 0,
             }
 
+        def note_wire_meta(self, **kwargs) -> None:
+            return None
+
+        def _push_status_frame(self):
+            return None
+
         def status_payload(self) -> dict:
             return {"connected": True}
 
@@ -46,8 +52,13 @@ def test_pi05_step_commands_gripper(monkeypatch) -> None:
     monkeypatch.setattr(rt, "_pi05_agent", lambda agent_id=None: fake)
     monkeypatch.setattr(
         rt,
-        "_next_state_to_joints",
-        lambda ns: {"ok": True, "joints_rad": [0.0] * 6, "error": None},
+        "_decode_next_state",
+        lambda ns, fmt: {
+            "ok": True,
+            "joints_rad": [0.0] * 6,
+            "error": None,
+            "goal_xyzrpy": list(ns)[:6],
+        },
     )
 
     def _grip_cmd(**kwargs):

@@ -90,6 +90,45 @@ def _xyzrpy_to_matrix(xyzrpy: Sequence[float]) -> np.ndarray:
     return T
 
 
+def compose_delta_xyzrpy(
+    current_xyzrpy: Sequence[float],
+    delta_xyzrpy: Sequence[float],
+) -> list[float]:
+    """Absolute TCP pose: ``T_next = T_current @ T_delta`` (SE(3) left-compose)."""
+    T_cur = _xyzrpy_to_matrix(current_xyzrpy)
+    T_delta = _xyzrpy_to_matrix(delta_xyzrpy)
+    return _pose_to_xyzrpy(T_cur @ T_delta)
+
+
+# Wire formats for serve robot_state / next_state (7-d: 6 + grip).
+SEND_STATE_FORMATS = ("joints", "pose")  # option A: no delta on send
+RECV_STATE_FORMATS = ("joints", "pose", "delta_pose")
+DEFAULT_SEND_STATE_FORMAT = "pose"
+DEFAULT_RECV_STATE_FORMAT = "pose"
+
+
+def normalize_send_state_format(fmt: str | None) -> str:
+    v = (fmt or DEFAULT_SEND_STATE_FORMAT).strip().lower()
+    if v == "delta_pose":
+        raise ValueError(
+            "robot_state format delta_pose is disabled (option A); use joints or pose"
+        )
+    if v not in SEND_STATE_FORMATS:
+        raise ValueError(
+            f"robot_state format must be one of {SEND_STATE_FORMATS}, got {fmt!r}"
+        )
+    return v
+
+
+def normalize_recv_state_format(fmt: str | None) -> str:
+    v = (fmt or DEFAULT_RECV_STATE_FORMAT).strip().lower()
+    if v not in RECV_STATE_FORMATS:
+        raise ValueError(
+            f"next_state format must be one of {RECV_STATE_FORMATS}, got {fmt!r}"
+        )
+    return v
+
+
 def joints_rad_to_xyzrpy(
     joints_rad: Sequence[float] | None,
     *,

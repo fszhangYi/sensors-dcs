@@ -348,15 +348,55 @@ class Orchestrator:
         return agent.set_prompt(prompt)
 
     def pi05_step(
-        self, *, agent_id: str | None = None, prompt: str | None = None
+        self,
+        *,
+        agent_id: str | None = None,
+        prompt: str | None = None,
+        robot_state_format: str | None = None,
+        next_state_format: str | None = None,
     ) -> dict[str, Any]:
+        from sensors_dcs.arm_pose import (
+            DEFAULT_RECV_STATE_FORMAT,
+            DEFAULT_SEND_STATE_FORMAT,
+            normalize_recv_state_format,
+            normalize_send_state_format,
+        )
+
         agent = self._pi05_agent(agent_id)
         if agent is None:
             return {"ok": False, "configured": False, "error": "no pi05 agent in config"}
+        try:
+            send_fmt = normalize_send_state_format(
+                robot_state_format or DEFAULT_SEND_STATE_FORMAT
+            )
+            recv_fmt = normalize_recv_state_format(
+                next_state_format or DEFAULT_RECV_STATE_FORMAT
+            )
+        except ValueError as e:
+            return {
+                "ok": False,
+                "configured": True,
+                "error": str(e),
+                "robot_state_format": robot_state_format,
+                "next_state_format": next_state_format,
+                "next_joints_rad": None,
+                "ik_ok": False,
+                "ik_error": str(e),
+                "goal_xyzrpy": None,
+                "next_grip": None,
+                "grip_ok": False,
+                "grip_error": str(e),
+            }
         if prompt is not None:
             agent.set_prompt(prompt)
-        print("[sensors-dcs] pi05 step → gathering sensors / querying serve…", flush=True)
-        out = agent.step()
+        print(
+            f"[sensors-dcs] pi05 step → gathering sensors / querying serve…  "
+            f"send={send_fmt} recv={recv_fmt}",
+            flush=True,
+        )
+        out = agent.step(robot_state_format=send_fmt)
+        out["robot_state_format"] = send_fmt
+        out["next_state_format"] = recv_fmt
         if out.get("ok"):
             ns = out.get("next_state")
             lat = out.get("latency_ms")
@@ -365,18 +405,31 @@ class Orchestrator:
                 f"next_state={ns}  term={out.get('term_flag')} reject={out.get('reject_flag')}",
                 flush=True,
             )
-            # serve next_state is TCP xyzrpy(+grip); convert to joints before arm write.
-            ik = self._next_state_to_joints(ns)
-            out["next_joints_rad"] = ik.get("joints_rad")
-            out["ik_ok"] = bool(ik.get("ok"))
-            out["ik_error"] = ik.get("error")
-            if ik.get("ok"):
+            decoded = self._decode_next_state(ns, recv_fmt)
+            out["next_joints_rad"] = decoded.get("joints_rad")
+            out["ik_ok"] = bool(decoded.get("ok"))
+            out["ik_error"] = decoded.get("error")
+            out["goal_xyzrpy"] = decoded.get("goal_xyzrpy")
+            agent.note_wire_meta(
+                goal_xyzrpy=decoded.get("goal_xyzrpy"),
+                robot_state_format=send_fmt,
+                next_state_format=recv_fmt,
+            )
+            try:
+                agent._push_status_frame()
+            except Exception:  # noqa: BLE001
+                pass
+            if decoded.get("ok"):
                 print(
-                    f"[sensors-dcs] pi05 IK ok  next_joints_rad={ik.get('joints_rad')}",
+                    f"[sensors-dcs] pi05 decode ok ({recv_fmt})  "
+                    f"next_joints_rad={decoded.get('joints_rad')}",
                     flush=True,
                 )
             else:
-                print(f"[sensors-dcs] pi05 IK failed: {ik.get('error')}", flush=True)
+                print(
+                    f"[sensors-dcs] pi05 decode failed ({recv_fmt}): {decoded.get('error')}",
+                    flush=True,
+                )
             # Dim 7 = gripper position_norm → gripper_write (step + LOOP share this path).
             grip = self._next_state_grip(ns)
             out["next_grip"] = grip
@@ -404,29 +457,128 @@ class Orchestrator:
             out.setdefault("next_joints_rad", None)
             out.setdefault("ik_ok", False)
             out.setdefault("ik_error", out.get("error"))
+            out.setdefault("goal_xyzrpy", None)
             out.setdefault("next_grip", None)
             out.setdefault("grip_ok", False)
             out.setdefault("grip_error", out.get("error"))
         return out
 
-    def _next_state_to_joints(self, next_state: Any) -> dict[str, Any]:
-        """IK TCP pose from pi05 ``next_state`` → arm ``joints_rad``."""
+    def _arm_read_agent(self):
         from sensors_dcs.agents.arm_agent import ArmAgent
-        from sensors_dcs.arm_pose import xyzrpy_to_joints_rad
 
+        readers = [a for a in self.agents.values() if isinstance(a, ArmAgent)]
+        return readers[0] if readers else None
+
+    def _current_tcp_xyzrpy(self) -> list[float] | None:
+        reader = self._arm_read_agent()
+        if reader is None:
+            return None
+        fr = reader.ring.latest.get()
+        if fr is None:
+            return None
+        xyzrpy = (fr.payload or {}).get("cartesian_xyzrpy")
+        if not isinstance(xyzrpy, (list, tuple)) or len(xyzrpy) < 6:
+            return None
+        try:
+            out = [float(xyzrpy[i]) for i in range(6)]
+        except (TypeError, ValueError):
+            return None
+        if any(x != x or abs(x) == float("inf") for x in out):
+            return None
+        return out
+
+    def _decode_next_state(self, next_state: Any, recv_fmt: str) -> dict[str, Any]:
+        """Decode serve ``next_state`` → joints + absolute TCP goal for HUD."""
+        from sensors_dcs.arm_pose import (
+            compose_delta_xyzrpy,
+            joints_rad_to_xyzrpy,
+            normalize_recv_state_format,
+        )
+
+        fmt = normalize_recv_state_format(recv_fmt)
+        if not isinstance(next_state, (list, tuple)) or len(next_state) < 6:
+            return {
+                "ok": False,
+                "error": "next_state missing 6-d core",
+                "joints_rad": None,
+                "goal_xyzrpy": None,
+            }
+
+        if fmt == "joints":
+            try:
+                joints = [float(next_state[i]) for i in range(6)]
+            except (TypeError, ValueError):
+                return {
+                    "ok": False,
+                    "error": "next_state joints not numeric",
+                    "joints_rad": None,
+                    "goal_xyzrpy": None,
+                }
+            if any(x != x or abs(x) == float("inf") for x in joints):
+                return {
+                    "ok": False,
+                    "error": "next_state joints non-finite",
+                    "joints_rad": None,
+                    "goal_xyzrpy": None,
+                }
+            goal = joints_rad_to_xyzrpy(joints)
+            return {
+                "ok": True,
+                "error": None,
+                "joints_rad": joints,
+                "goal_xyzrpy": goal,
+            }
+
+        if fmt == "delta_pose":
+            cur = self._current_tcp_xyzrpy()
+            if cur is None:
+                return {
+                    "ok": False,
+                    "error": "no live TCP pose to compose delta_pose",
+                    "joints_rad": None,
+                    "goal_xyzrpy": None,
+                }
+            try:
+                abs_pose = compose_delta_xyzrpy(cur, list(next_state)[:6])
+            except Exception as e:  # noqa: BLE001
+                return {
+                    "ok": False,
+                    "error": f"delta_pose compose failed: {e}",
+                    "joints_rad": None,
+                    "goal_xyzrpy": None,
+                }
+            ik = self._xyzrpy_to_joints(abs_pose)
+            ik["goal_xyzrpy"] = abs_pose
+            return ik
+
+        # pose (absolute TCP)
+        ik = self._xyzrpy_to_joints(list(next_state)[:6])
+        if ik.get("ok"):
+            ik["goal_xyzrpy"] = [float(next_state[i]) for i in range(6)]
+        else:
+            ik["goal_xyzrpy"] = None
+        return ik
+
+    def _next_state_to_joints(self, next_state: Any) -> dict[str, Any]:
+        """IK TCP pose from pi05 ``next_state`` → arm ``joints_rad`` (pose recv)."""
         if not isinstance(next_state, (list, tuple)) or len(next_state) < 6:
             return {"ok": False, "error": "next_state missing xyzrpy[6]", "joints_rad": None}
-        readers = [a for a in self.agents.values() if isinstance(a, ArmAgent)]
-        if not readers:
+        return self._xyzrpy_to_joints(list(next_state)[:6])
+
+    def _xyzrpy_to_joints(self, xyzrpy: list[float]) -> dict[str, Any]:
+        from sensors_dcs.arm_pose import xyzrpy_to_joints_rad
+
+        reader = self._arm_read_agent()
+        if reader is None:
             return {"ok": False, "error": "no arm_read agent for IK seed", "joints_rad": None}
-        seed = self._joints6_from_ring(readers[0])
+        seed = self._joints6_from_ring(reader)
         if seed is None:
             return {
                 "ok": False,
                 "error": "no live arm joints for IK seed",
                 "joints_rad": None,
             }
-        return xyzrpy_to_joints_rad(list(next_state)[:6], q_seed_rad=seed)
+        return xyzrpy_to_joints_rad(xyzrpy, q_seed_rad=seed)
 
     @staticmethod
     def _next_state_grip(next_state: Any) -> float | None:
