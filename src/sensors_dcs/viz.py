@@ -195,6 +195,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
   <link rel="stylesheet" href="/assets/settings.css" />
   <link rel="stylesheet" href="/assets/appearance.css" />
   <script src="/assets/vendor/three.min.js"></script>
+  <script src="/assets/vendor/STLLoader.js"></script>
+  <script src="/assets/vendor/URDFLoader.js"></script>
   <style>
     :root,
     html[data-theme='dark'] {
@@ -3406,8 +3408,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const scene = new THREE.Scene();
       const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 40);
       // Robot base is Z-up (x forward, y left, z up). Three.js is Y-up → map (x,y,z)→(x,z,-y).
-      const orbitTarget = new THREE.Vector3(0.4, 0.15, 0.0);
-      const spherical = new THREE.Spherical(1.15, 1.05, 0.85);
+      const orbitTarget = new THREE.Vector3(0.35, 0.25, 0.0);
+      const spherical = new THREE.Spherical(1.85, 1.05, 0.85);
       function applyCam() {
         camera.position.setFromSpherical(spherical).add(orbitTarget);
         camera.lookAt(orbitTarget);
@@ -3417,10 +3419,104 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const dir = new THREE.DirectionalLight(0xffffff, 0.65);
       dir.position.set(0.8, 1.2, 0.4);
       scene.add(dir);
-      const grid = new THREE.GridHelper(1.6, 16, 0x3dd6c6, 0x1c2736);
+      const fill = new THREE.DirectionalLight(0xa8c4ff, 0.35);
+      fill.position.set(-1.2, 0.8, -0.9);
+      scene.add(fill);
+      const grid = new THREE.GridHelper(2.4, 24, 0x3dd6c6, 0x1c2736);
       scene.add(grid);
       const axes = new THREE.AxesHelper(0.3);
       scene.add(axes);
+      // EC616 URDF (embody models/ec616). Machine joints → URDF:
+      //   q_urdf = signs ⊙ (q_machine − offset); then mirror robot-Y (SolidWorks vs DH).
+      // Offsets match arm_kin / sensors.kinematics JOINT_OFFSET_DEG; signs +1 (URDF axis
+      // already 0 0 -1). Mirror scale.y=-1 aligns flange with FK TCP (~6–9 mm).
+      const EC616_JOINT_NAMES = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6'];
+      const EC616_JOINT_OFFSET_RAD = [0, -Math.PI / 2, 0, -Math.PI / 2, Math.PI, 0];
+      const EC616_JOINT_SIGNS = [1, 1, 1, 1, 1, 1];
+      const EC616_URDF_URL = '/assets/models/ec616/ec616.urdf';
+      const DEG2RAD = Math.PI / 180;
+      let ec616Robot = null;
+      let ec616LoadError = '';
+      function softArmMaterials(robot) {
+        robot.traverse((c) => {
+          if (!c.isMesh || !c.material) return;
+          const mats = Array.isArray(c.material) ? c.material : [c.material];
+          mats.forEach((m) => {
+            if (!m) return;
+            // Negative scale (Y mirror) flips winding — render both sides.
+            if (m.side != null && THREE.DoubleSide != null) m.side = THREE.DoubleSide;
+            if (m.opacity < 1) {
+              m.transparent = true;
+              m.depthWrite = false;
+            }
+          });
+        });
+      }
+      function setEc616JointsFromMachineRad(jointsRad) {
+        if (!ec616Robot || !Array.isArray(jointsRad) || jointsRad.length < 6) return false;
+        for (let i = 0; i < 6; i++) {
+          const qMachine = Number(jointsRad[i]);
+          if (!Number.isFinite(qMachine)) return false;
+          const joint = ec616Robot.joints && ec616Robot.joints[EC616_JOINT_NAMES[i]];
+          if (!joint) continue;
+          const qUrdf = EC616_JOINT_SIGNS[i] * (qMachine - EC616_JOINT_OFFSET_RAD[i]);
+          joint.ignoreLimits = true;
+          joint.setJointValue(qUrdf);
+        }
+        ec616Robot.updateMatrixWorld(true);
+        return true;
+      }
+      function loadEc616Arm() {
+        if (typeof URDFLoader === 'undefined' || typeof THREE.STLLoader !== 'function') {
+          ec616LoadError = 'urdf-loader';
+          console.warn('[infPose] URDFLoader / STLLoader missing');
+          return;
+        }
+        const manager = new THREE.LoadingManager();
+        manager.onError = (url) => {
+          console.warn('[infPose] EC616 asset error', url);
+        };
+        const loader = new URDFLoader(manager);
+        loader.parseCollision = false;
+        loader.packages = '';
+        loader.workingPath = EC616_URDF_URL.replace(/[^/]+$/, '');
+        loader.load(
+          EC616_URDF_URL,
+          (robot) => {
+            try {
+              robot.ignoreLimits = true;
+              // Z-up URDF → Y-up Three.js (same as robotToThree).
+              robot.rotation.set(-Math.PI / 2, 0, 0);
+              // Mirror robot-Y so SolidWorks chain matches Elite/DH base frame.
+              robot.scale.set(1, -1, 1);
+              softArmMaterials(robot);
+              if (ec616Robot) scene.remove(ec616Robot);
+              ec616Robot = robot;
+              scene.add(robot);
+              if (Array.isArray(window.__armReadJoints)) {
+                setEc616JointsFromMachineRad(window.__armReadJoints);
+              } else {
+                // Home-ish preview until Read arrives (machine deg from embody robots.json).
+                setEc616JointsFromMachineRad([0, -45, 60, 0, 30, 0].map((d) => d * DEG2RAD));
+              }
+            } catch (err) {
+              console.warn('[infPose] EC616 mount failed', err);
+              ec616LoadError = String(err && err.message ? err.message : err);
+            }
+          },
+          undefined,
+          (err) => {
+            console.warn('[infPose] EC616 URDF load failed', err);
+            ec616LoadError = String(err && err.message ? err.message : err);
+            if (hud) {
+              const base = hud.textContent || '';
+              const note = t('infer.pose_no_urdf');
+              hud.textContent = base ? (base + '\\n' + note) : note;
+            }
+          },
+        );
+      }
+      loadEc616Arm();
       // Live TCP — small amber
       const tcpMarker = new THREE.Mesh(
         new THREE.SphereGeometry(0.005, 12, 12),
@@ -3652,6 +3748,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       });
       function tick() {
         if (window.__armReadCartesian) setTcpPose(window.__armReadCartesian);
+        if (window.__armReadJoints) setEc616JointsFromMachineRad(window.__armReadJoints);
         renderer.render(scene, camera);
         requestAnimationFrame(tick);
       }
