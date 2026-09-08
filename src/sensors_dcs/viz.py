@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from pydantic import BaseModel
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 
 class SaveDirBody(BaseModel):
@@ -7008,7 +7008,6 @@ def create_viz_app(
     )
     from sensors_dcs.login_page import LOGIN_HTML
     from sensors_dcs.ui_i18n import inject_i18n_json
-    from fastapi.responses import JSONResponse, RedirectResponse
 
     init_auth()
     app = FastAPI(title="sensors-dcs viz", version="0.1.0")
