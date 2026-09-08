@@ -842,6 +842,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
       font-size: 0.92rem;
       font-weight: 600;
     }
+    .inf-pose-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      flex: 0 0 auto;
+    }
+    .inf-pose-head h2 { flex: 1 1 auto; min-width: 0; }
+    .inf-pose-head .inf-pose-trail-clear {
+      --btn-h: 1.55rem;
+      --btn-fs: 0.72rem;
+      --btn-pad-x: 0.5rem;
+      flex: 0 0 auto;
+    }
     .inf-pose-canvas-wrap {
       position: relative;
       flex: 1 1 auto;
@@ -2022,7 +2036,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <pre class="inf-pi05-out" id="infPi05Out" hidden>{}</pre>
     </div>
     <aside class="inf-split-pose" aria-label="End-effector pose">
-      <h2 data-i18n="infer.pose_title">末端位姿</h2>
+      <div class="inf-pose-head">
+        <h2 data-i18n="infer.pose_title">末端位姿</h2>
+        <button type="button" class="ghost inf-pose-trail-clear" id="infPoseTrailClear" data-i18n="infer.pose_trail_clear" data-i18n-title="infer.pose_trail_clear_hint" title="清除目标轨迹点与连线">清除轨迹</button>
+      </div>
       <div class="inf-pose-canvas-wrap"><canvas id="infPoseCanvas"></canvas></div>
       <div class="inf-pose-hud" id="infPoseHud" data-i18n="infer.pose_idle">等待 arm · Read…</div>
     </aside>
@@ -3422,6 +3439,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
           trailLineGeom.computeBoundingSphere();
         }
       }
+      function clearTrail() {
+        trailPosArr.length = 0;
+        while (waypointGroup.children.length) {
+          waypointGroup.remove(waypointGroup.children[0]);
+        }
+        rebuildTrailLine();
+        lastGoalKey = '';
+      }
       function pushGoalWaypoint(x, y, z) {
         const last = trailPosArr.length ? trailPosArr[trailPosArr.length - 1] : null;
         if (last) {
@@ -3584,7 +3609,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
       window.__updateInfPoseViz = setTcpPose;
       window.__setInfPoseGoal = setGoalPose;
       window.__setInfPoseHome = setHomePose;
+      window.__clearInfPoseTrail = clearTrail;
       window.__resizeInfPoseViz = resize;
+      const trailClearBtn = document.getElementById('infPoseTrailClear');
+      if (trailClearBtn) {
+        trailClearBtn.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          clearTrail();
+        });
+      }
       resize();
       if (typeof ResizeObserver !== 'undefined' && wrap) {
         new ResizeObserver(() => resize()).observe(wrap);
