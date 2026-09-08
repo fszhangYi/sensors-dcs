@@ -133,7 +133,7 @@ class DcsConfig(BaseModel):
     dry_run: bool | None = None
     # Absolute home joints for Collect/Infer Home button (rad). Optional.
     home_joints_rad: list[float] | None = None
-    # Separate ramp duration for Home (seconds). Step/LOOP abs duration must not share this.
+    # Deprecated: ignored for Home motion (Home uses arm_abs_ramp t_min/t_max/v_norm).
     home_duration_s: float = 20.0
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     record: RecordConfig = Field(default_factory=RecordConfig)

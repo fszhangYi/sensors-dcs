@@ -230,7 +230,7 @@ class Orchestrator:
         return {"ok": True, **self.arm_home_status()}
 
     def save_arm_home_to_yaml(self, *, path: str | None = None) -> dict[str, Any]:
-        """Persist current in-memory home into the selected/active DCS YAML."""
+        """Persist current in-memory home joints into the selected/active DCS YAML."""
         from sensors_dcs.paths import default_dcs_config
         from sensors_dcs.reexec import validate_dcs_config_file
 
@@ -242,7 +242,6 @@ class Orchestrator:
             upsert_home_yaml(
                 target,
                 joints=list(st["home_joints_rad"]),
-                duration_s=float(st["home_duration_s"]),
             )
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "error": str(e), **self.arm_home_status()}
@@ -260,13 +259,17 @@ class Orchestrator:
         *,
         duration_s: float | None = None,
         agent_id: str | None = None,
+        t_min_s: float | None = None,
+        t_max_s: float | None = None,
+        v_norm_rad_s: float | None = None,
     ) -> dict[str, Any]:
-        """Validate home joints then joint-space absolute ramp to ``home_joints_rad``.
+        """Sugar for abs-send to configured ``home_joints_rad``.
 
-        Home is configured as joints (not a TCP pose). Uses dedicated
-        ``home_duration_s`` when ``duration_s`` is omitted — never abs-send
-        ``t_min``/``t_max``/``v_norm``. Fixed duration + S-curve profile.
+        Same joint-space ramp as Infer/Collect「下发」:
+        ``T=clamp(d/v_norm, t_min, t_max)`` + cosine S-curve.
+        ``duration_s`` is ignored (kept for API compatibility).
         """
+        del duration_s  # Home no longer uses a dedicated fixed duration.
         st = self.arm_home_status()
         if not st.get("configured"):
             return {
@@ -274,19 +277,16 @@ class Orchestrator:
                 "error": st.get("error") or "home_joints_rad 未配置或格式错误",
                 **st,
             }
-        if duration_s is None:
-            dur = float(st["home_duration_s"])
-        else:
-            dur = parse_home_duration_s(duration_s)
         out = self.arm_command(
             agent_id=agent_id,
             joints_rad=list(st["home_joints_rad"]),
-            duration_s=dur,
-            timing="fixed",
+            timing="scale_by_d",
+            t_min_s=t_min_s,
+            t_max_s=t_max_s,
+            v_norm_rad_s=v_norm_rad_s,
         )
         out = dict(out)
         out["home"] = self.arm_home_status()
-        out["duration_s"] = float(out.get("duration_s", dur))
         return out
 
     def _pi05_agent(self, agent_id: str | None = None) -> Pi05ClientAgent | None:
@@ -1715,8 +1715,9 @@ class Orchestrator:
     ) -> dict[str, Any]:
         """Timed **joint-space** ramp from live arm read → target joints.
 
-        - ``timing=scale_by_d`` (abs send): ``T=clamp(d/v_norm, t_min, t_max)`` + S-curve.
-        - ``timing=fixed`` (Home): use ``duration_s`` as total T + same S-curve profile.
+        - ``timing=scale_by_d`` (abs-send / Home): ``T=clamp(d/v_norm, t_min, t_max)`` + S-curve.
+        - ``timing=fixed``: use ``duration_s`` as total T + same S-curve profile
+          (legacy; gello sync / callers that pass only duration_s).
         Path is linear in q with shared α(t). Not Cartesian+IK.
         """
         from sensors_dcs.agents.arm_agent import ArmAgent

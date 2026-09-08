@@ -7,9 +7,9 @@ sensors_config: ./sensors_default.yaml
 # true = 合成假数据；false = 真机（串口 + RealSense serial）
 dry_run: true
 
-# Optional: Home target (6 joints rad) + ramp duration (s, 0.1–30). Independent of Infer step arrive.
+# Optional: Home target (6 joints rad). Home button = abs-send sugar (t_min/t_max/v_norm).
 # home_joints_rad: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-# home_duration_s: 20
+# home_duration_s is deprecated / ignored for motion (kept only if present in older YAML).
 
 runtime:
   control_host: "0.0.0.0"
@@ -27,7 +27,7 @@ gello_arm_sync:
   sync_done_eps_rad: 0.03
   max_ramp_rounds: 3
 
-# Abs send (Infer/Collect「下发」): T=clamp(d/v_norm, t_min, t_max) + cosine S-curve. Home 仍用固定 home_duration_s.
+# Abs send + Home: T=clamp(d/v_norm, t_min, t_max) + cosine S-curve.
 arm_abs_ramp:
   t_min_s: 0.1
   t_max_s: 30.0
@@ -39,7 +39,7 @@ record:
   episode_index: 5
 
 home_joints_rad: [0.0039, -0.3429, 0.975, -1.6104, 0.0013, -0.9739]
-home_duration_s: 2
+# home_duration_s: 2  # deprecated; Home uses arm_abs_ramp t_min/t_max/v_norm
 
 agents:
   - id: gello
