@@ -3521,7 +3521,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const EC616_JOINT_OFFSET_RAD = [0, -Math.PI / 2, 0, -Math.PI / 2, Math.PI, 0];
       const EC616_JOINT_SIGNS = [1, 1, 1, 1, 1, 1];
       // Cache-bust when end-effector mesh / URDF changes (browsers cache /assets/*.urdf).
-      const EC616_URDF_URL = '/assets/models/ec616/ec616.urdf?v=kwr75-1';
+      const EC616_URDF_URL = '/assets/models/ec616/ec616.urdf?v=ee-decim-1';
       const DEG2RAD = Math.PI / 180;
       let ec616Robot = null;
       let ec616LoadError = '';

@@ -19,6 +19,7 @@ sensors-dcs/
   docs/elite-monitor-reconnect.md   # Elite 8056 断线/久置重连计划与运维
   docs/gello-arm-sync.md            # Gello→Arm 一次性对齐同步（非遥操作）
   docs/gello-arm-teleop.md          # Gello→Arm 摇操（遥操作）
+  docs/ec616-ee-meshes.md           # EC616 末端数模（KWR75+AG95）与减面说明
   configs/hik_camera_map.yaml       # serial→hik 相机名（export-hik-dataset）
 ```
 
