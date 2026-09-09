@@ -58,6 +58,8 @@ class PostprocessBody(BaseModel):
     align: str = "asof"
     master: str = "cam-left"
     master_hz: float | None = 5.0
+    align_clock: str = "wall"
+    primary_camera: str = "cam-middle"
     require: str = "arm,cam-left,cam-right,cam-middle,gripper-read"
     max_match_dt: str = "0.033"
     trim: str = "both"
@@ -2290,7 +2292,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             </div>
             <div class="pp-zone" aria-labelledby="ppZoneAlign">
               <h2 id="ppZoneAlign" data-i18n="pp.align_title">对齐参数（Step 1 → hik）</h2>
-              <p class="pp-hint" data-i18n="pp.align_hint">master-hz 作用于 export-timeline 下采样；一键三步 / 快速采集转 hik_dataset 时都读这里，不是写死 5。</p>
+              <p class="pp-hint" data-i18n="pp.align_hint">master-hz 作用于 export-timeline 下采样；align-clock=hw_ts 时主网格来自 primary-camera 的 color_timestamp（默认 wall，与 W1 兼容）。一键三步 / 快速采集转 hik_dataset 时都读这里。</p>
               <div class="pp-row">
                 <label for="ppAlign">align</label>
                 <select id="ppAlign">
@@ -2298,6 +2300,19 @@ PREVIEW_HTML = """<!DOCTYPE html>
                   <option value="nearest">nearest</option>
                   <option value="grid">grid</option>
                   <option value="union">union</option>
+                </select>
+              </div>
+              <div class="pp-row">
+                <label for="ppAlignClock">align-clock</label>
+                <select id="ppAlignClock">
+                  <option value="wall" selected>wall</option>
+                  <option value="hw_ts">hw_ts</option>
+                </select>
+              </div>
+              <div class="pp-row">
+                <label for="ppPrimaryCamera">primary-camera</label>
+                <select id="ppPrimaryCamera">
+                  <option value="cam-middle" selected>cam-middle</option>
                 </select>
               </div>
               <div class="pp-row">
@@ -2325,7 +2340,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
         <section class="pp-card">
           <h2 data-i18n="pp.step1">1 · export-timeline</h2>
-          <p class="pp-hint" data-i18n="pp.step1_hint">sensors-dcs export-timeline -e … --align / --master / --master-hz（见上方对齐参数）</p>
+          <p class="pp-hint" data-i18n="pp.step1_hint">sensors-dcs export-timeline -e … --align / --align-clock / --primary-camera / --master / --master-hz（见上方对齐参数）</p>
           <div class="pp-actions">
             <button type="button" id="btnPpExport" data-i18n="pp.run1">运行 Step 1</button>
           </div>
@@ -4573,6 +4588,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const ppEpisode = document.getElementById('ppEpisode');
     const ppEpisodeSelect = document.getElementById('ppEpisodeSelect');
     const ppAlign = document.getElementById('ppAlign');
+    const ppAlignClock = document.getElementById('ppAlignClock');
+    const ppPrimaryCamera = document.getElementById('ppPrimaryCamera');
     const ppMaster = document.getElementById('ppMaster');
     const ppMasterHz = document.getElementById('ppMasterHz');
     const ppRequire = document.getElementById('ppRequire');
@@ -5946,6 +5963,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       return {
         episode: (ppEpisode.value || '').trim(),
         align: ppAlign.value || 'asof',
+        align_clock: (ppAlignClock && ppAlignClock.value) || 'wall',
+        primary_camera: (ppPrimaryCamera && ppPrimaryCamera.value) || 'cam-middle',
         master: (ppMaster.value || '').trim() || '',
         master_hz: Number.isFinite(hz) ? hz : 5,
         require: (ppRequire.value || '').trim(),
@@ -5988,6 +6007,23 @@ PREVIEW_HTML = """<!DOCTYPE html>
       ppMaster.disabled = !(candidates && candidates.length);
     }
 
+    function fillPrimaryCameraSelect(candidates, preferred) {
+      if (!ppPrimaryCamera) return;
+      const cams = (candidates || []).filter((aid) => String(aid).indexOf('cam-') === 0);
+      const list = cams.length ? cams : ['cam-middle', 'cam-left', 'cam-right'];
+      const prev = preferred || ppPrimaryCamera.value || 'cam-middle';
+      ppPrimaryCamera.innerHTML = '';
+      list.forEach((aid) => {
+        const o = document.createElement('option');
+        o.value = aid;
+        o.textContent = aid;
+        ppPrimaryCamera.appendChild(o);
+      });
+      if (prev && list.indexOf(prev) >= 0) ppPrimaryCamera.value = prev;
+      else if (list.indexOf('cam-middle') >= 0) ppPrimaryCamera.value = 'cam-middle';
+      else ppPrimaryCamera.value = list[0];
+    }
+
     function loadPpForm(defaults) {
       let saved = null;
       try {
@@ -5995,7 +6031,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       } catch (e) {}
       const src = Object.assign({}, defaults || {}, saved || {});
       if (src.align) ppAlign.value = src.align;
-      // master filled after episode inspect (select list)
+      if (ppAlignClock && src.align_clock) ppAlignClock.value = src.align_clock;
+      // master / primary-camera filled after episode inspect (select list)
       if (src.master_hz != null) ppMasterHz.value = src.master_hz;
       if (src.require) ppRequire.value = src.require;
       if (src.max_match_dt) ppMaxDt.value = src.max_match_dt;
@@ -6006,6 +6043,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       // on the Postprocess tab (avoids home-page manifest modals from stale LS).
       ppEpisode.value = '';
       window._ppSavedMaster = src.master || (defaults && defaults.master) || '';
+      window._ppSavedPrimaryCamera =
+        src.primary_camera || (defaults && defaults.primary_camera) || 'cam-middle';
+      fillPrimaryCameraSelect([], window._ppSavedPrimaryCamera);
       // Prefer launch-pwd camera-map from server; skip stale AppData/user-data seeds.
       let map = src.camera_map || '';
       const defMap = (defaults && defaults.camera_map) || '';
@@ -6022,7 +6062,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       else if (defMap) ppCameraMap.value = defMap;
     }
 
-    [ppAlign, ppMaster, ppMasterHz, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppAllowInvalid, ppEpisode].forEach((el) => {
+    [ppAlign, ppAlignClock, ppPrimaryCamera, ppMaster, ppMasterHz, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppAllowInvalid, ppEpisode].forEach((el) => {
+      if (!el) return;
       el.addEventListener('change', savePpForm);
       el.addEventListener('blur', savePpForm);
     });
@@ -6066,6 +6107,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const want = (path || '').trim();
       if (!want) {
         fillMasterSelect([]);
+        fillPrimaryCameraSelect([], window._ppSavedPrimaryCamera || 'cam-middle');
         return null;
       }
       try {
@@ -6073,10 +6115,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
           '/api/postprocess/episode?path=' + encodeURIComponent(want),
           { credentials: 'same-origin' }
         ).then((r) => r.json());
+        const camsPrefer = window._ppSavedPrimaryCamera || 'cam-middle';
         if (!j.ok) {
           const prefer = window._ppSavedMaster || j.suggested_master || '';
           // Still offer agents so allow-invalid / quick-collect discard can pick master.
           fillMasterSelect(j.master_candidates || [], prefer);
+          fillPrimaryCameraSelect(j.master_candidates || [], camsPrefer);
           if (!silent) {
             const detail = [j.error, j.note].filter(Boolean).join('\\n');
             showManifestBadModal(detail || t('pp.manifest_bad'));
@@ -6085,11 +6129,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
         }
         const prefer = window._ppSavedMaster || j.suggested_master || '';
         fillMasterSelect(j.master_candidates || [], prefer);
+        fillPrimaryCameraSelect(j.master_candidates || [], camsPrefer);
         if (ppMaster.value) window._ppSavedMaster = ppMaster.value;
+        if (ppPrimaryCamera && ppPrimaryCamera.value) {
+          window._ppSavedPrimaryCamera = ppPrimaryCamera.value;
+        }
         savePpForm();
         return j;
       } catch (e) {
         fillMasterSelect([]);
+        fillPrimaryCameraSelect([], window._ppSavedPrimaryCamera || 'cam-middle');
         if (!silent) {
           showManifestBadModal(String(e));
         }
@@ -6153,7 +6202,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
         ppHint.textContent = t('pp.need_episode');
         return { ok: false, error: 'missing episode' };
       }
-      if (!body.master) {
+      const clock = body.align_clock || 'wall';
+      if (clock === 'hw_ts') {
+        if (!body.primary_camera) {
+          ppHint.textContent = t('pp.need_primary_camera');
+          return { ok: false, error: 'missing primary_camera' };
+        }
+      } else if (!body.master) {
         ppHint.textContent = t('pp.need_master');
         return { ok: false, error: 'missing master' };
       }
@@ -7811,6 +7866,8 @@ def create_viz_app(
                 align=req.align,
                 master=req.master,
                 master_hz=req.master_hz,
+                align_clock=req.align_clock,
+                primary_camera=req.primary_camera,
                 require=req.require,
                 max_match_dt=req.max_match_dt,
                 trim=req.trim,

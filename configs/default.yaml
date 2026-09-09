@@ -1,5 +1,9 @@
 # sensors-dcs 默认启动配置 — gello + gripper + multi RealSense + Elite arm
 # 配对设备清单：./sensors_default.yaml（同目录）
+#
+# 离线导出（postprocess / CLI）时钟开关不在本文件；默认 wall。示例：
+#   sensors-dcs export-timeline -e <ep> --align nearest --align-clock hw_ts --primary-camera cam-middle
+# 设计说明：docs/hw-timeline-align.md
 version: 1
 site: dcs-full-cell
 

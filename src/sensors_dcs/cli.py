@@ -76,6 +76,17 @@ def main(argv: list[str] | None = None) -> int:
         help="downsample master timeline to this hz (asof/nearest only; e.g. gello 50Hz -> 15Hz)",
     )
     p_export.add_argument(
+        "--align-clock",
+        choices=["wall", "hw_ts"],
+        default="wall",
+        help="master time axis: wall (default) or primary-camera HW color_timestamp",
+    )
+    p_export.add_argument(
+        "--primary-camera",
+        default="cam-middle",
+        help="camera agent_id for --align-clock hw_ts grid (default: cam-middle)",
+    )
+    p_export.add_argument(
         "--format",
         choices=["parquet", "csv", "both"],
         default="parquet",
@@ -258,6 +269,8 @@ def main(argv: list[str] | None = None) -> int:
                 master_hz=args.master_hz,
                 fmt=args.export_format,
                 allow_invalid=bool(getattr(args, "allow_invalid", False)),
+                align_clock=getattr(args, "align_clock", "wall") or "wall",
+                primary_camera=getattr(args, "primary_camera", None) or "cam-middle",
             )
         except Exception as e:  # noqa: BLE001
             print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False, indent=2))

@@ -15,6 +15,8 @@ def test_postprocess_defaults_include_camera_map() -> None:
     assert d["align"] == "asof"
     assert d["master"] == "cam-left"
     assert d["master_hz"] == 5.0
+    assert d["align_clock"] == "wall"
+    assert d["primary_camera"] == "cam-middle"
     assert "cam-left" in d["require"]
     assert d["max_match_dt"] == "0.033"
     assert d["materialize"] is True

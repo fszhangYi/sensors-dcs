@@ -2,8 +2,8 @@
 
 文档名：`docs/hw-timeline-align.md`  
 日期：2026-09-09（W2 D8）  
-状态：**接口草案冻结** · 实现从 D9 起  
-关联：[e1-e4-hw-ts-and-discard.md](e1-e4-hw-ts-and-discard.md) · [export-timeline.md](export-timeline.md) · W1 基线 `docs/portfolio/baseline/` · Gap **G01**（in_progress）
+状态：**W2 收口**（D8–D14）· 接口冻结 · MVP + 对比 + 边界 + portfolio  
+关联：[e1-e4-hw-ts-and-discard.md](e1-e4-hw-ts-and-discard.md) · [export-timeline.md](export-timeline.md) · [filter-timeline.md](filter-timeline.md) · 基线 `docs/portfolio/baseline/` · Gap **G01/G02 done**
 
 > 一句话：今天对齐靠主机墙钟 `t_wall`；本周让导出**可选**改用 RealSense 落盘的 `color_timestamp`（硬件时间戳）建主时间网格，并和 W1 的 QC 数字做 before/after 对照。
 
@@ -185,16 +185,19 @@ cameras/<primary>/index.jsonl
 
 状态行**没有** `color_timestamp`，只有 `t_wall` / `t_mono`。
 
-#### MVP（本周必须落地，推荐）
+#### MVP（本周必须落地，推荐） — **已落地（D9/D10）**
 
 1. 主相机每个锚点保留配对：`(t_wall, t_hw_s, seq, file)`。  
 2. **网格顺序 / 去重 / cam_dt**：按 `t_hw_s`。  
 3. **状态 asof/nearest**：仍在 **wall 域** 完成——用状态 `t_wall` 对锚点的 `t_wall` 做现有 merge_asof / nearest。  
 4. 报告同时给出：
-   - HW 网格帧间隔（`cam_dt_*` on `t_hw`）
+   - HW 网格帧间隔（`cam_dt_*` on `t_hw`，`qc_episode_sync --align-clock hw_ts`）
    - 状态↔锚点 wall |Δt|（继续叫 `state_cam_abs_dt_*`）
 
-这样不假装「状态已在 HW 域」，但能回答：「按硬件钟排干净相机帧后，状态贴合有没有变好/变差」。
+实现入口：
+
+- 导出：`sensors-dcs export-timeline --align nearest --align-clock hw_ts --primary-camera cam-middle`
+- QC：`python scripts/qc_episode_sync.py --align-clock hw_ts ...`
 
 #### 理想（有臂侧 HW 钟再做，本周只写边界）
 
@@ -214,11 +217,33 @@ cameras/<primary>/index.jsonl
 
 ---
 
-## 5. 主相机与多相机
+## 5. 主相机与多相机（W2 / D13 冻结）
 
-1. **主相机**：`--primary-camera`（默认 `cam-middle`）。  
-2. **副相机**（left/right）：W2 可继续按 wall asof 挂到主锚点的 `t_wall`；另在 QC/报告中可选输出副相机相对主相机的 wall 偏移（非必须）。  
-3. 不要求三路 RealSense 硬件钟已做外参级同步；domain 不一致见 §6。
+1. **主相机**：`--primary-camera`（默认 `cam-middle`）。`align_clock=hw_ts` 时**只有**该相机的 `color_timestamp` 建主网格。  
+2. **副相机**（left/right）— **本周明确不做「副相机 HW 共网格」**：  
+   - 宽表里副相机列仍按主锚点的 **`t_wall` asof/nearest** 挂接（与状态流同策略）。  
+   - QC 默认只盯主相机的 `cam_dt_*` / gaps；副相机相对 middle 的 wall 偏移为可选增强（非 D13 DoD）。  
+   - 不要求三路 RealSense 硬件钟已做外参级 / PTP 同步。  
+3. Domain 不一致见 §6；多相机质量列可后续加，不阻塞 G01。
+
+> 一句话：W2 交付的是「**单主相机 HW 轴**」，不是「三路相机硬件同步」。
+
+---
+
+## 5.1 与 E 系列 discard / warmup 的边界（交叉引用）
+
+三类「丢」不要混进 HW 对齐：
+
+| 概念 | 文档 | 与 `align_clock=hw_ts` 的关系 |
+|------|------|------------------------------|
+| **E1 只存 HW** | [e1-e4-hw-ts-and-discard.md](e1-e4-hw-ts-and-discard.md) | W2 已开始**消费** `color_timestamp`；E1 原文「后处理不消费」已被本能力覆盖（默认仍 wall） |
+| **E4 作废局** | 同上（`manifest.valid=false`） | 导出门禁；与时钟域无关。默认拒导，`--allow-invalid` 覆盖 |
+| **E2/E3 写失败与计数** | [save-data-compare.md](save-data-compare.md) | 录制路径丢帧 / `written` 虚高；HW 网格**补不回**这些帧 |
+| **开头 warmup 裁剪** | [filter-timeline.md](filter-timeline.md)（`--trim start/both`） | 后处理裁不合格行；**不在** `export-timeline --align-clock` 里做预热丢弃 |
+| **队列 drop_rate** | [04_drop_rate_reduction.md](portfolio/04_drop_rate_reduction.md) | 与时钟选择正交；差档 gap 大主要来自真丢帧 |
+
+**预热帧策略（本周结论）：**  
+录制侧不因 HW 对齐额外丢帧；若要对齐后去掉开头未齐的行，继续用 **`filter-timeline --trim`**。HW 模式只改变主网格排序键，不改变 discard 语义。
 
 ---
 
@@ -230,12 +255,12 @@ cameras/<primary>/index.jsonl
 |--------------------------------|----------|------|
 | `missing_primary_camera` | 无该相机目录 / index | fallback wall；master 回现逻辑 |
 | `hw_field_absent` | 主相机 index 无任何 `color_timestamp` | fallback |
-| `hw_coverage_low` | 覆盖率 &lt; 阈值（建议默认 0.95，可配） | fallback |
+| `hw_coverage_low` | 覆盖率 ≤ 阈值（建议默认 0.95，可配） | fallback |
 | `hw_all_zero_or_null` | 有字段但全空/0 | fallback |
 | `hw_unit_unknown` | 规范化失败 | fallback |
 | `hw_domain_mixed` | 主相机行内 `color_timestamp_domain` 多种且冲突 | warning；MVP 仍可用时间值，meta 标记；严格模式可 fallback |
-| `hw_non_monotonic` | 规范化后 `t_hw` 回绕/大量逆序 | 排序前记录逆序次数；逆序率 &gt; 阈值则 fallback |
-| `hw_wall_incoherent` | 中位 \|t_hw_s − t_wall\| 过大（如 &gt; 1s） | fallback（防单位判错） |
+| `hw_non_monotonic` | 规范化后 `t_hw` 回绕/大量逆序 | 排序前记录逆序次数；逆序率 ≥ 阈值则 fallback |
+| `hw_wall_incoherent` | 中位 \|t_hw_s − t_wall\| 过大（如 ≥ 1s） | fallback（防单位判错） |
 
 Domain 字段样例：`timestamp_domain.system_time`（当前基线）。多 domain 混用时先记录集合到 `export_meta.hw_domains`。
 
@@ -268,8 +293,9 @@ Domain 字段样例：`timestamp_domain.system_time`（当前基线）。多 dom
 |------|------|
 | `src/sensors_dcs/export/timeline.py` | `normalize_hw_timestamp`；加载相机时保留 HW 字段；`build_grid` / `_build_base_times` 按 `align_clock` 选列；`export_meta` 增字段 |
 | `src/sensors_dcs/cli.py` | `--align-clock`、`--primary-camera` |
+| `src/sensors_dcs/postprocess_service.py` / `viz.py` | 后处理 API/UI 同源 `align_clock` / `primary_camera`（默认 wall） |
 | `scripts/qc_episode_sync.py` | `--align-clock`；hw 下 cam_dt 用 `t_hw` |
-| `tests/test_timeline_hw_ts.py` | 单位归一化、网格首尾、无 HW 回退 wall |
+| `tests/test_timeline_hw_ts.py` | 单位归一化、网格首尾、无 HW / 缺主相机 / 覆盖率低 / grid 不支持 → fallback |
 | 本文档 | 实现中若 MVP 降级，只改 §4.3/§9，不改 §2 接口名 |
 
 ---
@@ -277,24 +303,30 @@ Domain 字段样例：`timestamp_domain.system_time`（当前基线）。多 dom
 ## 9. 已知限制（诚实写进交付）
 
 1. **状态不在 HW 域**（MVP）：`state_cam_abs_dt_*` 在 hw 模式下仍是 wall 近邻。  
-2. **单主相机 HW 网格**：不解决三路相机之间的硬件同步误差。  
-3. **domain / 单位**依赖启发式；异常数据靠 fallback，不靠猜。  
+2. **单主相机 HW 网格**：不解决三路相机之间的硬件同步误差（§5）。  
+3. **domain / 单位**依赖启发式；异常数据靠 fallback，不靠猜（§6；缺主相机 / 覆盖率低会 `align_fallback=true` 并 warning）。  
 4. **高 drop 场景**：HW 再齐也补不回丢掉的帧；与 `04_drop_rate_reduction.md` 正交。  
-5. **`filter` / `hik_dataset`**：本周仍消费默认 wall 导出；hw 宽表作为可选产物，不强制下游改。
+5. **`filter` / `hik_dataset`**：本周仍消费默认 wall 导出；hw 宽表作为可选产物，不强制下游改。  
+6. **`grid` / `union` + `hw_ts`**：W2 不支持，回退 wall 并记 `hw_grid_mode_unsupported`。  
+7. **warmup / 作废 / 写失败丢帧**：分别由 filter trim、E4 `valid`、E2/E3 处理（§5.1），不是本开关的职责。
 
 ---
 
 ## 10. 验收（对应 week-02 / G01）
 
-- [ ] 本文含「一行 index → 网格时间」例（§4.2）  
-- [ ] §2 接口名冻结：`--align-clock`、`--primary-camera`、`align_fallback`  
-- [ ] 默认 `wall` 与 W1 命令兼容  
-- [ ] 基线至少 good 能导出 wall / hw_ts 两套目录  
-- [ ] QC JSON 旧字段名不变  
+- [x] 本文含「一行 index → 网格时间」例（§4.2）  
+- [x] §2 接口名冻结：`--align-clock`、`--primary-camera`、`align_fallback`  
+- [x] 默认 `wall` 与 W1 命令兼容  
+- [x] 基线至少 good 能导出 wall / hw_ts 两套目录（`tl_wall_good` / `tl_hw_good`；D10）  
+- [x] QC JSON 旧字段名不变（`--align-clock hw_ts` → `sync_hw_*.json`）  
+- [x] D12 三档对比表 + 图（`COMPARE_wall_vs_hw.md`）  
+- [x] D13 fallback 单测（缺主相机 / 覆盖率低 / grid 不支持）+ §5/§5.1/§9 边界
+
+> G01 余量：严格模式 `--strict-hw`、副相机 HW 共网格 — 明确不在 W2。
 
 ---
 
-## 11. 示例命令（实现后贴进 README；现为草案）
+## 11. 示例命令（已验证，可复制）
 
 ```bash
 # 旧行为（默认）
@@ -303,7 +335,7 @@ sensors-dcs export-timeline \
   -o docs/portfolio/baseline/reports/tl_wall_good \
   --align nearest
 
-# 新：HW 网格（草案）
+# 新：HW 网格（MVP：网格按 t_hw；状态仍 wall asof 到帧锚点）
 sensors-dcs export-timeline \
   -e docs/portfolio/baseline/ep_good \
   -o docs/portfolio/baseline/reports/tl_hw_good \
@@ -311,10 +343,16 @@ sensors-dcs export-timeline \
   --align-clock hw_ts \
   --primary-camera cam-middle
 
-# QC 对照（草案）
+# QC 对照
 python scripts/qc_episode_sync.py \
   --episode docs/portfolio/baseline/ep_good \
   --camera-primary cam-middle \
   --align-clock hw_ts \
   --out docs/portfolio/baseline/reports/sync_hw_good.json
+
+python scripts/plot_qc_episode_sync.py \
+  -e docs/portfolio/baseline/ep_good \
+  --tag good \
+  --align-clock hw_ts \
+  --out-dir docs/portfolio/baseline/reports
 ```

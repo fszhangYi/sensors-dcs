@@ -335,6 +335,10 @@ sensors-dcs export-timeline -e episode_00000 --align asof -o /tmp/export --forma
 # master 下采样（gello 50Hz → 宽表约 15Hz）
 sensors-dcs export-timeline -e episode_00000 \
   --align asof --master gello --master-hz 15
+
+# HW 主网格（默认仍是 wall；需 asof/nearest；状态仍按帧的 t_wall 挂接，见 docs/hw-timeline-align.md）
+sensors-dcs export-timeline -e episode_00000 \
+  --align nearest --align-clock hw_ts --primary-camera cam-middle
 ```
 
 ### 多相机时指定主时间轴

@@ -183,6 +183,11 @@ sensors-dcs export-timeline -e episode_00000 \
 # 固定 50Hz 网格，CSV
 sensors-dcs export-timeline -e episode_00000 \
   --align grid --hz 50 --format csv
+
+# 可选：主相机 HW 时间戳作网格（默认 --align-clock wall，行为与上兼容）
+# 详见 docs/hw-timeline-align.md；UI「数据后处理」同源开关 align-clock / primary-camera
+sensors-dcs export-timeline -e episode_00000 \
+  --align nearest --align-clock hw_ts --primary-camera cam-middle
 ```
 
 可选：在 `RecordController.stop()` 完成后异步触发导出（不阻塞 UI）。

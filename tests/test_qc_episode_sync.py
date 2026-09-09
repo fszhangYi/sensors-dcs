@@ -48,14 +48,16 @@ def _make_episode(tmp: Path) -> Path:
     dt = 1 / 30
     cam_rows = []
     for i in range(60):
-        # one intentional gap
-        tw = t0 + i * dt + (0.2 if i == 30 else 0.0)
+        # one intentional gap that survives HW sort/dedup: shift all later frames
+        tw = t0 + i * dt + (0.2 if i >= 30 else 0.0)
         cam_rows.append(
             {
                 "agent_id": "cam-middle",
                 "t_wall": tw,
                 "file": f"{i:08d}.jpg",
-                "color_timestamp": 1e12 + i * 33.3,
+                # ms HW stamps coherent with wall (RealSense-like)
+                "color_timestamp": tw * 1000.0 + 3.0,
+                "color_timestamp_domain": "timestamp_domain.system_time",
             }
         )
         (ep / "cameras" / "cam-middle" / f"{i:08d}.jpg").write_bytes(b"x")
@@ -113,3 +115,38 @@ def test_cli_writes_json(tmp_path: Path):
     data = json.loads(out.read_text(encoding="utf-8"))
     for k in REQUIRED_KEYS:
         assert k in data
+
+
+def test_analyze_hw_ts_mvp(tmp_path: Path):
+    mod = _load_mod()
+    ep = _make_episode(tmp_path)
+    r = mod.analyze_episode(
+        ep, camera_primary="cam-middle", align_clock="hw_ts", gap_factor=2.5
+    )
+    assert r["align_clock"] == "hw_ts"
+    assert r["align_fallback"] is False
+    assert r["mvp_limitation"]
+    assert r["cam_dt_p50"] is not None
+    assert r["state_cam_abs_dt_p95"] is not None
+    # HW grid should still see the injected gap.
+    assert r["cam_gap_count"] >= 1
+
+
+def test_analyze_hw_ts_fallback_without_timestamps(tmp_path: Path):
+    mod = _load_mod()
+    ep = _make_episode(tmp_path)
+    # Strip HW fields
+    idx = ep / "cameras" / "cam-middle" / "index.jsonl"
+    rows = []
+    for line in idx.read_text().splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        row.pop("color_timestamp", None)
+        row.pop("color_timestamp_domain", None)
+        rows.append(row)
+    idx.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    r = mod.analyze_episode(ep, camera_primary="cam-middle", align_clock="hw_ts")
+    assert r["align_fallback"] is True
+    assert r["align_clock"] == "wall"
+    assert r["align_clock_requested"] == "hw_ts"

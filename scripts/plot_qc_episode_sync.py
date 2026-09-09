@@ -58,12 +58,14 @@ def plot_episode(
     gap_factor: float = 2.5,
     title_tag: str | None = None,
     sync_json: Path | None = None,
+    align_clock: str = "wall",
 ) -> dict[str, Any]:
     qc = _load_qc_mod()
-    bundle = qc.collect_wall_series(
+    bundle = qc.collect_sync_series(
         episode,
         camera_primary=camera_primary,
         gap_factor=gap_factor,
+        align_clock=align_clock,
     )
     report: dict[str, Any] = bundle["report"]
     if sync_json is not None and sync_json.is_file():
@@ -79,10 +81,11 @@ def plot_episode(
     ep_name = report.get("episode") or episode.name
     tag = title_tag or ep_name
     prim = report.get("camera_primary") or "?"
+    clock = report.get("align_clock") or align_clock
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
     fig.suptitle(
-        f"Wall sync QC — {tag} ({ep_name}, {prim})",
+        f"Sync QC [{clock}] — {tag} ({ep_name}, {prim})",
         fontsize=12,
     )
 
@@ -113,7 +116,10 @@ def plot_episode(
         ax0.legend(fontsize=8, loc="upper right")
     else:
         ax0.text(0.5, 0.5, "no cam_dt samples", ha="center", va="center")
-    ax0.set_xlabel("camera frame interval (ms)")
+    ax0.set_xlabel(
+        "camera frame interval (ms)"
+        + (" [HW]" if clock == "hw_ts" else " [wall]")
+    )
     ax0.set_ylabel("count")
     ax0.set_title(f"cam_dt  gaps={report.get('cam_gap_count', 0)}")
 
@@ -137,14 +143,19 @@ def plot_episode(
         ax1.legend(fontsize=8, loc="upper right")
     else:
         ax1.text(0.5, 0.5, "no state↔cam samples", ha="center", va="center")
-    ax1.set_xlabel("state↔cam |Δt| (ms)")
+    ax1.set_xlabel("state↔cam |Δt| (ms) [wall]")
     ax1.set_ylabel("count")
     ax1.set_title("state_cam_abs_dt")
 
     subtitle = (
         f"hw_cov={float(report.get('hw_ts_coverage') or 0):.0%}  "
         f"drop_rate={float(report.get('drop_rate') or 0):.1%}  "
-        f"align={report.get('align_clock')}"
+        f"align={clock}"
+        + (
+            f"  fallback={report.get('align_fallback_reason')}"
+            if report.get("align_fallback")
+            else ""
+        )
     )
     fig.text(0.5, 0.02, subtitle, ha="center", fontsize=9, color="#444")
     fig.tight_layout(rect=(0, 0.06, 1, 0.92))
@@ -257,10 +268,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--camera-primary", default="cam-middle")
     p.add_argument("--gap-factor", type=float, default=2.5)
     p.add_argument(
+        "--align-clock",
+        choices=("wall", "hw_ts"),
+        default="wall",
+        help="same as qc_episode_sync --align-clock",
+    )
+    p.add_argument(
         "--sync-json",
         type=Path,
         default=None,
-        help="optional D4 JSON for annotation (default: out-dir/sync_wall_<tag>.json)",
+        help="optional D4/D10 JSON for annotation (default: out-dir/sync_<clock>_<tag>.json)",
     )
     p.add_argument(
         "--baseline-dir",
@@ -286,13 +303,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.baseline_dir is not None:
         base = args.baseline_dir.expanduser().resolve()
+        clock = args.align_clock
+        prefix = "sync_hw" if clock == "hw_ts" else "sync_wall"
         for tag in ("good", "mid", "bad"):
             ep = base / f"ep_{tag}"
             if not ep.exists():
                 print(f"error: missing {ep}", flush=True)
                 return 2
-            sync = out_dir / f"sync_wall_{tag}.json"
-            png = out_dir / f"sync_wall_{tag}.png"
+            sync = out_dir / f"{prefix}_{tag}.json"
+            png = out_dir / f"{prefix}_{tag}.png"
             r = plot_episode(
                 ep,
                 out_png=png,
@@ -300,12 +319,14 @@ def main(argv: list[str] | None = None) -> int:
                 gap_factor=args.gap_factor,
                 title_tag=tag,
                 sync_json=sync if sync.is_file() else None,
+                align_clock=clock,
             )
             reports[tag] = r
             png_names[tag] = png.name
             print(f"wrote {png}", flush=True)
-        write_conclusions(reports, out_dir / "CONCLUSIONS_W1.md", png_names)
-        print(f"wrote {out_dir / 'CONCLUSIONS_W1.md'}", flush=True)
+        if clock == "wall":
+            write_conclusions(reports, out_dir / "CONCLUSIONS_W1.md", png_names)
+            print(f"wrote {out_dir / 'CONCLUSIONS_W1.md'}", flush=True)
         return 0
 
     if args.episode is None:
@@ -313,10 +334,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     tag = args.tag or args.episode.name
-    png = args.out or (out_dir / f"sync_wall_{tag}.png")
+    clock = args.align_clock
+    prefix = "sync_hw" if clock == "hw_ts" else "sync_wall"
+    png = args.out or (out_dir / f"{prefix}_{tag}.png")
     sync = args.sync_json
     if sync is None:
-        cand = out_dir / f"sync_wall_{tag}.json"
+        cand = out_dir / f"{prefix}_{tag}.json"
         sync = cand if cand.is_file() else None
     r = plot_episode(
         args.episode,
@@ -325,6 +348,7 @@ def main(argv: list[str] | None = None) -> int:
         gap_factor=args.gap_factor,
         title_tag=args.tag,
         sync_json=sync,
+        align_clock=clock,
     )
     reports[tag] = r
     png_names[tag] = Path(png).name

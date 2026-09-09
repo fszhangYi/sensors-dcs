@@ -33,11 +33,12 @@
 | 结束 | flush 完整 episode | `true` | 正常 |
 | 作废 | 同样 flush | `false` + note | 默认拒绝，`--allow-invalid` 可强行 |
 
-## 未做（有意）
+## 未做（有意）— 部分已被 W2 覆盖
 
-- timeline 不以 HW ts 为轴（留待以后真要对齐再改）。  
+- ~~timeline 不以 HW ts 为轴~~ → **W2 已可选** `export-timeline --align-clock hw_ts`（默认仍 `wall`；见 [hw-timeline-align.md](hw-timeline-align.md)）。  
 - E2 / E3 / E5 本轮不动。  
-- 作废不删目录、不改 episode 序号规则（仍递增）。
+- 作废不删目录、不改 episode 序号规则（仍递增）。  
+- 录制侧**不**因 HW 对齐额外丢预热帧；warmup 裁剪仍在 `filter-timeline --trim`（与 E4 作废局、E2 写失败丢帧正交）。
 
 ## 验证
 

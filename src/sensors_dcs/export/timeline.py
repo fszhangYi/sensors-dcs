@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import warnings
 from bisect import bisect_left
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,8 +10,16 @@ from typing import Any, Literal
 
 from sensors_dcs.export.parquet_io import require_pandas, write_parquet
 
+_LOG = logging.getLogger(__name__)
+
 AlignMode = Literal["asof", "nearest", "grid", "union"]
 ExportFormat = Literal["parquet", "csv", "both"]
+AlignClock = Literal["wall", "hw_ts"]
+
+# Primary-camera HW coverage below this → fall back to wall (see hw-timeline-align.md).
+HW_COVERAGE_MIN = 0.95
+# |t_hw_s - t_wall| median above this → unit/coherence failure → fallback.
+HW_WALL_INCOHERENT_S = 1.0
 
 
 @dataclass
@@ -26,6 +36,67 @@ class Sample:
     serial: str | None = None
     dry_run: bool | None = None
     file_missing: bool = False
+    t_hw: float | None = None  # normalized hardware time in seconds (cameras only)
+    hw_domain: str | None = None
+    hw_raw_unit: str | None = None
+
+
+@dataclass(frozen=True)
+class FrameAnchor:
+    """Primary-camera frame used as HW grid node (MVP pairs wall↔hw)."""
+
+    seq: int
+    t_wall: float
+    t_hw: float
+    agent_id: str
+    file: str | None = None
+    hw_domain: str | None = None
+    hw_raw_unit: str | None = None
+
+
+def normalize_hw_timestamp(
+    raw: float,
+    *,
+    t_wall_hint: float | None = None,
+) -> tuple[float, str]:
+    """Convert device ``color_timestamp`` to seconds.
+
+    Returns ``(t_hw_seconds, raw_unit_detected)`` where unit is
+    ``s`` / ``ms`` / ``us`` / ``unknown``.
+    """
+    raw_f = float(raw)
+    if t_wall_hint is None or t_wall_hint == 0:
+        # No hint: treat large magnitudes as ms (RealSense baseline pattern).
+        if abs(raw_f) >= 1e12:
+            return raw_f / 1e6, "us"
+        if abs(raw_f) >= 1e10:
+            return raw_f / 1e3, "ms"
+        return raw_f, "s"
+
+    hint = float(t_wall_hint)
+
+    def _near(a: float, b: float) -> bool:
+        if b == 0:
+            return abs(a) < 1.0
+        ratio = abs(a / b) if b else float("inf")
+        return 0.5 <= ratio <= 2.0
+
+    if _near(raw_f, hint):
+        return raw_f, "s"
+    if _near(raw_f / 1e3, hint):
+        return raw_f / 1e3, "ms"
+    if _near(raw_f / 1e6, hint):
+        return raw_f / 1e6, "us"
+    return raw_f, "unknown"
+
+
+def sample_grid_time(sample: Sample, clock: AlignClock) -> float:
+    """Pick the timeline key for one sample under ``align_clock``."""
+    if clock == "hw_ts":
+        if sample.t_hw is None:
+            raise ValueError(f"sample {sample.agent_id}#{sample.seq} has no t_hw")
+        return float(sample.t_hw)
+    return float(sample.t_wall)
 
 
 def resolve_episode_dir(path: str | Path) -> Path:
@@ -161,9 +232,28 @@ def _load_cameras(ep_dir: Path) -> list[Sample]:
             fields: dict[str, Any] = {"file": file_name}
             if depth_name:
                 fields["depth_file"] = depth_name
+            t_wall = float(row["t_wall"])
+            t_hw: float | None = None
+            hw_domain = row.get("color_timestamp_domain")
+            hw_domain_s = str(hw_domain) if hw_domain not in (None, "") else None
+            hw_raw_unit: str | None = None
+            raw_cts = row.get("color_timestamp")
+            if raw_cts is not None and raw_cts != "":
+                try:
+                    t_hw_s, hw_raw_unit = normalize_hw_timestamp(
+                        float(raw_cts), t_wall_hint=t_wall
+                    )
+                    fields["color_timestamp"] = float(raw_cts)
+                    if hw_domain_s:
+                        fields["color_timestamp_domain"] = hw_domain_s
+                    if hw_raw_unit != "unknown":
+                        t_hw = t_hw_s
+                except (TypeError, ValueError):
+                    t_hw = None
+                    hw_raw_unit = None
             out.append(
                 Sample(
-                    t_wall=float(row["t_wall"]),
+                    t_wall=t_wall,
                     t_mono=float(row.get("t_mono") or 0.0),
                     agent_id=str(row.get("agent_id") or agent_id),
                     sensor_id=str(row.get("sensor_id") or ""),
@@ -175,9 +265,113 @@ def _load_cameras(ep_dir: Path) -> list[Sample]:
                     serial=str(row["serial"]) if row.get("serial") else None,
                     dry_run=row.get("dry_run"),
                     file_missing=missing,
+                    t_hw=t_hw,
+                    hw_domain=hw_domain_s,
+                    hw_raw_unit=hw_raw_unit,
                 )
             )
     return out
+
+
+def collect_primary_camera_anchors(
+    samples: list[Sample],
+    *,
+    primary_camera: str,
+    coverage_min: float = HW_COVERAGE_MIN,
+) -> tuple[list[FrameAnchor], dict[str, Any]]:
+    """Build HW grid anchors from primary camera; report fallback metadata."""
+    cam = [s for s in samples if s.agent_id == primary_camera]
+    info: dict[str, Any] = {
+        "primary_camera": primary_camera,
+        "n_frames": len(cam),
+        "hw_coverage": 0.0,
+        "hw_raw_unit_detected": None,
+        "hw_domains": [],
+        "align_fallback": False,
+        "align_fallback_reason": None,
+        "hw_backsteps": 0,
+    }
+    if not cam:
+        info["align_fallback"] = True
+        info["align_fallback_reason"] = "missing_primary_camera"
+        return [], info
+
+    with_hw = [s for s in cam if s.t_hw is not None]
+    info["hw_coverage"] = len(with_hw) / max(len(cam), 1)
+    domains = sorted({s.hw_domain for s in with_hw if s.hw_domain})
+    info["hw_domains"] = domains
+    units = {s.hw_raw_unit for s in with_hw if s.hw_raw_unit}
+    info["hw_raw_unit_detected"] = next(iter(units)) if len(units) == 1 else (
+        "mixed" if units else None
+    )
+
+    any_raw = any(s.fields.get("color_timestamp") is not None for s in cam)
+    if not with_hw:
+        info["align_fallback"] = True
+        if any_raw:
+            # Present but failed unit detection / nulls.
+            info["align_fallback_reason"] = "hw_unit_unknown"
+        else:
+            info["align_fallback_reason"] = "hw_field_absent"
+        return [], info
+    if info["hw_coverage"] < coverage_min:
+        info["align_fallback"] = True
+        info["align_fallback_reason"] = "hw_coverage_low"
+        return [], info
+
+    deltas = [abs(float(s.t_hw) - s.t_wall) for s in with_hw]
+    deltas.sort()
+    med = deltas[len(deltas) // 2]
+    if med > HW_WALL_INCOHERENT_S:
+        info["align_fallback"] = True
+        info["align_fallback_reason"] = "hw_wall_incoherent"
+        return [], info
+
+    # Sort by HW time; count backsteps on original camera order.
+    ordered_wall = sorted(cam, key=lambda s: (s.t_wall, s.seq))
+    backsteps = 0
+    prev_hw: float | None = None
+    for s in ordered_wall:
+        if s.t_hw is None:
+            continue
+        if prev_hw is not None and float(s.t_hw) < prev_hw:
+            backsteps += 1
+        prev_hw = float(s.t_hw)
+    info["hw_backsteps"] = backsteps
+    if backsteps / max(len(with_hw), 1) > 0.05:
+        info["align_fallback"] = True
+        info["align_fallback_reason"] = "hw_non_monotonic"
+        return [], info
+
+    # Dedup identical t_hw: keep first seq.
+    by_hw = sorted(with_hw, key=lambda s: (float(s.t_hw), s.seq))  # type: ignore[arg-type]
+    anchors: list[FrameAnchor] = []
+    seen: set[float] = set()
+    for s in by_hw:
+        th = float(s.t_hw)  # type: ignore[arg-type]
+        if th in seen:
+            continue
+        seen.add(th)
+        anchors.append(
+            FrameAnchor(
+                seq=s.seq,
+                t_wall=s.t_wall,
+                t_hw=th,
+                agent_id=s.agent_id,
+                file=str(s.fields.get("file") or "") or None,
+                hw_domain=s.hw_domain,
+                hw_raw_unit=s.hw_raw_unit,
+            )
+        )
+    if len(domains) > 1:
+        # Mixed domains: still usable in MVP; flag in info (no hard fallback).
+        info["hw_domain_mixed"] = True
+    return anchors, info
+
+
+def hw_grid_times(anchors: list[FrameAnchor]) -> list[float]:
+    """Sorted unique HW seconds for primary-camera grid."""
+    return [a.t_hw for a in anchors]
 
 
 def load_episode(ep_dir: str | Path) -> tuple[dict[str, Any], list[Sample]]:
@@ -411,7 +605,20 @@ def _build_base_times(
     t_start: float,
     hz: float | None,
     master_hz: float | None = None,
+    align_clock: AlignClock = "wall",
+    hw_anchors: list[FrameAnchor] | None = None,
 ) -> list[float]:
+    """Select master timeline timestamps (seconds) for the wide table.
+
+    ``align_clock=hw_ts`` uses primary-camera HW anchors for asof/nearest.
+    ``grid`` / ``union`` stay on wall axis (HW grid for those modes is D10+/later).
+    """
+    if align_clock == "hw_ts" and mode in {"asof", "nearest"} and hw_anchors:
+        times = hw_grid_times(hw_anchors)
+        if master_hz is not None and master_hz > 0:
+            return subsample_times(times, master_hz)
+        return times
+
     if mode == "grid":
         t_end = float(manifest.get("t_end") or max(s.t_wall for s in samples))
         if hz is None or hz <= 0:
@@ -422,7 +629,7 @@ def _build_base_times(
     if mode == "union":
         return sorted({s.t_wall for s in samples})
     master_samples = by_agent[master_id]
-    times = [s.t_wall for s in master_samples]
+    times = [sample_grid_time(s, "wall") for s in master_samples]
     if master_hz is not None and master_hz > 0:
         return subsample_times(times, master_hz)
     return times
@@ -453,16 +660,144 @@ def build_aligned_frame(
     mode: AlignMode = "asof",
     hz: float | None = None,
     master_hz: float | None = None,
+    align_clock: AlignClock = "wall",
+    primary_camera: str = "cam-middle",
 ):
+    """Build wide aligned table (DataFrame). See ``build_aligned_frame_with_meta``."""
+    df, _meta = build_aligned_frame_with_meta(
+        manifest,
+        samples,
+        master=master,
+        mode=mode,
+        hz=hz,
+        master_hz=master_hz,
+        align_clock=align_clock,
+        primary_camera=primary_camera,
+    )
+    return df
+
+
+def build_aligned_frame_with_meta(
+    manifest: dict[str, Any],
+    samples: list[Sample],
+    *,
+    master: str | None = None,
+    mode: AlignMode = "asof",
+    hz: float | None = None,
+    master_hz: float | None = None,
+    align_clock: AlignClock = "wall",
+    primary_camera: str = "cam-middle",
+) -> tuple[Any, dict[str, Any]]:
+    """Build wide aligned table.
+
+    Returns ``(dataframe, clock_meta)``. For ``align_clock=hw_ts`` (asof/nearest),
+    the row index follows primary-camera HW order; joins still use each anchor's
+    ``t_wall`` (MVP — states have no HW clock).
+    """
     pd = require_pandas()
+    clock_meta: dict[str, Any] = {
+        "align_clock": "wall",
+        "primary_camera": None,
+        "align_fallback": False,
+        "align_fallback_reason": None,
+        "hw_unit": "seconds",
+        "hw_raw_unit_detected": None,
+    }
     if not samples:
-        return pd.DataFrame()
+        return pd.DataFrame(), clock_meta
 
     t_start = _t_start(manifest, samples)
     by_agent: dict[str, list[Sample]] = {}
     for s in samples:
         by_agent.setdefault(s.agent_id, []).append(s)
 
+    effective_clock: AlignClock = "wall"
+    hw_anchors: list[FrameAnchor] | None = None
+    if align_clock == "hw_ts":
+        if mode in {"grid", "union"}:
+            clock_meta["align_fallback"] = True
+            clock_meta["align_fallback_reason"] = "hw_grid_mode_unsupported"
+            clock_meta["align_clock"] = "wall"
+        else:
+            anchors, ainfo = collect_primary_camera_anchors(
+                samples, primary_camera=primary_camera
+            )
+            clock_meta.update(
+                {
+                    "primary_camera": ainfo.get("primary_camera"),
+                    "hw_raw_unit_detected": ainfo.get("hw_raw_unit_detected"),
+                    "hw_domains": ainfo.get("hw_domains"),
+                    "hw_coverage": ainfo.get("hw_coverage"),
+                    "hw_backsteps": ainfo.get("hw_backsteps"),
+                }
+            )
+            if ainfo.get("align_fallback"):
+                clock_meta["align_fallback"] = True
+                clock_meta["align_fallback_reason"] = ainfo.get("align_fallback_reason")
+                clock_meta["align_clock"] = "wall"
+            else:
+                effective_clock = "hw_ts"
+                hw_anchors = anchors
+                clock_meta["align_clock"] = "hw_ts"
+                clock_meta["align_fallback"] = False
+                clock_meta["align_fallback_reason"] = None
+
+        if clock_meta.get("align_fallback"):
+            reason = clock_meta.get("align_fallback_reason") or "unknown"
+            msg = (
+                f"align_clock=hw_ts fell back to wall "
+                f"(reason={reason}, primary_camera={primary_camera})"
+            )
+            _LOG.warning(msg)
+            warnings.warn(msg, UserWarning, stacklevel=2)
+
+    if effective_clock == "hw_ts" and hw_anchors is not None:
+        # Master is the primary camera; base rows keyed by anchor.t_wall for joins.
+        master_id = primary_camera
+        if master_id not in by_agent:
+            raise ValueError(f"primary camera not found in episode: {master_id}")
+        # Optionally downsample HW anchors by master_hz on t_hw axis.
+        anchors_use = hw_anchors
+        if master_hz is not None and master_hz > 0:
+            keep_hw = set(subsample_times(hw_grid_times(hw_anchors), master_hz))
+            anchors_use = [a for a in hw_anchors if a.t_hw in keep_hw]
+        base = pd.DataFrame(
+            {
+                "t_wall": [a.t_wall for a in anchors_use],
+                "t_hw": [a.t_hw for a in anchors_use],
+                "t_rel": [a.t_wall - t_start for a in anchors_use],
+                f"{master_id}.seq": [a.seq for a in anchors_use],
+            }
+        )
+        # Attach primary-camera columns by seq (t_wall may collide after HW dedup).
+        master_rows: list[dict[str, Any]] = []
+        by_seq = {s.seq: s for s in by_agent[master_id]}
+        for a in anchors_use:
+            s = by_seq.get(a.seq)
+            if s is None:
+                master_rows.append({f"{master_id}.seq": a.seq})
+                continue
+            row = _agent_value_columns(master_id, s)
+            master_rows.append(row)
+        master_df = pd.DataFrame(master_rows)
+        base = base.merge(master_df, on=f"{master_id}.seq", how="left")
+        base[f"{master_id}.match_dt"] = 0.0
+        agent_ids = [aid for aid in sorted(by_agent) if aid != master_id]
+        join_direction = "backward" if mode == "asof" else "nearest"
+        for aid in agent_ids:
+            agent_df = _agent_frame(by_agent[aid], aid, t_start)
+            if join_direction == "nearest":
+                part = _nearest_join(base["t_wall"].tolist(), agent_df, aid)
+                base = base.merge(part, on="t_wall", how="left")
+            else:
+                base = _asof_join(base, agent_df, aid, direction="backward")
+        # Sort by HW grid order for readability.
+        return (
+            base.sort_values("t_hw", kind="mergesort").reset_index(drop=True),
+            clock_meta,
+        )
+
+    # ---- wall path (default / fallback) ----
     master_id = master or pick_default_master(manifest, samples)
     if master_id not in by_agent:
         raise ValueError(f"master agent not found in episode: {master_id}")
@@ -476,6 +811,8 @@ def build_aligned_frame(
         t_start=t_start,
         hz=hz,
         master_hz=master_hz,
+        align_clock="wall",
+        hw_anchors=None,
     )
     base = pd.DataFrame({"t_wall": base_times, "t_rel": [t - t_start for t in base_times]})
 
@@ -498,7 +835,7 @@ def build_aligned_frame(
         else:
             base = _asof_join(base, agent_df, aid, direction="backward")
 
-    return base.sort_values("t_wall", kind="mergesort").reset_index(drop=True)
+    return base.sort_values("t_wall", kind="mergesort").reset_index(drop=True), clock_meta
 
 
 def _write_frame(df, path: Path, fmt: ExportFormat) -> None:
@@ -519,6 +856,8 @@ def export_episode_timeline(
     master_hz: float | None = None,
     fmt: ExportFormat = "parquet",
     allow_invalid: bool = False,
+    align_clock: AlignClock = "wall",
+    primary_camera: str = "cam-middle",
 ) -> dict[str, Any]:
     """Export long and optional aligned timeline tables for one episode."""
     root = resolve_episode_dir(ep_dir)
@@ -531,9 +870,24 @@ def export_episode_timeline(
 
     events = build_events_frame(manifest, samples)
     aligned = None
+    clock_meta: dict[str, Any] = {
+        "align_clock": align_clock if align is not None else "wall",
+        "primary_camera": primary_camera if align_clock == "hw_ts" else None,
+        "align_fallback": False,
+        "align_fallback_reason": None,
+        "hw_unit": "seconds",
+        "hw_raw_unit_detected": None,
+    }
     if align is not None:
-        aligned = build_aligned_frame(
-            manifest, samples, master=master, mode=align, hz=hz, master_hz=master_hz
+        aligned, clock_meta = build_aligned_frame_with_meta(
+            manifest,
+            samples,
+            master=master,
+            mode=align,
+            hz=hz,
+            master_hz=master_hz,
+            align_clock=align_clock,
+            primary_camera=primary_camera,
         )
 
     if fmt == "both":
@@ -565,7 +919,10 @@ def export_episode_timeline(
 
     t_start = _t_start(manifest, samples)
     t_end = float(manifest.get("t_end") or max((s.t_wall for s in samples), default=t_start))
-    master_id = master or (pick_default_master(manifest, samples) if samples else None)
+    if clock_meta.get("align_clock") == "hw_ts":
+        master_id = primary_camera
+    else:
+        master_id = master or (pick_default_master(manifest, samples) if samples else None)
     meta = {
         "source_episode": root.name,
         "source_path": str(root),
@@ -578,6 +935,13 @@ def export_episode_timeline(
             "hz": hz,
             "master_hz": master_hz,
         },
+        "align_clock": clock_meta.get("align_clock", "wall"),
+        "primary_camera": clock_meta.get("primary_camera"),
+        "align_fallback": bool(clock_meta.get("align_fallback")),
+        "align_fallback_reason": clock_meta.get("align_fallback_reason"),
+        "hw_unit": clock_meta.get("hw_unit", "seconds"),
+        "hw_raw_unit_detected": clock_meta.get("hw_raw_unit_detected"),
+        "hw_coverage": clock_meta.get("hw_coverage"),
         "time_range": {"t_start": t_start, "t_end": t_end},
         "rows": {"events": len(events), "aligned": aligned_rows},
         "agents": sorted({s.agent_id for s in samples}),

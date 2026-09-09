@@ -12,6 +12,8 @@ from sensors_dcs.paths import launch_cwd, project_root, user_data_dir
 DEFAULT_ALIGN = "asof"
 DEFAULT_MASTER = "cam-left"
 DEFAULT_MASTER_HZ = 5.0
+DEFAULT_ALIGN_CLOCK = "wall"
+DEFAULT_PRIMARY_CAMERA = "cam-middle"
 DEFAULT_REQUIRE = "arm,cam-left,cam-right,cam-middle,gripper-read"
 DEFAULT_MAX_MATCH_DT = "0.033"
 DEFAULT_TRIM = "both"
@@ -51,6 +53,8 @@ def postprocess_defaults(*, save_dir: str | Path | None = None) -> dict[str, Any
         "align": DEFAULT_ALIGN,
         "master": DEFAULT_MASTER,
         "master_hz": DEFAULT_MASTER_HZ,
+        "align_clock": DEFAULT_ALIGN_CLOCK,
+        "primary_camera": DEFAULT_PRIMARY_CAMERA,
         "require": DEFAULT_REQUIRE,
         "max_match_dt": DEFAULT_MAX_MATCH_DT,
         "trim": DEFAULT_TRIM,
@@ -229,6 +233,8 @@ def run_postprocess(
     align: str = DEFAULT_ALIGN,
     master: str = DEFAULT_MASTER,
     master_hz: float | None = DEFAULT_MASTER_HZ,
+    align_clock: str = DEFAULT_ALIGN_CLOCK,
+    primary_camera: str = DEFAULT_PRIMARY_CAMERA,
     require: str = DEFAULT_REQUIRE,
     max_match_dt: str = DEFAULT_MAX_MATCH_DT,
     trim: str = DEFAULT_TRIM,
@@ -247,6 +253,16 @@ def run_postprocess(
     if unknown:
         return {"ok": False, "error": f"unknown steps: {unknown}", "episode": str(ep), "results": []}
 
+    clock = (align_clock or DEFAULT_ALIGN_CLOCK).strip().lower()
+    if clock not in {"wall", "hw_ts"}:
+        return {
+            "ok": False,
+            "error": f"align_clock must be wall|hw_ts, got {align_clock!r}",
+            "episode": str(ep),
+            "results": [],
+        }
+    primary = (primary_camera or DEFAULT_PRIMARY_CAMERA).strip() or DEFAULT_PRIMARY_CAMERA
+
     cam_map = (camera_map or "").strip() or None
     results: list[dict[str, Any]] = []
     log_lines: list[str] = []
@@ -261,6 +277,8 @@ def run_postprocess(
                     master=master or None,
                     master_hz=float(master_hz) if master_hz is not None else None,
                     allow_invalid=allow_invalid,
+                    align_clock=clock,  # type: ignore[arg-type]
+                    primary_camera=primary,
                 )
             elif step == "filter-timeline":
                 meta = filter_episode_timeline(
