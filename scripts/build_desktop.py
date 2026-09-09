@@ -25,9 +25,18 @@ def _utc_stamp() -> str:
     return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
 
 
-def _run(cmd: list[str], *, env: dict | None = None, cwd: Path | None = None) -> None:
+def _run(
+    cmd: list[str],
+    *,
+    env: dict | None = None,
+    cwd: Path | None = None,
+    check: bool = True,
+) -> int:
     print("+", " ".join(cmd), flush=True)
-    subprocess.check_call(cmd, env=env, cwd=str(cwd or ROOT))
+    rc = subprocess.call(cmd, env=env, cwd=str(cwd or ROOT))
+    if check and rc != 0:
+        raise subprocess.CalledProcessError(rc, cmd)
+    return rc
 
 
 def _linux_to_wine_path(path: Path) -> str:
@@ -438,7 +447,22 @@ def build_windows(*, skip_frontend: bool = True, delta: bool = True) -> Path:
         ],
         env=env,
     )
+    # Drop watchfiles before Analysis: its _rust_notify.pyd also needs
+    # bcryptprimitives.dll and has stalled Wine PyInstaller binary resolution.
+    # uvicorn --reload is unused in the frozen desktop server.
+    _run(
+        [wine, py_wine, "-m", "pip", "uninstall", "-y", "watchfiles"],
+        env=env,
+        check=False,
+    )
     _verify_bundled_imports([wine, py_wine], env=env)
+
+    # AutoDL container cgroup is often ~2GiB. Wine Analysis peaks near that; restart
+    # wineserver so a previous crashed build does not keep dirty pages around.
+    _run([wine, "wineboot", "--end-session"], env=env, check=False)
+    _run([wine, "wineboot", "--kill"], env=env, check=False)
+    time.sleep(2)
+    _run([wine, "wineboot", "--init"], env=env, check=False)
 
     TMP_BASE.mkdir(parents=True, exist_ok=True)
     dist = TMP_BASE / "sensors-dcs-dist-win"

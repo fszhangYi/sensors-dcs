@@ -40,14 +40,16 @@ EXPORT_PACKAGES = (
 UI_PACKAGES = ("webview",)
 
 # Installed via requirements.txt uvicorn[standard] — collect for frozen WS server.
-# watchfiles is soft: its Rust extension often fails under Wine Analysis (DLL load).
+# watchfiles: never collect_all / binaries. Its Rust extension (_rust_notify.pyd)
+# links bcryptprimitives.dll (missing under Wine 6 / Win7-ish prefixes) and can
+# stall PyInstaller binary dependency resolution. Desktop freeze does not need
+# uvicorn --reload. Name may still appear as a soft hiddenimport on Linux only.
 RUNTIME_PACKAGES = (
     "httptools",
     "websockets",
 )
-RUNTIME_OPTIONAL_PACKAGES = (
-    "watchfiles",
-)
+# Intentionally empty: do not pull watchfiles into Analysis binaries.
+RUNTIME_OPTIONAL_PACKAGES: tuple[str, ...] = ()
 
 _TEST_PATH_MARKERS = (
     "/numpy/tests/",
@@ -91,7 +93,14 @@ def _collect_package(
     binaries += b
     hiddenimports += h
     try:
-        hiddenimports += collect_submodules(pkg)
+        # Skip *.tests under Wine Analysis (pytest missing; also huge / slow).
+        if pkg in EXPORT_PACKAGES or pkg in KINEMATICS_PACKAGES or pkg in CORE_PACKAGES:
+            hiddenimports += collect_submodules(
+                pkg,
+                filter=lambda name: ".tests" not in name and not name.endswith(".tests"),
+            )
+        else:
+            hiddenimports += collect_submodules(pkg)
     except Exception:  # noqa: BLE001
         pass
 
@@ -121,7 +130,7 @@ def extend_analysis(
     for pkg in (
         *CORE_PACKAGES,
         *HARDWARE_PACKAGES,
-        *KINEMATICS_PACKAGES,
+        # scipy: selective below (full collect_all blows Wine ~2GiB cgroup)
         *EXPORT_PACKAGES,
         *UI_PACKAGES,
         *RUNTIME_PACKAGES,
@@ -140,6 +149,9 @@ def extend_analysis(
         )
         # Still list the top-level name so frozen uvicorn can try to import it.
         hiddenimports += list(RUNTIME_OPTIONAL_PACKAGES)
+
+    # SciPy is not collect_all'd above — only listed in hiddenimports + dynamic libs
+    # loops below (IK needs optimize + spatial; full collect_all OOMs Wine 2GiB cgroup).
 
     hiddenimports += [
         "numpy",
@@ -178,7 +190,6 @@ def extend_analysis(
         "pydantic_core",
         "httptools",
         "websockets",
-        "watchfiles",
         "sensors_dcs.ui_serve",
         "sensors_dcs.arm_pose",
         "sensors_dcs.export",

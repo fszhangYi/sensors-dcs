@@ -51,7 +51,6 @@ hiddenimports = [
     "pydantic_core",
     "httptools",
     "websockets",
-    "watchfiles",
     "webview",
     "numpy",
     "scipy",
@@ -106,8 +105,8 @@ hiddenimports = [
 hiddenimports += collect_submodules("sensors.drivers")
 hiddenimports += collect_submodules("sensors.kinematics")
 hiddenimports += collect_submodules("sensors_dcs")
-hiddenimports += collect_submodules("scipy")
-# Skip *.tests trees (need pytest) under Wine Analysis.
+# scipy/pandas/pyarrow collected in extend_analysis (with *.tests filtered).
+# Skip duplicate collect_submodules("scipy") — it balloons Wine Analysis memory/time.
 _no_tests = lambda name: ".tests" not in name and not name.endswith(".tests")  # noqa: E731
 hiddenimports += collect_submodules("pyarrow", filter=_no_tests)
 hiddenimports += collect_submodules("pandas", filter=_no_tests)
@@ -129,7 +128,32 @@ a = Analysis(
         str(ROOT / "packaging" / "runtime_hook_path.py"),
         str(ROOT / "packaging" / "runtime_hook_pyarrow.py"),
     ],
-    excludes=["tkinter", "matplotlib", "PySide2", "PySide6", "PyQt5", "PyQt6"],
+    excludes=[
+        "tkinter",
+        "matplotlib",
+        "PySide2",
+        "PySide6",
+        "PyQt5",
+        "PyQt6",
+        "watchfiles",
+        "watchfiles.main",
+        "watchfiles.run",
+        "watchfiles._rust_notify",
+        # Trim scipy surface for Wine 2GiB cgroup Analysis (IK only needs optimize + spatial).
+        "scipy.special",
+        "scipy.signal",
+        "scipy.ndimage",
+        "scipy.integrate",
+        "scipy.fft",
+        "scipy.fftpack",
+        "scipy.interpolate",
+        "scipy.stats",
+        "scipy.io",
+        "scipy.misc",
+        "scipy.cluster",
+        "scipy.odr",
+        "scipy.datasets",
+    ],
     noarchive=False,
     module_collection_mode={
         "numpy": "py",
