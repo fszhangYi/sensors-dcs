@@ -847,17 +847,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
       font-weight: 600;
     }
     .inf-pose-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.5rem;
-      flex: 0 0 auto;
-    }
-    .inf-pose-head h2 { flex: 1 1 auto; min-width: 0; }
-    .inf-pose-head .inf-pose-trail-clear {
-      --btn-h: 1.55rem;
-      --btn-fs: 0.72rem;
-      --btn-pad-x: 0.5rem;
       flex: 0 0 auto;
     }
     .inf-pose-canvas-wrap {
@@ -871,6 +860,96 @@ PREVIEW_HTML = """<!DOCTYPE html>
       cursor: grab;
     }
     .inf-pose-canvas-wrap:active { cursor: grabbing; }
+    .inf-pose-canvas-wrap .inf-pose-trail-clear {
+      --btn-h: 2rem;
+      --btn-fs: 0.72rem;
+      position: absolute;
+      left: 0.65rem;
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 2;
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 0;
+      box-sizing: border-box;
+      height: 2rem;
+      min-height: 2rem;
+      min-width: 2rem;
+      width: max-content;
+      max-width: 2rem;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 999px;
+      background: rgba(11, 16, 24, 0.48);
+      color: rgba(232, 240, 248, 0.88);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+      cursor: pointer;
+      pointer-events: auto;
+      transition:
+        max-width 0.22s var(--motion-ease, ease),
+        gap 0.22s var(--motion-ease, ease),
+        background 0.15s var(--motion-ease, ease),
+        border-color 0.15s var(--motion-ease, ease),
+        color 0.15s var(--motion-ease, ease);
+    }
+    .inf-pose-trail-clear-ico {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 2rem;
+      height: 2rem;
+      font-size: 0.82rem;
+      font-weight: 700;
+      letter-spacing: 0;
+      line-height: 1;
+      opacity: 1;
+      overflow: hidden;
+      transition:
+        width 0.22s var(--motion-ease, ease),
+        opacity 0.15s var(--motion-ease, ease);
+    }
+    .inf-pose-trail-clear-label {
+      flex: 0 0 auto;
+      display: inline-block;
+      max-width: 0;
+      opacity: 0;
+      overflow: hidden;
+      padding-left: 0;
+      padding-right: 0;
+      font-size: 0.72rem;
+      font-weight: 550;
+      line-height: 1;
+      transition:
+        max-width 0.22s var(--motion-ease, ease),
+        opacity 0.15s var(--motion-ease, ease),
+        padding 0.22s var(--motion-ease, ease);
+    }
+    .inf-pose-canvas-wrap .inf-pose-trail-clear:hover:not(:disabled),
+    .inf-pose-canvas-wrap .inf-pose-trail-clear:focus-visible:not(:disabled) {
+      max-width: 10rem;
+      background: rgba(11, 16, 24, 0.72);
+      border-color: rgba(61, 214, 198, 0.45);
+      color: #fff;
+    }
+    .inf-pose-canvas-wrap .inf-pose-trail-clear:hover:not(:disabled) .inf-pose-trail-clear-ico,
+    .inf-pose-canvas-wrap .inf-pose-trail-clear:focus-visible:not(:disabled) .inf-pose-trail-clear-ico {
+      width: 0;
+      opacity: 0;
+    }
+    .inf-pose-canvas-wrap .inf-pose-trail-clear:hover:not(:disabled) .inf-pose-trail-clear-label,
+    .inf-pose-canvas-wrap .inf-pose-trail-clear:focus-visible:not(:disabled) .inf-pose-trail-clear-label {
+      max-width: 7rem;
+      opacity: 1;
+      padding-left: 0.7rem;
+      padding-right: 0.7rem;
+    }
     #infPoseCanvas {
       display: block;
       width: 100%;
@@ -2060,9 +2139,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
     <aside class="inf-split-pose" aria-label="End-effector pose">
       <div class="inf-pose-head">
         <h2 data-i18n="infer.pose_title">末端位姿</h2>
-        <button type="button" class="ghost inf-pose-trail-clear" id="infPoseTrailClear" data-i18n="infer.pose_trail_clear" data-i18n-title="infer.pose_trail_clear_hint" title="清除目标轨迹点与连线">清除轨迹</button>
       </div>
-      <div class="inf-pose-canvas-wrap"><canvas id="infPoseCanvas"></canvas></div>
+      <div class="inf-pose-canvas-wrap">
+        <canvas id="infPoseCanvas"></canvas>
+        <button type="button" class="inf-pose-trail-clear" id="infPoseTrailClear" data-i18n-attr="aria-label" data-i18n="infer.pose_trail_clear" aria-label="清除轨迹" data-i18n-title="infer.pose_trail_clear_hint" title="清除目标轨迹点与连线">
+          <span class="inf-pose-trail-clear-ico" aria-hidden="true">C</span>
+          <span class="inf-pose-trail-clear-label" data-i18n="infer.pose_trail_clear">清除轨迹</span>
+        </button>
+      </div>
       <div class="inf-pose-hud" id="infPoseHud" data-i18n="infer.pose_idle">等待 arm · Read…</div>
     </aside>
     </div>
@@ -2556,6 +2640,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
       if (typeof window.__setInfPoseHome === 'function') {
         window.__setInfPoseHome((st && st.home_cartesian_xyzrpy) || null);
+      }
+      if (typeof window.__applyInfPoseJoints === 'function') {
+        window.__applyInfPoseJoints();
       }
     }
     async function refreshArmHomeState() {
@@ -3466,6 +3553,31 @@ PREVIEW_HTML = """<!DOCTYPE html>
         ec616Robot.updateMatrixWorld(true);
         return true;
       }
+      /**
+       * Display-only joint source for the EC616 URDF.
+       * NEVER sends Arm / Home / abs-send — only picks angles for setJointValue.
+       * Prefer configured home_joints_rad when live Read is missing or ~0.
+       */
+      function jointsForEc616Viz() {
+        const live = window.__armReadJoints;
+        const home = window.__armHome && window.__armHome.home_joints_rad;
+        const liveOk = Array.isArray(live) && live.length >= 6
+          && live.slice(0, 6).every((v) => Number.isFinite(Number(v)));
+        const homeOk = Array.isArray(home) && home.length >= 6
+          && home.slice(0, 6).every((v) => Number.isFinite(Number(v)));
+        if (liveOk) {
+          const nearZero = live.slice(0, 6).every((v) => Math.abs(Number(v)) < 1e-4);
+          if (!(nearZero && homeOk)) return live.slice(0, 6);
+        }
+        if (homeOk) return home.slice(0, 6);
+        return null;
+      }
+      /** Paint URDF joints only (no robot write / no /api/arm/home/go). */
+      function applyEc616VizJoints() {
+        const q = jointsForEc616Viz();
+        if (!q) return false;
+        return setEc616JointsFromMachineRad(q);
+      }
       function loadEc616Arm() {
         if (typeof URDFLoader === 'undefined' || typeof THREE.STLLoader !== 'function') {
           ec616LoadError = 'urdf-loader';
@@ -3493,10 +3605,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
               if (ec616Robot) scene.remove(ec616Robot);
               ec616Robot = robot;
               scene.add(robot);
-              if (Array.isArray(window.__armReadJoints)) {
-                setEc616JointsFromMachineRad(window.__armReadJoints);
-              } else {
-                // Home-ish preview until Read arrives (machine deg from embody robots.json).
+              if (!applyEc616VizJoints()) {
+                // Last-resort fold until home / Read arrives.
                 setEc616JointsFromMachineRad([0, -45, 60, 0, 30, 0].map((d) => d * DEG2RAD));
               }
             } catch (err) {
@@ -3747,8 +3857,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
         }
       });
       function tick() {
-        if (window.__armReadCartesian) setTcpPose(window.__armReadCartesian);
-        if (window.__armReadJoints) setEc616JointsFromMachineRad(window.__armReadJoints);
+        const q = jointsForEc616Viz();
+        const homeQ = window.__armHome && window.__armHome.home_joints_rad;
+        const showingHome = !!(q && Array.isArray(homeQ) && homeQ.length >= 6
+          && q.every((v, i) => Math.abs(Number(v) - Number(homeQ[i])) < 1e-6));
+        if (showingHome && window.__armHome.home_cartesian_xyzrpy) {
+          setTcpPose(window.__armHome.home_cartesian_xyzrpy);
+        } else if (window.__armReadCartesian) {
+          setTcpPose(window.__armReadCartesian);
+        } else if (window.__armHome && window.__armHome.home_cartesian_xyzrpy) {
+          setTcpPose(window.__armHome.home_cartesian_xyzrpy);
+        }
+        if (q) setEc616JointsFromMachineRad(q);
         renderer.render(scene, camera);
         requestAnimationFrame(tick);
       }
@@ -3766,6 +3886,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       window.__updateInfPoseViz = setTcpPose;
       window.__setInfPoseGoal = setGoalPose;
       window.__setInfPoseHome = setHomePose;
+      window.__applyInfPoseJoints = applyEc616VizJoints;
       window.__clearInfPoseTrail = clearTrail;
       window.__resizeInfPoseViz = resize;
       const trailClearBtn = document.getElementById('infPoseTrailClear');
@@ -3781,11 +3902,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
       window.addEventListener('resize', resize);
       if (window.__armReadCartesian) setTcpPose(window.__armReadCartesian);
-      else refreshHud(null, null);
+      else if (window.__armHome && window.__armHome.home_cartesian_xyzrpy) {
+        setTcpPose(window.__armHome.home_cartesian_xyzrpy);
+      } else refreshHud(null, null);
       if (window.__pi05NextState) setGoalPose(window.__pi05NextState);
       if (window.__armHome && window.__armHome.home_cartesian_xyzrpy) {
         setHomePose(window.__armHome.home_cartesian_xyzrpy);
       }
+      applyEc616VizJoints();
       tick();
     })();
 
