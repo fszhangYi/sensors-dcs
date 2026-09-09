@@ -404,7 +404,7 @@
     <child link="ft_kwr75_link"/>
   </joint>
 
-  <!-- End-effector: DH AG-95, mounted on KWR75 tool face (z=+0.0335) -->
+  <!-- End-effector: DH AG-95 (static solid), mounted on KWR75 tool face (z=+0.0335) -->
   <link name="gripper_centor_link">
     <inertial>
       <origin xyz="0 0 0.09" rpy="0 0 0"/>
