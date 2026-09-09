@@ -2201,6 +2201,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         <h3 class="inf-pi05-sec-title" id="infSecInfer" data-i18n="infer.sec_infer">推理</h3>
         <div class="inf-pi05-row">
           <button type="button" class="primary" id="infPi05Step" data-i18n="infer.step" disabled>单步调试</button>
+          <label class="inf-loop-rounds" data-i18n-title="infer.chunk_skip_hint" title="每次单步/LOOP 连续调用 step 的次数（1–15）；LOOP 在跳点次 step 后只下发一次">
+            <span data-i18n="infer.chunk_skip">跳点</span>
+            <input type="number" id="infChunkSkip" min="1" max="15" step="1" value="1" />
+          </label>
           <button type="button" id="infPi05Loop" data-i18n="infer.loop" disabled>LOOP</button>
           <label class="inf-loop-rounds" data-i18n-title="infer.loop_rounds_hint" title="大循环轮数：勾选自动复位时可用；每轮=LOOP至terminate→Home">
             <span data-i18n="infer.loop_rounds">轮数</span>
@@ -3166,6 +3170,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const infPi05Disconnect = document.getElementById('infPi05Disconnect');
     const infPi05Step = document.getElementById('infPi05Step');
     const infPi05Loop = document.getElementById('infPi05Loop');
+    const infChunkSkip = document.getElementById('infChunkSkip');
     const infLoopRounds = document.getElementById('infLoopRounds');
     const infLoopRoundIdx = document.getElementById('infLoopRoundIdx');
     const infPi05PromptApply = document.getElementById('infPi05PromptApply');
@@ -3486,6 +3491,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (infPi05Step) infPi05Step.disabled = !connected || pi05StepBusy || pi05LoopRunning;
       if (typeof syncAutoHomeRoundsUi === 'function') syncAutoHomeRoundsUi();
       else if (infLoopRounds) infLoopRounds.disabled = pi05LoopRunning;
+      if (infChunkSkip) infChunkSkip.disabled = pi05StepBusy || pi05LoopRunning;
       if (infPi05Loop) {
         infPi05Loop.disabled = !connected || (pi05StepBusy && !pi05LoopRunning);
         infPi05Loop.textContent = pi05LoopRunning ? t('infer.loop_stop') : t('infer.loop');
@@ -4444,6 +4450,30 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
       return r;
     }
+    function clampChunkSkip(raw) {
+      let n = Math.round(Number(raw));
+      if (!Number.isFinite(n)) n = 1;
+      return Math.max(1, Math.min(15, n));
+    }
+    function getChunkSkip() {
+      return clampChunkSkip(infChunkSkip ? infChunkSkip.value : 1);
+    }
+    function syncChunkSkipInput() {
+      if (!infChunkSkip) return;
+      const n = clampChunkSkip(infChunkSkip.value);
+      if (String(infChunkSkip.value) !== String(n)) infChunkSkip.value = String(n);
+    }
+    /** Syntax sugar: call runInfPi05StepOnce() N times; returns last result. */
+    async function runInfPi05StepNTimes(n, shouldAbort) {
+      const count = clampChunkSkip(n);
+      let last = null;
+      for (let i = 0; i < count; i++) {
+        if (typeof shouldAbort === 'function' && shouldAbort()) return last;
+        last = await runInfPi05StepOnce();
+        if (!last || !last.ok) return last;
+      }
+      return last;
+    }
     async function sendInfArmJointsOnce() {
       const parsed = parseInfArmJoints6();
       if (!parsed.ok) return { ok: false, error: parsed.error };
@@ -4593,6 +4623,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         while (pi05LoopRunning && gen === pi05LoopGen) {
           pi05LoopStepN += 1;
           const n = pi05LoopStepN;
+          const skipN = getChunkSkip();
           if (infPi05Hint) {
             infPi05Hint.textContent = t('infer.hint_looping', {
               n: n, r: roundIdx, R: roundTotal,
@@ -4600,34 +4631,43 @@ PREVIEW_HTML = """<!DOCTYPE html>
           }
           pi05StepBusy = true;
           if (infPi05Step) infPi05Step.disabled = true;
-          let stepRes;
+          if (infChunkSkip) infChunkSkip.disabled = true;
+          let stepRes = null;
           try {
-            stepRes = await runInfPi05StepOnce();
+            for (let si = 0; si < skipN; si++) {
+              if (!pi05LoopRunning || gen !== pi05LoopGen) {
+                return { ok: false, reason: 'stopped', steps: n };
+              }
+              stepRes = await runInfPi05StepOnce();
+              if (!pi05LoopRunning || gen !== pi05LoopGen) {
+                return { ok: false, reason: 'stopped', steps: n };
+              }
+              if (!stepRes || !stepRes.ok) {
+                const err = (stepRes && (stepRes.error || stepRes.message)) || 'step failed';
+                await stopPi05LoopForError(n, err);
+                return { ok: false, reason: 'error', steps: n, error: err };
+              }
+              const termEarly = (stepRes.term_flag != null) ? Number(stepRes.term_flag) : 0;
+              const rejEarly = (stepRes.reject_flag != null) ? Number(stepRes.reject_flag) : 0;
+              if (Number.isFinite(termEarly) && termEarly > 0.5) {
+                return { ok: true, reason: 'term', steps: n };
+              }
+              if (Number.isFinite(rejEarly) && rejEarly !== 0) {
+                await stopPi05Loop(t('infer.hint_loop_reject', { n: n }));
+                return { ok: false, reason: 'reject', steps: n };
+              }
+              if (!stepRes.ik_ok || !Array.isArray(stepRes.next_joints_rad)) {
+                const err = stepRes.ik_error || t('infer.ik_fail', { error: 'no next_joints_rad' });
+                showAppModal(t('infer.ik_fail_title'), err);
+                await stopPi05Loop(t('infer.ik_fail', { error: err }));
+                return { ok: false, reason: 'ik', steps: n, error: err };
+              }
+            }
           } finally {
             pi05StepBusy = false;
           }
           if (!pi05LoopRunning || gen !== pi05LoopGen) {
             return { ok: false, reason: 'stopped', steps: n };
-          }
-          if (!stepRes || !stepRes.ok) {
-            const err = (stepRes && (stepRes.error || stepRes.message)) || 'step failed';
-            await stopPi05LoopForError(n, err);
-            return { ok: false, reason: 'error', steps: n, error: err };
-          }
-          const term = (stepRes.term_flag != null) ? Number(stepRes.term_flag) : 0;
-          const rej = (stepRes.reject_flag != null) ? Number(stepRes.reject_flag) : 0;
-          if (Number.isFinite(term) && term > 0.5) {
-            return { ok: true, reason: 'term', steps: n };
-          }
-          if (Number.isFinite(rej) && rej !== 0) {
-            await stopPi05Loop(t('infer.hint_loop_reject', { n: n }));
-            return { ok: false, reason: 'reject', steps: n };
-          }
-          if (!stepRes.ik_ok || !Array.isArray(stepRes.next_joints_rad)) {
-            const err = stepRes.ik_error || t('infer.ik_fail', { error: 'no next_joints_rad' });
-            showAppModal(t('infer.ik_fail_title'), err);
-            await stopPi05Loop(t('infer.ik_fail', { error: err }));
-            return { ok: false, reason: 'ik', steps: n, error: err };
           }
           if (!fillInfArmJointsFromStep(stepRes)) {
             const err = t('infer.ik_fail', { error: 'bad next_joints_rad' });
@@ -4766,8 +4806,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         pi05StepBusy = true;
         infPi05Step.disabled = true;
         if (infPi05Loop) infPi05Loop.disabled = true;
+        if (infChunkSkip) infChunkSkip.disabled = true;
         try {
-          const r = await runInfPi05StepOnce();
+          syncChunkSkipInput();
+          const r = await runInfPi05StepNTimes(getChunkSkip());
           if (r && r.ok && r.ik_ok) {
             if (infPi05Hint) infPi05Hint.textContent = t('infer.joints_filled');
           } else if (r && r.ok && r.ik_ok === false) {
@@ -4782,6 +4824,19 @@ PREVIEW_HTML = """<!DOCTYPE html>
           const st = await fetch('/api/pi05/status').then((x) => x.json()).catch(() => ({}));
           applyPi05PanelFromPayload(st);
         }
+      });
+    }
+    if (infChunkSkip) {
+      try {
+        const lsS = localStorage.getItem('dcs.inf.chunkSkip');
+        if (lsS != null && lsS !== '') infChunkSkip.value = String(clampChunkSkip(lsS));
+      } catch (e) {}
+      syncChunkSkipInput();
+      infChunkSkip.addEventListener('change', () => {
+        syncChunkSkipInput();
+        try {
+          localStorage.setItem('dcs.inf.chunkSkip', String(getChunkSkip()));
+        } catch (e) {}
       });
     }
     if (infLoopRounds) {
@@ -4806,11 +4861,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
         }
         if (pi05StepBusy) return;
         syncLoopRoundsInput();
+        syncChunkSkipInput();
         pi05LoopRunning = true;
         pi05LoopGen += 1;
         syncPi05LoopButton();
         if (infPi05Step) infPi05Step.disabled = true;
         if (infLoopRounds) infLoopRounds.disabled = true;
+        if (infChunkSkip) infChunkSkip.disabled = true;
         await runPi05LoopRounds();
       });
     }
