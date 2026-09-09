@@ -107,6 +107,12 @@ class ArmHomeGoBody(BaseModel):
     v_norm_rad_s: float | None = None
 
 
+class ArmIkBody(BaseModel):
+    """TCP xyzrpy → joints via server-side IK (drag preview; no arm write)."""
+
+    xyzrpy: list[float]
+
+
 class GelloArmSyncBody(BaseModel):
     enabled: bool
     gello_agent_id: str | None = None
@@ -862,6 +868,76 @@ PREVIEW_HTML = """<!DOCTYPE html>
       cursor: grab;
     }
     .inf-pose-canvas-wrap:active { cursor: grabbing; }
+    .inf-pose-canvas-wrap.is-tcp-drag,
+    .inf-pose-canvas-wrap.is-tcp-drag:active { cursor: move; }
+    .inf-tcp-drag-panel {
+      position: absolute;
+      right: 0.65rem;
+      top: 0.65rem;
+      z-index: 3;
+      min-width: 11.5rem;
+      max-width: min(16rem, calc(100% - 1.3rem));
+      padding: 0.55rem 0.65rem 0.6rem;
+      border: 1px solid rgba(240, 180, 41, 0.35);
+      border-radius: 10px;
+      background: rgba(11, 16, 24, 0.78);
+      color: rgba(232, 240, 248, 0.92);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+      pointer-events: auto;
+    }
+    .inf-tcp-drag-panel[hidden] { display: none !important; }
+    .inf-tcp-drag-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-bottom: 0.35rem;
+    }
+    .inf-tcp-drag-head strong {
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: #f0b429;
+    }
+    .inf-tcp-drag-close {
+      flex: 0 0 auto;
+      width: 1.55rem;
+      height: 1.55rem;
+      margin: 0;
+      padding: 0;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.06);
+      color: rgba(232, 240, 248, 0.9);
+      font-size: 1rem;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .inf-tcp-drag-close:hover {
+      background: rgba(255, 255, 255, 0.12);
+    }
+    .inf-tcp-drag-joints {
+      margin: 0;
+      padding: 0.35rem 0.4rem;
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.28);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.68rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-all;
+      color: rgba(232, 240, 248, 0.95);
+    }
+    .inf-tcp-drag-status {
+      margin-top: 0.35rem;
+      font-size: 0.68rem;
+      line-height: 1.35;
+      color: rgba(180, 198, 214, 0.88);
+    }
+    .inf-tcp-drag-status.is-err { color: #ff8a9a; }
+    .inf-tcp-drag-status.is-ok { color: #7dcca0; }
     .inf-pose-canvas-wrap .inf-pose-trail-clear {
       --btn-h: 2rem;
       --btn-fs: 0.72rem;
@@ -2231,6 +2307,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <span class="inf-pose-trail-clear-ico" aria-hidden="true">C</span>
           <span class="inf-pose-trail-clear-label" data-i18n="infer.pose_trail_clear">清除轨迹</span>
         </button>
+        <div class="inf-tcp-drag-panel" id="infTcpDragPanel" hidden>
+          <div class="inf-tcp-drag-head">
+            <strong data-i18n="infer.tcp_drag_title">拖拽 IK</strong>
+            <button type="button" class="inf-tcp-drag-close" id="infTcpDragClose" data-i18n-attr="aria-label" data-i18n="infer.tcp_drag_close" aria-label="关闭">×</button>
+          </div>
+          <pre class="inf-tcp-drag-joints" id="infTcpDragJoints">—</pre>
+          <div class="inf-tcp-drag-status" id="infTcpDragStatus" data-i18n="infer.tcp_drag_hint">拖拽琥珀色 TCP 球预览关节</div>
+        </div>
       </div>
       <div class="inf-pose-hud" id="infPoseHud" data-i18n="infer.pose_idle">等待 arm · Read…</div>
     </aside>
@@ -3700,6 +3784,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
        * Prefer configured home_joints_rad when live Read is missing or ~0.
        */
       function jointsForEc616Viz() {
+        const dragQ = window.__infPoseDragJoints;
+        if (Array.isArray(dragQ) && dragQ.length >= 6
+          && dragQ.slice(0, 6).every((v) => Number.isFinite(Number(v)))) {
+          return dragQ.slice(0, 6);
+        }
         const live = window.__armReadJoints;
         const home = window.__armHome && window.__armHome.home_joints_rad;
         const liveOk = Array.isArray(live) && live.length >= 6
@@ -3791,6 +3880,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
       );
       const tipAxes = new THREE.AxesHelper(0.035);
       tcpMarker.add(tipAxes);
+      // Larger invisible pick target (visual sphere is tiny).
+      const tcpHit = new THREE.Mesh(
+        new THREE.SphereGeometry(0.028, 12, 12),
+        new THREE.MeshBasicMaterial({
+          color: 0xf0b429,
+          transparent: true,
+          opacity: 0.0,
+          depthWrite: false,
+        }),
+      );
+      tcpHit.name = 'tcpHit';
+      tcpMarker.add(tcpHit);
       scene.add(tcpMarker);
       // Current server goal — small red/pink (latest)
       const goalMarker = new THREE.Mesh(
@@ -3829,6 +3930,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       let followTcp = true;
       function robotToThree(x, y, z) {
         return { x: x, y: z, z: -y };
+      }
+      function threeToRobot(x, y, z) {
+        return { x: x, y: -z, z: y };
       }
       function parseXyz(arr) {
         if (!Array.isArray(arr) || arr.length < 3) return null;
@@ -3956,11 +4060,185 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const panWorld = new THREE.Vector3();
       const right = new THREE.Vector3();
       const up = new THREE.Vector3();
-      function onPointerDown(ev) {
-        if (ev.button === 2 || ev.button === 1) dragMode = 'pan';
-        else if (ev.button === 0) dragMode = 'orbit';
-        else return;
+      const raycaster = new THREE.Raycaster();
+      const pointerNdc = new THREE.Vector2();
+      // Heavy-mass TCP scrub: impulse / MASS → laggy trend following (not cursor snap).
+      const TCP_MASS = 90;
+      const TCP_DAMP = 0.92;
+      const TCP_V_MAX = 0.06;
+      const TCP_IMPULSE_PX = 0.012;
+      const IK_MIN_INTERVAL_MS = 100;
+      let tcpDragActive = false;
+      let tcpPointerDown = false;
+      let dragXyzrpy = null;
+      let dragVelThree = new THREE.Vector3();
+      let lastTickMs = performance.now();
+      let lastIkMs = 0;
+      let ikInFlight = false;
+      let ikPending = false;
+      const dragPanel = document.getElementById('infTcpDragPanel');
+      const dragJointsEl = document.getElementById('infTcpDragJoints');
+      const dragStatusEl = document.getElementById('infTcpDragStatus');
+      const dragCloseBtn = document.getElementById('infTcpDragClose');
+      function setDragStatus(kind, text) {
+        if (!dragStatusEl) return;
+        dragStatusEl.classList.remove('is-ok', 'is-err');
+        if (kind === 'ok') dragStatusEl.classList.add('is-ok');
+        if (kind === 'err') dragStatusEl.classList.add('is-err');
+        dragStatusEl.textContent = text;
+      }
+      function fillInfArmJointsFromIk(joints) {
+        const el = document.getElementById('infArmJoints');
+        if (!el || !Array.isArray(joints) || joints.length < 6) return false;
+        const vals = [];
+        for (let i = 0; i < 6; i++) {
+          const v = Number(joints[i]);
+          if (!Number.isFinite(v)) return false;
+          vals.push(v.toFixed(4));
+        }
+        el.value = vals.join(',');
+        return true;
+      }
+      function renderDragJoints(joints) {
+        if (!dragJointsEl) return;
+        if (!Array.isArray(joints) || joints.length < 6) {
+          dragJointsEl.textContent = '—';
+          return;
+        }
+        const lines = [];
+        for (let i = 0; i < 6; i++) {
+          lines.push(t('infer.tcp_drag_joint_line', {
+            i: String(i + 1),
+            v: Number(joints[i]).toFixed(4),
+          }));
+        }
+        dragJointsEl.textContent = lines.join('\\n');
+      }
+      function openTcpDragPanel() {
+        if (dragPanel) dragPanel.hidden = false;
+        if (wrap) wrap.classList.add('is-tcp-drag');
+        setDragStatus('', t('infer.tcp_drag_hint'));
+      }
+      function closeTcpDragPreview() {
+        tcpDragActive = false;
+        tcpPointerDown = false;
+        dragMode = null;
+        dragVelThree.set(0, 0, 0);
+        dragXyzrpy = null;
+        window.__infPoseDragJoints = null;
+        ikPending = false;
+        if (dragPanel) dragPanel.hidden = true;
+        if (wrap) wrap.classList.remove('is-tcp-drag');
+        if (dragJointsEl) dragJointsEl.textContent = '—';
+        setDragStatus('', t('infer.tcp_drag_hint'));
+      }
+      if (dragCloseBtn) {
+        dragCloseBtn.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          closeTcpDragPreview();
+        });
+      }
+      function pointerToNdc(ev) {
+        const rect = canvas.getBoundingClientRect();
+        const w = Math.max(1, rect.width);
+        const h = Math.max(1, rect.height);
+        pointerNdc.x = ((ev.clientX - rect.left) / w) * 2 - 1;
+        pointerNdc.y = -((ev.clientY - rect.top) / h) * 2 + 1;
+      }
+      function hitTcpMarker(ev) {
+        if (!hasTcp) return false;
+        pointerToNdc(ev);
+        raycaster.setFromCamera(pointerNdc, camera);
+        const hits = raycaster.intersectObject(tcpMarker, true);
+        return !!(hits && hits.length);
+      }
+      function beginTcpDrag() {
+        const src = Array.isArray(window.__armReadCartesian) && window.__armReadCartesian.length >= 6
+          ? window.__armReadCartesian
+          : (window.__armHome && window.__armHome.home_cartesian_xyzrpy);
+        const xyz = parseXyz(src);
+        if (!xyz) return false;
+        const rx = Number(src[3]);
+        const ry = Number(src[4]);
+        const rz = Number(src[5]);
+        dragXyzrpy = [
+          xyz.x, xyz.y, xyz.z,
+          Number.isFinite(rx) ? rx : 0,
+          Number.isFinite(ry) ? ry : 0,
+          Number.isFinite(rz) ? rz : 0,
+        ];
+        dragVelThree.set(0, 0, 0);
+        tcpDragActive = true;
         followTcp = false;
+        openTcpDragPanel();
+        setTcpPose(dragXyzrpy);
+        scheduleIk(true);
+        return true;
+      }
+      async function runIkOnce() {
+        if (!tcpDragActive || !dragXyzrpy) return;
+        if (ikInFlight) {
+          ikPending = true;
+          return;
+        }
+        ikInFlight = true;
+        ikPending = false;
+        lastIkMs = performance.now();
+        setDragStatus('', t('infer.tcp_drag_waiting'));
+        const body = { xyzrpy: dragXyzrpy.slice(0, 6) };
+        try {
+          const r = await fetch('/api/arm/ik', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          }).then((x) => x.json());
+          if (!tcpDragActive) return;
+          if (r && r.ok && Array.isArray(r.joints_rad) && r.joints_rad.length >= 6) {
+            window.__infPoseDragJoints = r.joints_rad.slice(0, 6).map(Number);
+            renderDragJoints(window.__infPoseDragJoints);
+            fillInfArmJointsFromIk(window.__infPoseDragJoints);
+            setEc616JointsFromMachineRad(window.__infPoseDragJoints);
+            setDragStatus('ok', t('infer.tcp_drag_ok'));
+          } else {
+            const err = (r && r.error) ? String(r.error) : 'unknown';
+            setDragStatus('err', t('infer.tcp_drag_fail', { error: err }));
+          }
+        } catch (e) {
+          if (tcpDragActive) {
+            setDragStatus('err', t('infer.tcp_drag_fail', { error: String(e && e.message || e) }));
+          }
+        } finally {
+          ikInFlight = false;
+          if (ikPending && tcpDragActive) {
+            ikPending = false;
+            scheduleIk(true);
+          }
+        }
+      }
+      function scheduleIk(force) {
+        if (!tcpDragActive || !dragXyzrpy) return;
+        const now = performance.now();
+        if (!force && (now - lastIkMs) < IK_MIN_INTERVAL_MS) {
+          ikPending = true;
+          return;
+        }
+        runIkOnce();
+      }
+      function onPointerDown(ev) {
+        if (ev.button === 2 || ev.button === 1) {
+          dragMode = 'pan';
+        } else if (ev.button === 0) {
+          if (hitTcpMarker(ev) && beginTcpDrag()) {
+            dragMode = 'tcp';
+            tcpPointerDown = true;
+          } else {
+            dragMode = 'orbit';
+          }
+        } else {
+          return;
+        }
+        if (dragMode !== 'tcp') followTcp = false;
         lastPx = ev.clientX;
         lastPy = ev.clientY;
         try { canvas.setPointerCapture(ev.pointerId); } catch (_) {}
@@ -3986,10 +4264,26 @@ PREVIEW_HTML = """<!DOCTYPE html>
           panWorld.addScaledVector(up, dy * scale);
           orbitTarget.add(panWorld);
           applyCam();
+        } else if (dragMode === 'tcp' && tcpPointerDown && dragXyzrpy) {
+          // Mouse delta → weak impulse in camera plane (heavy mass).
+          const dist = Math.max(0.15, spherical.radius);
+          const scale = dist * TCP_IMPULSE_PX;
+          right.setFromMatrixColumn(camera.matrix, 0);
+          up.setFromMatrixColumn(camera.matrix, 1);
+          const ix = (-dx * scale) / TCP_MASS;
+          const iy = (dy * scale) / TCP_MASS;
+          dragVelThree.addScaledVector(right, ix);
+          dragVelThree.addScaledVector(up, iy);
+          const speed = dragVelThree.length();
+          if (speed > TCP_V_MAX) dragVelThree.multiplyScalar(TCP_V_MAX / speed);
         }
         ev.preventDefault();
       }
       function onPointerUp(ev) {
+        if (dragMode === 'tcp') {
+          tcpPointerDown = false;
+          // Keep tcpDragActive + panel open; inertia damps out in tick.
+        }
         dragMode = null;
         try { canvas.releasePointerCapture(ev.pointerId); } catch (_) {}
       }
@@ -4007,6 +4301,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       canvas.addEventListener('wheel', onWheel, { passive: false });
       canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
       canvas.addEventListener('dblclick', () => {
+        if (tcpDragActive) return;
         followTcp = true;
         if (hasTcp) {
           orbitTarget.copy(tcpMarker.position);
@@ -4014,17 +4309,48 @@ PREVIEW_HTML = """<!DOCTYPE html>
         }
       });
       function tick() {
-        const q = jointsForEc616Viz();
-        const homeQ = window.__armHome && window.__armHome.home_joints_rad;
-        const showingHome = !!(q && Array.isArray(homeQ) && homeQ.length >= 6
-          && q.every((v, i) => Math.abs(Number(v) - Number(homeQ[i])) < 1e-6));
-        if (showingHome && window.__armHome.home_cartesian_xyzrpy) {
-          setTcpPose(window.__armHome.home_cartesian_xyzrpy);
-        } else if (window.__armReadCartesian) {
-          setTcpPose(window.__armReadCartesian);
-        } else if (window.__armHome && window.__armHome.home_cartesian_xyzrpy) {
-          setTcpPose(window.__armHome.home_cartesian_xyzrpy);
+        const now = performance.now();
+        let dt = (now - lastTickMs) / 1000;
+        lastTickMs = now;
+        if (!(dt > 0) || dt > 0.1) dt = 1 / 60;
+        if (tcpDragActive && dragXyzrpy) {
+          if (dragVelThree.lengthSq() > 1e-12) {
+            tcpMarker.position.x += dragVelThree.x * dt;
+            tcpMarker.position.y += dragVelThree.y * dt;
+            tcpMarker.position.z += dragVelThree.z * dt;
+            dragVelThree.multiplyScalar(Math.pow(TCP_DAMP, dt * 60));
+            if (dragVelThree.lengthSq() < 1e-10) dragVelThree.set(0, 0, 0);
+            const rob = threeToRobot(
+              tcpMarker.position.x,
+              tcpMarker.position.y,
+              tcpMarker.position.z,
+            );
+            dragXyzrpy[0] = rob.x;
+            dragXyzrpy[1] = rob.y;
+            dragXyzrpy[2] = rob.z;
+            hasTcp = true;
+            refreshHud(
+              { x: dragXyzrpy[0], y: dragXyzrpy[1], z: dragXyzrpy[2] },
+              lastGoal,
+            );
+            scheduleIk(false);
+          } else if (ikPending) {
+            scheduleIk(true);
+          }
+        } else {
+          const qLive = jointsForEc616Viz();
+          const homeQ = window.__armHome && window.__armHome.home_joints_rad;
+          const showingHome = !!(qLive && Array.isArray(homeQ) && homeQ.length >= 6
+            && qLive.every((v, i) => Math.abs(Number(v) - Number(homeQ[i])) < 1e-6));
+          if (showingHome && window.__armHome.home_cartesian_xyzrpy) {
+            setTcpPose(window.__armHome.home_cartesian_xyzrpy);
+          } else if (window.__armReadCartesian) {
+            setTcpPose(window.__armReadCartesian);
+          } else if (window.__armHome && window.__armHome.home_cartesian_xyzrpy) {
+            setTcpPose(window.__armHome.home_cartesian_xyzrpy);
+          }
         }
+        const q = jointsForEc616Viz();
         if (q) setEc616JointsFromMachineRad(q);
         renderer.render(scene, camera);
         requestAnimationFrame(tick);
@@ -7439,6 +7765,7 @@ def create_viz_app(
     arm_home_set: Callable[..., dict[str, Any]] | None = None,
     arm_home_save: Callable[..., dict[str, Any]] | None = None,
     arm_home_go: Callable[..., dict[str, Any]] | None = None,
+    arm_ik: Callable[..., dict[str, Any]] | None = None,
     shutdown: Callable[[], dict[str, Any]] | None = None,
     boot_error: str | None = None,
     boot_box: dict[str, Any] | None = None,
@@ -7930,6 +8257,12 @@ def create_viz_app(
             t_max_s=req.t_max_s,
             v_norm_rad_s=req.v_norm_rad_s,
         )
+
+    @app.post("/api/arm/ik")
+    async def arm_ik_post(req: ArmIkBody) -> dict[str, Any]:
+        if arm_ik is None:
+            return {"ok": False, "error": "arm IK unavailable", "joints_rad": None}
+        return await asyncio.to_thread(arm_ik, req.xyzrpy)
 
     @app.get("/api/arm/gello-sync")
     async def arm_gello_sync_get() -> dict[str, Any]:

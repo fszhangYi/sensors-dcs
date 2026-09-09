@@ -580,6 +580,18 @@ class Orchestrator:
             }
         return xyzrpy_to_joints_rad(xyzrpy, q_seed_rad=seed)
 
+    def arm_ik(self, xyzrpy: list[float] | None) -> dict[str, Any]:
+        """Public IK for TCP drag preview (no arm write)."""
+        if not isinstance(xyzrpy, (list, tuple)) or len(xyzrpy) < 6:
+            return {"ok": False, "error": "xyzrpy must have 6 floats", "joints_rad": None}
+        try:
+            vals = [float(x) for x in list(xyzrpy)[:6]]
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "xyzrpy must be 6 floats", "joints_rad": None}
+        if any(not (v == v) or v in (float("inf"), float("-inf")) for v in vals):
+            return {"ok": False, "error": "xyzrpy has non-finite values", "joints_rad": None}
+        return self._xyzrpy_to_joints(vals)
+
     @staticmethod
     def _next_state_grip(next_state: Any) -> float | None:
         """Extract gripper ``position_norm`` from serve ``next_state[6]``."""
@@ -2296,6 +2308,7 @@ class Orchestrator:
             arm_home_set=self.set_arm_home,
             arm_home_save=self.save_arm_home_to_yaml,
             arm_home_go=self.go_arm_home,
+            arm_ik=self.arm_ik,
             shutdown=self.request_shutdown,
             boot_box=boot_box,
             postprocess_save_dir=str(self.recorder.save_dir),

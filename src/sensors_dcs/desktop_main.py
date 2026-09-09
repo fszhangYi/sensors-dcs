@@ -195,6 +195,7 @@ def main(argv: list[str] | None = None) -> None:
         arm_home_set=orch.set_arm_home,
         arm_home_save=orch.save_arm_home_to_yaml,
         arm_home_go=orch.go_arm_home,
+        arm_ik=orch.arm_ik,
         shutdown=_shutdown,
         boot_box=boot_box,
         config_path=str(cfg_path),
