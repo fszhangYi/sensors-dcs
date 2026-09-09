@@ -375,95 +375,62 @@
       lower="-4.188" upper="2.094" effort="100.0" velocity="0.35"/>
   </joint>
 
-  <!-- End-effector: palm + parallel jaws, mounted OUTSIDE Link6 flange (z>=0) -->
-  <link name="gripper_centor_link">
+  <!-- FT sensor KWR75 (H=33.5mm) between Link6 flange and AG-95 -->
+  <link name="ft_kwr75_link">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.05"/>
-      <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="1e-5"/>
+      <origin xyz="0 0 0.01675" rpy="0 0 0"/>
+      <mass value="0.25"/>
+      <inertia ixx="2e-4" ixy="0" ixz="0" iyy="2e-4" iyz="0" izz="2e-4"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="meshes/gripper_centor_link.STL"/>
+        <mesh filename="meshes/KWR75.STL"/>
       </geometry>
-      <material name="gripper_center">
-        <color rgba="0.35 0.35 0.38 1"/>
+      <material name="ft_kwr75">
+        <color rgba="0.55 0.58 0.62 1"/>
       </material>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="meshes/gripper_centor_link.STL"/>
+        <mesh filename="meshes/KWR75.STL"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="ft_kwr75_fixed" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="Link6"/>
+    <child link="ft_kwr75_link"/>
+  </joint>
+
+  <!-- End-effector: DH AG-95, mounted on KWR75 tool face (z=+0.0335) -->
+  <link name="gripper_centor_link">
+    <inertial>
+      <origin xyz="0 0 0.09" rpy="0 0 0"/>
+      <mass value="0.8"/>
+      <inertia ixx="1e-3" ixy="0" ixz="0" iyy="1e-3" iyz="0" izz="1e-3"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/AG95.STL"/>
+      </geometry>
+      <material name="gripper_ag95">
+        <color rgba="0.22 0.22 0.24 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/AG95.STL"/>
       </geometry>
     </collision>
   </link>
   <joint name="gripper_centor_fixed" type="fixed">
-    <origin xyz="0 0 0.025" rpy="0 0 0"/>
-    <parent link="Link6"/>
+    <origin xyz="0 0 0.0335" rpy="0 0 0"/>
+    <parent link="ft_kwr75_link"/>
     <child link="gripper_centor_link"/>
-  </joint>
-
-  <link name="gripper_1_link">
-    <inertial>
-      <origin xyz="-0.010164529829209 -0.0428625582773113 -0.0290009634440926" rpy="0 0 0"/>
-      <mass value="0.0229473565168191"/>
-      <inertia ixx="2.67319833363079E-05" ixy="5.28739561760064E-07" ixz="4.53208934357424E-10" iyy="1.30658365460368E-05" iyz="8.86316306994805E-10" izz="1.74706100511411E-05"/>
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="meshes/gripper_1_link.STL"/>
-      </geometry>
-      <material name="gripper_material">
-        <color rgba="0.2 0.2 0.2 1"/>
-      </material>
-    </visual>
-    <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="meshes/gripper_1_link.STL"/>
-      </geometry>
-    </collision>
-  </link>
-  <joint name="gripper_1_joint" type="revolute">
-    <!-- 指长+Z，铰链+Y，两指沿±X；镜像面=法兰 YZ（非屏幕/XZ 面） -->
-    <origin xyz="0.02916 0.0005 0.0105" rpy="-1.5708 -1.5708 0"/>
-    <parent link="Link6"/>
-    <child link="gripper_1_link"/>
-    <axis xyz="0 0 1"/>
-    <limit lower="0" upper="0.7" effort="20" velocity="0.35"/>
-  </joint>
-
-  <link name="gripper_2_link">
-    <inertial>
-      <origin xyz="-0.010164529829209 0.0428625582773113 -0.0290009634440926" rpy="0 0 0"/>
-      <mass value="0.0229473565168191"/>
-      <inertia ixx="2.67319833363079E-05" ixy="5.28739561760064E-07" ixz="4.53208934357424E-10" iyy="1.30658365460368E-05" iyz="8.86316306994805E-10" izz="1.74706100511411E-05"/>
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <!-- 局部 Y 翻转配合当前姿态 = 法兰 YZ 镜像（翻 X） -->
-        <mesh filename="meshes/gripper_1_link.STL" scale="1 -1 1"/>
-      </geometry>
-      <material name="gripper_material">
-        <color rgba="0.2 0.2 0.2 1"/>
-      </material>
-    </visual>
-    <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="meshes/gripper_1_link.STL" scale="1 -1 1"/>
-      </geometry>
-    </collision>
-  </link>
-  <joint name="gripper_2_joint" type="revolute">
-    <origin xyz="-0.02916 0.0005 0.0105" rpy="-1.5708 -1.5708 0"/>
-    <parent link="Link6"/>
-    <child link="gripper_2_link"/>
-    <axis xyz="0 0 1"/>
-    <limit lower="-0.7" upper="0.7" effort="20" velocity="0.35"/>
   </joint>
 
 </robot>
