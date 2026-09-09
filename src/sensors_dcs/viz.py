@@ -956,6 +956,84 @@ PREVIEW_HTML = """<!DOCTYPE html>
       height: 100%;
       touch-action: none;
     }
+    .inf-pose-load {
+      position: absolute;
+      inset: 0;
+      z-index: 3;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      padding: 1rem;
+      background: rgba(11, 16, 24, 0.88);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      color: rgba(232, 240, 248, 0.92);
+      pointer-events: none;
+      opacity: 1;
+      transition: opacity 0.28s var(--motion-ease, ease);
+    }
+    .inf-pose-load[hidden] {
+      display: none !important;
+    }
+    .inf-pose-load.is-done {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .inf-pose-load-spinner {
+      width: 2.1rem;
+      height: 2.1rem;
+      border-radius: 50%;
+      border: 2px solid rgba(61, 214, 198, 0.22);
+      border-top-color: #3dd6c6;
+      animation: inf-pose-spin 0.75s linear infinite;
+    }
+    .inf-pose-load.is-error .inf-pose-load-spinner {
+      animation: none;
+      border-color: rgba(255, 92, 138, 0.35);
+      border-top-color: #ff5c8a;
+    }
+    @keyframes inf-pose-spin {
+      to { transform: rotate(360deg); }
+    }
+    .inf-pose-load-label {
+      font-size: 0.78rem;
+      font-weight: 550;
+      letter-spacing: 0.02em;
+      text-align: center;
+      max-width: 16rem;
+      line-height: 1.35;
+    }
+    .inf-pose-load-bar {
+      position: relative;
+      width: min(12rem, 70%);
+      height: 3px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.1);
+      overflow: hidden;
+    }
+    .inf-pose-load-bar > i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #2bb3a6, #3dd6c6);
+      transition: width 0.15s linear;
+    }
+    .inf-pose-load.is-indeterminate .inf-pose-load-bar > i {
+      width: 36% !important;
+      transition: none;
+      animation: inf-pose-bar-slide 1.1s ease-in-out infinite;
+    }
+    @keyframes inf-pose-bar-slide {
+      0% { transform: translateX(-120%); }
+      100% { transform: translateX(320%); }
+    }
+    .inf-pose-load.is-error .inf-pose-load-bar > i {
+      background: #ff5c8a;
+      animation: none;
+    }
     .inf-pose-hud {
       flex: 0 0 auto;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -2142,6 +2220,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
       </div>
       <div class="inf-pose-canvas-wrap">
         <canvas id="infPoseCanvas"></canvas>
+        <div class="inf-pose-load is-indeterminate" id="infPoseLoad" role="status" aria-live="polite">
+          <div class="inf-pose-load-spinner" aria-hidden="true"></div>
+          <div class="inf-pose-load-label" id="infPoseLoadLabel" data-i18n="infer.pose_loading">正在加载 EC616 数模…</div>
+          <div class="inf-pose-load-bar" aria-hidden="true"><i id="infPoseLoadBar"></i></div>
+        </div>
         <button type="button" class="inf-pose-trail-clear" id="infPoseTrailClear" data-i18n-attr="aria-label" data-i18n="infer.pose_trail_clear" aria-label="清除轨迹" data-i18n-title="infer.pose_trail_clear_hint" title="清除目标轨迹点与连线">
           <span class="inf-pose-trail-clear-ico" aria-hidden="true">C</span>
           <span class="inf-pose-trail-clear-label" data-i18n="infer.pose_trail_clear">清除轨迹</span>
@@ -3484,10 +3567,52 @@ PREVIEW_HTML = """<!DOCTYPE html>
     (function initInfPoseViz() {
       const canvas = document.getElementById('infPoseCanvas');
       const hud = document.getElementById('infPoseHud');
+      const loadEl = document.getElementById('infPoseLoad');
+      const loadLabel = document.getElementById('infPoseLoadLabel');
+      const loadBar = document.getElementById('infPoseLoadBar');
+      function setLoadUi(state, pct) {
+        if (!loadEl) return;
+        // After a successful close, ignore late LoadingManager progress/start events.
+        if (loadEl.dataset.closed === '1' && state === 'loading') return;
+        if (state === 'hide') {
+          loadEl.dataset.closed = '1';
+          loadEl.classList.remove('is-indeterminate');
+          loadEl.classList.add('is-done');
+          window.setTimeout(() => {
+            loadEl.hidden = true;
+            loadEl.classList.remove('is-done', 'is-error', 'is-indeterminate');
+          }, 280);
+          return;
+        }
+        loadEl.dataset.closed = '0';
+        loadEl.hidden = false;
+        loadEl.classList.remove('is-done');
+        loadEl.classList.toggle('is-error', state === 'error');
+        const hasPct = Number.isFinite(pct) && pct > 0;
+        loadEl.classList.toggle('is-indeterminate', state === 'loading' && !hasPct);
+        if (loadBar && hasPct) {
+          loadBar.style.width = Math.max(0, Math.min(100, pct)).toFixed(0) + '%';
+        } else if (loadBar && state === 'loading') {
+          loadBar.style.width = '';
+        }
+        if (loadLabel) {
+          if (state === 'error') {
+            loadLabel.textContent = t('infer.pose_load_fail');
+          } else if (hasPct) {
+            loadLabel.textContent = t('infer.pose_loading_pct', { pct: Math.round(pct) });
+          } else {
+            loadLabel.textContent = t('infer.pose_loading');
+          }
+        }
+      }
+      // Paint the mask before WebGL / URDF work blocks the main thread.
+      setLoadUi('loading', 0);
       if (!canvas || typeof THREE === 'undefined') {
         if (hud) hud.textContent = t('infer.pose_no_three');
+        setLoadUi('error', 0);
         return;
       }
+      function bootInfPose() {
       const wrap = canvas.parentElement;
       const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: false });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -3583,9 +3708,21 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (typeof URDFLoader === 'undefined' || typeof THREE.STLLoader !== 'function') {
           ec616LoadError = 'urdf-loader';
           console.warn('[infPose] URDFLoader / STLLoader missing');
+          setLoadUi('error', 0);
           return;
         }
+        setLoadUi('loading', 0);
         const manager = new THREE.LoadingManager();
+        // URDFLoader.onComplete fires after XML parse — meshes still loading.
+        // Hide only when LoadingManager finishes every STL/texture item.
+        manager.onLoad = () => {
+          setLoadUi('loading', 100);
+          setLoadUi('hide');
+        };
+        manager.onProgress = (_url, loaded, total) => {
+          const pct = total > 0 ? (100 * loaded) / total : 0;
+          setLoadUi('loading', pct);
+        };
         manager.onError = (url) => {
           console.warn('[infPose] EC616 asset error', url);
         };
@@ -3593,6 +3730,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         loader.parseCollision = false;
         loader.packages = '';
         loader.workingPath = EC616_URDF_URL.replace(/[^/]+$/, '');
+        // Kick off URDF fetch immediately (before orbit markers / trail setup).
         loader.load(
           EC616_URDF_URL,
           (robot) => {
@@ -3610,15 +3748,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
                 // Last-resort fold until home / Read arrives.
                 setEc616JointsFromMachineRad([0, -45, 60, 0, 30, 0].map((d) => d * DEG2RAD));
               }
+              // Do not hide here — wait for manager.onLoad (all meshes).
             } catch (err) {
               console.warn('[infPose] EC616 mount failed', err);
               ec616LoadError = String(err && err.message ? err.message : err);
+              setLoadUi('error', 0);
             }
           },
           undefined,
           (err) => {
             console.warn('[infPose] EC616 URDF load failed', err);
             ec616LoadError = String(err && err.message ? err.message : err);
+            setLoadUi('error', 0);
             if (hud) {
               const base = hud.textContent || '';
               const note = t('infer.pose_no_urdf');
@@ -3912,6 +4053,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
       applyEc616VizJoints();
       tick();
+      } // end bootInfPose
+      // Double-rAF: let the loading mask paint before WebGL init blocks the thread.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(bootInfPose);
+      });
     })();
 
     function parseInfArmJoints6() {

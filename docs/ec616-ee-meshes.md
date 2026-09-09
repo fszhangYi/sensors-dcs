@@ -19,6 +19,7 @@ Link6（法兰）
 
 - **只影响数模显示**（`setJointValue` / STL），**不会**下发 Arm / Home / 夹爪指令。  
 - AG95 STEP 为整机实体，**无数模开合动画**；夹爪 `position_norm` 只在状态卡显示，不驱动 Three.js。  
+- 全精度网格较大时，姿态画布会显示加载动画与进度（`LoadingManager` 按 URDF/STL 条目计数）。  
 - 动力学用的 TCP 偏置（默认 `z=0.18`）仍是独立配置，不随本数模自动改写。
 
 ---
