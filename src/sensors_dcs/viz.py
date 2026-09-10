@@ -1633,6 +1633,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
       margin-top: 0.35rem;
     }
     .arm-home-set-row button { --btn-h: 1.7rem; --btn-fs: 0.78rem; --btn-pad-x: 0.55rem; }
+    .arm-read-copy-row {
+      display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center;
+      margin-top: 0.35rem;
+    }
+    .arm-read-copy-row button { --btn-h: 1.7rem; --btn-fs: 0.78rem; --btn-pad-x: 0.55rem; }
+    .arm-read-copy-hint { color: var(--muted); font-size: 0.75rem; }
     #infPi05Out { display: none; }
     .inf-pi05-raw-modal .modal-card,
     .inf-ws-raw-modal .modal-card {
@@ -7119,7 +7125,36 @@ PREVIEW_HTML = """<!DOCTYPE html>
       poseRoot.hidden = false;
     }
 
-        function renderArmRead(card, frame, hzText) {
+    function fmtSendCsv6(arr) {
+      if (!Array.isArray(arr) || arr.length < 6) return null;
+      const out = [];
+      for (let i = 0; i < 6; i++) {
+        const v = Number(arr[i]);
+        if (!Number.isFinite(v)) return null;
+        out.push(v.toFixed(4));
+      }
+      return out.join(',');
+    }
+    async function copyTextToClipboard(text) {
+      const s = String(text || '');
+      if (!s) throw new Error(t('arm.copy_empty'));
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(s);
+        return;
+      }
+      const ta = document.createElement('textarea');
+      ta.value = s;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (!ok) throw new Error('execCommand copy failed');
+    }
+
+    function renderArmRead(card, frame, hzText) {
       card.querySelector('h2').textContent = 'robot · Read';
       card.querySelector('.k-kind').textContent = frame.kind;
       card.querySelector('.k-seq').textContent = String(frame.seq);
@@ -7138,6 +7173,49 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (cmd) cmd.remove();
       renderJointVals(root, joints.map((v, i) => ({ lab: 'j' + i, cal: v })));
       renderPoseRow(card, p.cartesian_xyzrpy);
+      if (!card.querySelector('.arm-read-copy-row')) {
+        const copyRow = document.createElement('div');
+        copyRow.className = 'arm-read-copy-row';
+        copyRow.innerHTML =
+          '<button type="button" class="arm-copy-joints" data-i18n="arm.copy_joints">复制 joints</button>' +
+          '<button type="button" class="arm-copy-pose" data-i18n="arm.copy_pose">复制 pose</button>' +
+          '<span class="hint arm-read-copy-hint"></span>';
+        card.appendChild(copyRow);
+        applyDomI18n(copyRow);
+        const hint = copyRow.querySelector('.arm-read-copy-hint');
+        const flash = (msg) => {
+          if (!hint) return;
+          hint.textContent = msg;
+          try { clearTimeout(hint._t); } catch (_) {}
+          hint._t = setTimeout(() => { if (hint.textContent === msg) hint.textContent = ''; }, 1800);
+        };
+        const btnJ = copyRow.querySelector('.arm-copy-joints');
+        const btnP = copyRow.querySelector('.arm-copy-pose');
+        if (btnJ) {
+          btnJ.addEventListener('click', async () => {
+            try {
+              const csv = fmtSendCsv6(window.__armReadJoints);
+              if (!csv) throw new Error(t('arm.copy_empty'));
+              await copyTextToClipboard(csv);
+              flash(t('arm.copy_ok'));
+            } catch (e) {
+              flash(t('arm.copy_fail', { error: String(e && e.message || e) }));
+            }
+          });
+        }
+        if (btnP) {
+          btnP.addEventListener('click', async () => {
+            try {
+              const csv = fmtSendCsv6(window.__armReadCartesian);
+              if (!csv) throw new Error(t('arm.copy_empty'));
+              await copyTextToClipboard(csv);
+              flash(t('arm.copy_ok'));
+            } catch (e) {
+              flash(t('arm.copy_fail', { error: String(e && e.message || e) }));
+            }
+          });
+        }
+      }
       if (!card.querySelector('.arm-home-set-row')) {
         const row = document.createElement('div');
         row.className = 'arm-home-set-row';
