@@ -2383,7 +2383,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <span class="inf-pose-trail-clear-ico" aria-hidden="true">C</span>
           <span class="inf-pose-trail-clear-label" data-i18n="infer.pose_trail_clear">清除轨迹</span>
         </button>
-        <label class="inf-pose-trail-color" data-i18n-title="infer.pose_trail_color_hint" title="轨迹线与路点颜色">
+        <label class="inf-pose-trail-color" data-i18n-title="infer.pose_trail_color_hint" title="仅影响之后新增的轨迹点与连线">
           <input type="color" id="infPoseTrailColor" value="#3dd6c6" data-i18n-attr="aria-label" data-i18n="infer.pose_trail_color" aria-label="轨迹颜色" />
           <span class="inf-pose-trail-color-label" data-i18n="infer.pose_trail_color">轨迹色</span>
         </label>
@@ -4086,29 +4086,36 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (parsed != null) trailColor = parsed;
       } catch (_) {}
       const waypointGeom = new THREE.SphereGeometry(0.0035, 10, 10);
-      const waypointMat = new THREE.MeshBasicMaterial({ color: trailColor });
       const waypointGroup = new THREE.Group();
       scene.add(waypointGroup);
       const trailPosArr = [];
       const trailLineGeom = new THREE.BufferGeometry();
       const trailLinePos = new Float32Array(WAYPOINT_MAX * 3);
+      const trailLineCol = new Float32Array(WAYPOINT_MAX * 3);
       trailLineGeom.setAttribute('position', new THREE.BufferAttribute(trailLinePos, 3));
+      trailLineGeom.setAttribute('color', new THREE.BufferAttribute(trailLineCol, 3));
       trailLineGeom.setDrawRange(0, 0);
-      const trailLine = new THREE.Line(
-        trailLineGeom,
-        new THREE.LineBasicMaterial({ color: trailColor, transparent: true, opacity: 0.85 }),
-      );
+      const trailLineMat = new THREE.LineBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.85,
+      });
+      const trailLine = new THREE.Line(trailLineGeom, trailLineMat);
       scene.add(trailLine);
+      const _trailColTmp = new THREE.Color();
+      function colorToRgb01(hexNum, out) {
+        _trailColTmp.setHex((hexNum >>> 0) & 0xffffff);
+        out[0] = _trailColTmp.r;
+        out[1] = _trailColTmp.g;
+        out[2] = _trailColTmp.b;
+      }
       function applyTrailColor(hexOrNum) {
+        // Pen color only — already-drawn waypoints/segments keep their baked color.
         let n = null;
         if (typeof hexOrNum === 'number' && Number.isFinite(hexOrNum)) n = hexOrNum >>> 0;
         else n = parseTrailColorHex(hexOrNum);
         if (n == null) n = TRAIL_COLOR_DEFAULT;
         trailColor = n & 0xffffff;
-        if (waypointMat && waypointMat.color) waypointMat.color.setHex(trailColor);
-        if (trailLine && trailLine.material && trailLine.material.color) {
-          trailLine.material.color.setHex(trailColor);
-        }
         const css = trailColorToCss(trailColor);
         const el = document.getElementById('infPoseTrailColor');
         if (el && el.value !== css) el.value = css;
@@ -4144,14 +4151,21 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
       function rebuildTrailLine() {
         const n = trailPosArr.length;
+        const rgb = [0, 0, 0];
         for (let i = 0; i < n; i++) {
           const p = trailPosArr[i];
           trailLinePos[i * 3] = p.x;
           trailLinePos[i * 3 + 1] = p.y;
           trailLinePos[i * 3 + 2] = p.z;
+          colorToRgb01(p.c != null ? p.c : TRAIL_COLOR_DEFAULT, rgb);
+          trailLineCol[i * 3] = rgb[0];
+          trailLineCol[i * 3 + 1] = rgb[1];
+          trailLineCol[i * 3 + 2] = rgb[2];
         }
-        const attr = trailLineGeom.getAttribute('position');
-        attr.needsUpdate = true;
+        const posAttr = trailLineGeom.getAttribute('position');
+        posAttr.needsUpdate = true;
+        const colAttr = trailLineGeom.getAttribute('color');
+        if (colAttr) colAttr.needsUpdate = true;
         trailLineGeom.setDrawRange(0, n);
         if (typeof trailLineGeom.computeBoundingSphere === 'function') {
           trailLineGeom.computeBoundingSphere();
@@ -4160,7 +4174,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
       function clearTrail() {
         trailPosArr.length = 0;
         while (waypointGroup.children.length) {
-          waypointGroup.remove(waypointGroup.children[0]);
+          const ch = waypointGroup.children[0];
+          waypointGroup.remove(ch);
+          if (ch.material && typeof ch.material.dispose === 'function') {
+            try { ch.material.dispose(); } catch (_) {}
+          }
         }
         rebuildTrailLine();
         lastGoalKey = '';
@@ -4180,10 +4198,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
           const oldest = waypointGroup.children[0];
           if (oldest) {
             waypointGroup.remove(oldest);
+            if (oldest.material && typeof oldest.material.dispose === 'function') {
+              try { oldest.material.dispose(); } catch (_) {}
+            }
           }
         }
-        trailPosArr.push({ x: x, y: y, z: z });
-        const bead = new THREE.Mesh(waypointGeom, waypointMat);
+        const c = trailColor & 0xffffff;
+        trailPosArr.push({ x: x, y: y, z: z, c: c });
+        const bead = new THREE.Mesh(waypointGeom, new THREE.MeshBasicMaterial({ color: c }));
         bead.position.set(x, y, z);
         waypointGroup.add(bead);
         rebuildTrailLine();
