@@ -958,11 +958,41 @@ PREVIEW_HTML = """<!DOCTYPE html>
       accent-color: #f0b429;
       cursor: pointer;
     }
-    .settings-tcp-mass-val {
-      min-width: 2rem;
-      text-align: right;
-      font-variant-numeric: tabular-nums;
-      color: var(--muted);
+    .inf-pose-canvas-wrap .inf-pose-trail-color {
+      position: absolute;
+      left: 0.65rem;
+      top: calc(50% + 1.35rem);
+      z-index: 2;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      margin: 0;
+      padding: 0.2rem 0.4rem 0.2rem 0.25rem;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 999px;
+      background: rgba(11, 16, 24, 0.48);
+      color: rgba(232, 240, 248, 0.88);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+      cursor: pointer;
+      pointer-events: auto;
+      font-size: 0.68rem;
+      line-height: 1;
+      user-select: none;
+    }
+    .inf-pose-canvas-wrap .inf-pose-trail-color input[type="color"] {
+      width: 1.35rem;
+      height: 1.35rem;
+      padding: 0;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      border-radius: 999px;
+      background: transparent;
+      cursor: pointer;
+    }
+    .inf-pose-canvas-wrap .inf-pose-trail-color-label {
+      white-space: nowrap;
+      opacity: 0.9;
     }
     .inf-pose-canvas-wrap .inf-pose-trail-clear {
       --btn-h: 2rem;
@@ -2351,6 +2381,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <span class="inf-pose-trail-clear-ico" aria-hidden="true">C</span>
           <span class="inf-pose-trail-clear-label" data-i18n="infer.pose_trail_clear">清除轨迹</span>
         </button>
+        <label class="inf-pose-trail-color" data-i18n-title="infer.pose_trail_color_hint" title="轨迹线与路点颜色">
+          <input type="color" id="infPoseTrailColor" value="#3dd6c6" data-i18n-attr="aria-label" data-i18n="infer.pose_trail_color" aria-label="轨迹颜色" />
+          <span class="inf-pose-trail-color-label" data-i18n="infer.pose_trail_color">轨迹色</span>
+        </label>
         <div class="inf-tcp-drag-panel" id="infTcpDragPanel" hidden>
           <div class="inf-tcp-drag-head">
             <strong data-i18n="infer.tcp_drag_title">拖拽 IK</strong>
@@ -4024,8 +4058,26 @@ PREVIEW_HTML = """<!DOCTYPE html>
       // Goal history: ----o----o----o---- (kept across LOOP rounds)
       const WAYPOINT_MAX = 400;
       const WAYPOINT_MIN_DIST = 0.0008;
+      const TRAIL_COLOR_DEFAULT = 0x3dd6c6;
+      const LS_TRAIL_COLOR = 'dcs.inf.poseTrailColor';
+      function parseTrailColorHex(raw) {
+        const s = String(raw || '').trim();
+        const m = /^#?([0-9a-fA-F]{6})$/.exec(s);
+        if (!m) return null;
+        return parseInt(m[1], 16);
+      }
+      function trailColorToCss(n) {
+        const v = (Number(n) >>> 0) & 0xffffff;
+        return '#' + v.toString(16).padStart(6, '0');
+      }
+      let trailColor = TRAIL_COLOR_DEFAULT;
+      try {
+        const saved = localStorage.getItem(LS_TRAIL_COLOR);
+        const parsed = parseTrailColorHex(saved);
+        if (parsed != null) trailColor = parsed;
+      } catch (_) {}
       const waypointGeom = new THREE.SphereGeometry(0.0035, 10, 10);
-      const waypointMat = new THREE.MeshBasicMaterial({ color: 0x3dd6c6 });
+      const waypointMat = new THREE.MeshBasicMaterial({ color: trailColor });
       const waypointGroup = new THREE.Group();
       scene.add(waypointGroup);
       const trailPosArr = [];
@@ -4035,9 +4087,25 @@ PREVIEW_HTML = """<!DOCTYPE html>
       trailLineGeom.setDrawRange(0, 0);
       const trailLine = new THREE.Line(
         trailLineGeom,
-        new THREE.LineBasicMaterial({ color: 0x3dd6c6, transparent: true, opacity: 0.85 }),
+        new THREE.LineBasicMaterial({ color: trailColor, transparent: true, opacity: 0.85 }),
       );
       scene.add(trailLine);
+      function applyTrailColor(hexOrNum) {
+        let n = null;
+        if (typeof hexOrNum === 'number' && Number.isFinite(hexOrNum)) n = hexOrNum >>> 0;
+        else n = parseTrailColorHex(hexOrNum);
+        if (n == null) n = TRAIL_COLOR_DEFAULT;
+        trailColor = n & 0xffffff;
+        if (waypointMat && waypointMat.color) waypointMat.color.setHex(trailColor);
+        if (trailLine && trailLine.material && trailLine.material.color) {
+          trailLine.material.color.setHex(trailColor);
+        }
+        const css = trailColorToCss(trailColor);
+        const el = document.getElementById('infPoseTrailColor');
+        if (el && el.value !== css) el.value = css;
+        try { localStorage.setItem(LS_TRAIL_COLOR, css); } catch (_) {}
+        return css;
+      }
       let hasTcp = false;
       let lastGoal = null;
       let lastGoalKey = '';
@@ -4638,6 +4706,22 @@ PREVIEW_HTML = """<!DOCTYPE html>
           ev.preventDefault();
           clearTrail();
         });
+      }
+      const trailColorEl = document.getElementById('infPoseTrailColor');
+      if (trailColorEl) {
+        applyTrailColor(trailColor);
+        const onColor = () => applyTrailColor(trailColorEl.value);
+        trailColorEl.addEventListener('input', onColor);
+        trailColorEl.addEventListener('change', onColor);
+        ['pointerdown', 'pointermove', 'pointerup', 'click', 'mousedown'].forEach((evName) => {
+          trailColorEl.addEventListener(evName, (ev) => ev.stopPropagation());
+        });
+        const colorWrap = trailColorEl.closest('.inf-pose-trail-color');
+        if (colorWrap) {
+          ['pointerdown', 'pointermove', 'pointerup', 'click', 'mousedown'].forEach((evName) => {
+            colorWrap.addEventListener(evName, (ev) => ev.stopPropagation());
+          });
+        }
       }
       resize();
       if (typeof ResizeObserver !== 'undefined' && wrap) {
