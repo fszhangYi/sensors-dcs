@@ -1,0 +1,295 @@
+/* Infer Tab · Flow orchestration page */
+#infPageFlow.active {
+  overflow: hidden;
+  gap: 0;
+}
+
+.flow-shell {
+  display: grid;
+  grid-template-columns: 9.5rem minmax(0, 1fr) minmax(15rem, 18rem);
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0.55rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  padding: 0.15rem 0.15rem 0.35rem;
+  box-sizing: border-box;
+}
+
+.flow-toolbar {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.flow-toolbar .hint {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: var(--muted);
+  max-width: 42%;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.flow-toolbox,
+.flow-inspector {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 0.55rem;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.flow-toolbox-title,
+.flow-inspector-title {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+
+.flow-tool-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  cursor: grab;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent-dim) 70%, transparent);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.55rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+.flow-tool-item:active {
+  cursor: grabbing;
+}
+
+.flow-canvas-wrap {
+  position: relative;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--border) 55%, transparent) 1px, transparent 0) 0 0 / 18px 18px,
+    color-mix(in srgb, var(--surface, #121a26) 88%, #000);
+  overflow: hidden;
+}
+
+.flow-world {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.flow-edges {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.flow-edges path {
+  fill: none;
+  stroke: color-mix(in srgb, var(--accent) 70%, var(--muted));
+  stroke-width: 2;
+  marker-end: url(#flowArrow);
+}
+
+.flow-edges path.flow-edge-temp {
+  stroke-dasharray: 5 4;
+  stroke: var(--spark);
+}
+
+.flow-node {
+  position: absolute;
+  width: 13.5rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+  color: var(--text);
+  user-select: none;
+  z-index: 2;
+}
+
+.flow-node.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent), 0 8px 22px rgba(0, 0, 0, 0.28);
+}
+
+.flow-node[data-state="running"] {
+  border-color: var(--accent);
+}
+
+.flow-node[data-state="paused"] {
+  border-color: var(--warn);
+}
+
+.flow-node[data-state="succeeded"] {
+  border-color: var(--ok);
+}
+
+.flow-node[data-state="failed"] {
+  border-color: var(--danger);
+}
+
+.flow-node-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  padding: 0.4rem 0.55rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: move;
+}
+
+.flow-node-body {
+  padding: 0.4rem 0.55rem 0.55rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.flow-node-body strong {
+  color: var(--text);
+  font-weight: 550;
+}
+
+.flow-node-state {
+  display: inline-block;
+  margin-top: 0.25rem;
+  padding: 0.08rem 0.35rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface, #1a2433) 80%, transparent);
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.flow-node[data-state="failed"] .flow-node-state {
+  color: var(--danger);
+}
+
+.flow-node[data-state="paused"] .flow-node-state {
+  color: var(--warn);
+}
+
+.flow-node[data-state="succeeded"] .flow-node-state {
+  color: var(--ok);
+}
+
+.flow-node[data-state="running"] .flow-node-state {
+  color: var(--accent);
+}
+
+.flow-port {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  background: var(--panel);
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 3;
+  cursor: crosshair;
+  pointer-events: auto;
+}
+
+.flow-port.in {
+  left: -7px;
+}
+
+.flow-port.out {
+  right: -7px;
+}
+
+.flow-inspector .flow-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-bottom: 0.35rem;
+}
+
+.flow-inspector label {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.flow-inspector input[type="text"],
+.flow-inspector input[type="number"],
+.flow-inspector select,
+.flow-inspector textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--input-bg, rgba(0, 0, 0, 0.25));
+  color: var(--text);
+  padding: 0.28rem 0.4rem;
+  font-size: 0.75rem;
+  font-family: inherit;
+}
+
+.flow-inspector textarea {
+  min-height: 2.4rem;
+  resize: vertical;
+}
+
+.flow-inspector-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.25rem;
+}
+
+.flow-inspector-empty {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.flow-term-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem;
+}
+
+.flow-timing-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.3rem;
+}
+
+@media (max-width: 960px) {
+  .flow-shell {
+    grid-template-columns: 7.5rem minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(12rem, 1fr);
+  }
+  .flow-inspector {
+    grid-column: 1 / -1;
+    max-height: 14rem;
+  }
+  .flow-toolbar .hint {
+    max-width: 100%;
+    margin-left: 0;
+    text-align: left;
+  }
+}

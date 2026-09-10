@@ -206,6 +206,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
   <link rel="stylesheet" href="/assets/fonts/ibm-plex-sans.css" />
   <link rel="stylesheet" href="/assets/settings.css" />
   <link rel="stylesheet" href="/assets/appearance.css" />
+  <link rel="stylesheet" href="/assets/flow.css" />
   <script src="/assets/vendor/three.min.js"></script>
   <script src="/assets/vendor/STLLoader.js"></script>
   <script src="/assets/vendor/URDFLoader.js"></script>
@@ -824,6 +825,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
     #infPageSensors .content-row {
       flex: 1 1 auto;
       min-height: 0;
+    }
+    #infPageFlow.active {
+      overflow: hidden;
     }
     /* #infPi05Panel (narrow) + aside.inf-split-pose (flex) */
     .inf-split {
@@ -2227,6 +2231,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     <div class="inf-subnav" role="tablist" aria-label="Infer pages">
       <button type="button" class="inf-subnav-btn active" id="infPageBtnControl" data-inf-page="control" role="tab" aria-selected="true" data-i18n="infer.page_control">控制</button>
       <button type="button" class="inf-subnav-btn" id="infPageBtnSensors" data-inf-page="sensors" role="tab" aria-selected="false" data-i18n="infer.page_sensors">预览</button>
+      <button type="button" class="inf-subnav-btn" id="infPageBtnFlow" data-inf-page="flow" role="tab" aria-selected="false" data-i18n="infer.page_flow">编排</button>
     </div>
     <div class="inf-page active" id="infPageControl" data-inf-page="control" role="tabpanel">
     <div class="inf-split">
@@ -2429,6 +2434,34 @@ PREVIEW_HTML = """<!DOCTYPE html>
         </div>
       </div>
     </div>
+    </div>
+    <div class="inf-page" id="infPageFlow" data-inf-page="flow" role="tabpanel">
+      <div class="flow-shell">
+        <div class="flow-toolbar">
+          <button type="button" class="primary" id="infFlowRun" data-i18n="infer.flow_run">Run</button>
+          <button type="button" id="infFlowPause" data-i18n="infer.flow_pause" disabled>暂停</button>
+          <button type="button" id="infFlowResume" data-i18n="infer.flow_resume" disabled>继续</button>
+          <button type="button" id="infFlowStop" data-i18n="infer.flow_stop" disabled>停止</button>
+          <button type="button" id="infFlowFit" data-i18n="infer.flow_fit">适应画布</button>
+          <button type="button" id="infFlowClear" data-i18n="infer.flow_clear">清空</button>
+          <span class="hint" id="infFlowHint" data-i18n="infer.flow_hint_ready">拖入基础模块并连线后点 Run</span>
+        </div>
+        <aside class="flow-toolbox" aria-label="Flow toolbox">
+          <h3 class="flow-toolbox-title" data-i18n="infer.flow_toolbox">模块</h3>
+          <button type="button" class="flow-tool-item" id="infFlowToolBasic" draggable="true" data-i18n="infer.flow_basic">基础模块</button>
+          <span class="hint" data-i18n="infer.flow_toolbox_hint">拖到画布空白处</span>
+        </aside>
+        <div class="flow-canvas-wrap" id="infFlowCanvasWrap">
+          <div class="flow-world" id="infFlowWorld">
+            <svg class="flow-edges" id="infFlowEdges" xmlns="http://www.w3.org/2000/svg"></svg>
+            <div class="flow-nodes" id="infFlowNodes"></div>
+          </div>
+        </div>
+        <aside class="flow-inspector" id="infFlowInspector" aria-label="Flow inspector">
+          <h3 class="flow-inspector-title" data-i18n="infer.flow_inspector">属性</h3>
+          <p class="flow-inspector-empty" data-i18n="infer.flow_inspector_empty">选中模块以编辑</p>
+        </aside>
+      </div>
     </div>
     </div>
 
@@ -2822,6 +2855,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const raw = (table[path] != null ? table[path] : fallback[path]);
       return formatMessage(raw != null ? raw : path, vars);
     }
+    window.t = t;
     function applyDomI18n(root) {
       const scope = root || document;
       scope.querySelectorAll('[data-i18n]').forEach((el) => {
@@ -3503,17 +3537,80 @@ PREVIEW_HTML = """<!DOCTYPE html>
       });
     }
     function fillInfArmJointsFromStep(r) {
-      if (!infArmJoints || !r) return false;
-      const joints = r.next_joints_rad;
-      if (!r.ik_ok || !Array.isArray(joints) || joints.length < 6) return false;
+      const el = document.getElementById('infArmJoints') || infArmJoints;
+      if (!el || !r) return false;
+      let joints = r.next_joints_rad;
+      // Coerce array-like (e.g. typed views) so Array.isArray-only checks don't drop fills.
+      if (joints && !Array.isArray(joints) && typeof joints.length === 'number') {
+        try { joints = Array.prototype.slice.call(joints, 0, 6); } catch (_) { joints = null; }
+      }
+      if (!Array.isArray(joints) || joints.length < 6) return false;
       const vals = [];
       for (let i = 0; i < 6; i++) {
         const v = Number(joints[i]);
         if (!Number.isFinite(v)) return false;
         vals.push(v.toFixed(4));
       }
-      infArmJoints.value = vals.join(',');
+      el.value = vals.join(',');
       return true;
+    }
+    /** When server IK failed (common on real arm / dry_run=false), recover joints from goal pose. */
+    async function fillInfArmJointsFromGoalFallback(r) {
+      if (!r || r.ok === false) return false;
+      if (fillInfArmJointsFromStep(r)) return true;
+      // joints recv: next_state already is joints — fill directly
+      if (r.next_state_format === 'joints' && Array.isArray(r.next_state) && r.next_state.length >= 6) {
+        const ok = fillInfArmJointsFromStep({
+          next_joints_rad: r.next_state.slice(0, 6),
+          ik_ok: true,
+        });
+        if (ok) {
+          r.next_joints_rad = r.next_state.slice(0, 6).map(Number);
+          r.ik_ok = true;
+          r.ik_error = null;
+        }
+        return ok;
+      }
+      let xyz = null;
+      if (Array.isArray(r.goal_xyzrpy) && r.goal_xyzrpy.length >= 6) {
+        xyz = r.goal_xyzrpy;
+      } else if (Array.isArray(r.next_state) && r.next_state.length >= 6
+        && r.next_state_format !== 'joints') {
+        xyz = r.next_state;
+      }
+      if (!xyz) return false;
+      let ik = null;
+      if (typeof window.__flowIk === 'function') {
+        ik = await window.__flowIk(xyz.slice(0, 6));
+      } else {
+        try {
+          ik = await fetch('/api/arm/ik', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ xyzrpy: xyz.slice(0, 6).map(Number) }),
+          }).then((x) => x.json());
+          if (ik && ik.ok) ik.source = 'server';
+        } catch (e) {
+          ik = { ok: false, error: String(e) };
+        }
+      }
+      if (ik && ik.ok && Array.isArray(ik.joints_rad)) {
+        const ok = fillInfArmJointsFromStep({
+          next_joints_rad: ik.joints_rad,
+          ik_ok: true,
+        });
+        if (ok) {
+          r.next_joints_rad = ik.joints_rad.slice(0, 6).map(Number);
+          r.ik_ok = true;
+          r.ik_error = null;
+          r._ik_fallback = ik.source || 'client';
+        }
+        return ok;
+      }
+      if (ik && ik.error) {
+        r.ik_error = (r.ik_error ? (String(r.ik_error) + ' · ') : '') + String(ik.error);
+      }
+      return false;
     }
     function clampArmAbsTiming(tMin, tMax, vNorm, jerkFrac, accelFrac) {
       let t_min_s = Number(tMin);
@@ -3596,6 +3693,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (!infPi05Hint) return;
       const configured = !(p && p.configured === false);
       const connected = !!(p && p.connected);
+      window.__pi05Connected = !!(configured && connected);
       if (!configured) {
         setPi05StatusEl('st-offline', t('infer.status_unconfigured'));
         infPi05Hint.textContent = t('infer.hint_unconfigured');
@@ -3692,7 +3790,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
         infPi05Prompt.value = p.prompt;
       }
       updatePi05Flags(p);
-      applyInfPoseGoalFromPayload(p);
+      try {
+        applyInfPoseGoalFromPayload(p);
+      } catch (e) {
+        try { console.warn('[pi05] applyInfPoseGoalFromPayload', e); } catch (_) {}
+      }
     }
     async function postPi05(path, body) {
       savePi05Form();
@@ -4794,15 +4896,29 @@ PREVIEW_HTML = """<!DOCTYPE html>
         delete infPi05Prompt.dataset.dirty;
         if (r.prompt != null) infPi05Prompt.value = r.prompt;
       }
-      applyInfPoseGoalFromPayload(r);
-      if (r && r.ok && fillInfArmJointsFromStep(r)) {
-        if (infArmProg) infArmProg.textContent = t('infer.joints_filled');
-      } else if (r && r.ok && r.ik_ok === false) {
-        if (infArmProg) {
+      // Fill joints box BEFORE pose-HUD side effects — a throw in setGoalPose/trail
+      // used to abort the function after raw JSON was already updated.
+      // dry_run usually returns next_joints_rad; real arm often needs client IK fallback
+      // when server seed/IK fails while next_state/goal_xyzrpy is still ok.
+      let filled = false;
+      try {
+        filled = !!(r && r.ok && await fillInfArmJointsFromGoalFallback(r));
+        if (filled && infArmProg) {
+          infArmProg.textContent = r && r._ik_fallback
+            ? (t('infer.joints_filled') + ' (' + r._ik_fallback + ')')
+            : t('infer.joints_filled');
+        } else if (r && r.ok && r.ik_ok === false && infArmProg) {
           infArmProg.textContent = t('infer.ik_fail', {
             error: r.ik_error || 'IK failed',
           });
         }
+      } catch (e) {
+        try { console.warn('[pi05] fillInfArmJointsFromGoalFallback', e); } catch (_) {}
+      }
+      try {
+        applyInfPoseGoalFromPayload(r);
+      } catch (e) {
+        try { console.warn('[pi05] applyInfPoseGoalFromPayload', e); } catch (_) {}
       }
       if (r && r.ok && r.grip_ok === false && infPi05Hint) {
         const gerr = r.grip_error || 'grip failed';
@@ -4817,6 +4933,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         infPi05Hint.textContent = base ? (base + ' · ' + note) : note;
         infPi05Hint.title = infPi05Hint.textContent || '';
       }
+      if (filled && r) r._joints_filled = true;
       return r;
     }
     function clampChunkSkip(raw) {
@@ -4935,6 +5052,189 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
       return { ok: false, error: 'stopped', stopped: true };
     }
+    /* —— Flow orchestration adapters (window.__flow*) —— */
+    window.__pi05LoopIsRunning = function () { return !!pi05LoopRunning; };
+    window.__flowPi05Connected = function () { return !!window.__pi05Connected; };
+    window.__flowChunkSkip = function () {
+      return (typeof getChunkSkip === 'function') ? getChunkSkip() : 1;
+    };
+    window.__flowReadPose7 = function () {
+      const xyz = window.__armReadCartesian;
+      if (!Array.isArray(xyz) || xyz.length < 6) return null;
+      const g = window.__gripReadNorm;
+      return {
+        xyzrpy: xyz.slice(0, 6).map(Number),
+        gripper: (g != null && Number.isFinite(Number(g))) ? Number(g) : null,
+      };
+    };
+    window.__flowCheckNear = function (pose7, tol) {
+      const cur = window.__flowReadPose7();
+      if (!cur || !pose7) return { ok: false, why: 'missing_pose' };
+      const got = cur.xyzrpy;
+      const want = pose7.xyzrpy;
+      if (!got || !want || got.length < 6 || want.length < 6) return { ok: false, why: 'missing_pose' };
+      const posTol = Number((tol && tol.pos_m) != null ? tol.pos_m : 0.01);
+      const rotTol = Number((tol && tol.rot_rad) != null ? tol.rot_rad : 0.05);
+      const gripTol = Number((tol && tol.grip) != null ? tol.grip : 0.05);
+      let dp = 0;
+      for (let i = 0; i < 3; i++) dp += (got[i] - want[i]) * (got[i] - want[i]);
+      if (Math.sqrt(dp) > posTol) return { ok: false, why: 'pos' };
+      let dr = 0;
+      for (let i = 3; i < 6; i++) dr += (got[i] - want[i]) * (got[i] - want[i]);
+      if (Math.sqrt(dr) > rotTol) return { ok: false, why: 'rot' };
+      if (cur.gripper == null || !Number.isFinite(Number(cur.gripper))) return { ok: false, why: 'missing_grip' };
+      if (Math.abs(Number(cur.gripper) - Number(pose7.gripper || 0)) > gripTol) return { ok: false, why: 'grip' };
+      return { ok: true, why: null };
+    };
+    window.__flowIk = async function (xyzrpy) {
+      const src = Array.isArray(xyzrpy) ? xyzrpy.slice(0, 6).map(Number) : null;
+      if (!src || src.length < 6 || src.some((v) => !Number.isFinite(v))) {
+        return { ok: false, error: 'bad_xyzrpy' };
+      }
+      if (window.Ec616Ik && typeof window.Ec616Ik.xyzrpyToJoints === 'function') {
+        const seed = (Array.isArray(window.__armReadJoints) && window.__armReadJoints.length >= 6)
+          ? window.__armReadJoints.slice(0, 6).map(Number)
+          : null;
+        if (seed) {
+          const local = window.Ec616Ik.xyzrpyToJoints(src, seed, { maxNfev: 80 });
+          if (local && local.ok && Array.isArray(local.joints_rad)) {
+            return { ok: true, joints_rad: local.joints_rad.slice(0, 6).map(Number), source: 'local' };
+          }
+        }
+      }
+      try {
+        const r = await fetch('/api/arm/ik', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ xyzrpy: src }),
+        }).then((x) => x.json());
+        if (r && r.ok && Array.isArray(r.joints_rad)) {
+          return { ok: true, joints_rad: r.joints_rad.slice(0, 6).map(Number), source: 'server' };
+        }
+        return { ok: false, error: (r && r.error) || 'ik_failed' };
+      } catch (e) {
+        return { ok: false, error: String(e) };
+      }
+    };
+    window.__flowSendAbs = async function (jointsRad, timing) {
+      if (!Array.isArray(jointsRad) || jointsRad.length < 6) {
+        return { ok: false, error: 'joints_rad must be 6 floats' };
+      }
+      const joints = [];
+      for (let i = 0; i < 6; i++) {
+        const v = Number(jointsRad[i]);
+        if (!Number.isFinite(v)) return { ok: false, error: 'joints_rad must be 6 floats' };
+        joints.push(v);
+      }
+      if (!Array.isArray(window.__armReadJoints) || window.__armReadJoints.length < 6) {
+        return { ok: false, error: t('arm.need_read') };
+      }
+      if (!window.__armWriteAgentId) {
+        return { ok: false, error: t('infer.arm_need_writer') };
+      }
+      const tm = clampArmAbsTiming(
+        timing && timing.t_min_s,
+        timing && timing.t_max_s,
+        timing && timing.v_norm_rad_s,
+        timing && timing.jerk_seg_frac,
+        timing && timing.accel_seg_frac,
+      );
+      const r = await postInfArm({
+        joints_rad: joints,
+        timing: 'scale_by_d',
+        t_min_s: tm.t_min_s,
+        t_max_s: tm.t_max_s,
+        v_norm_rad_s: tm.v_norm_rad_s,
+        jerk_seg_frac: tm.jerk_seg_frac,
+        accel_seg_frac: tm.accel_seg_frac,
+      });
+      const usedDur = (r && r.duration_s != null) ? Number(r.duration_s) : tm.t_min_s;
+      if (r && r.ok) window.__armAbsRamp = r;
+      return Object.assign({ duration_s: usedDur }, r || { ok: false });
+    };
+    window.__flowWaitArrive = async function (gen, duration_s, opts) {
+      const isActiveFn = (opts && typeof opts.isActiveFn === 'function')
+        ? opts.isActiveFn
+        : function () { return pi05LoopRunning && gen === pi05LoopGen; };
+      const isPausedFn = (opts && typeof opts.isPausedFn === 'function')
+        ? opts.isPausedFn
+        : function () { return !!pi05LoopPaused; };
+      const timeoutMs = Math.max(5000, (Number(duration_s) || 10) * 1500 + 2000);
+      let elapsed = 0;
+      let lastTick = Date.now();
+      while (isActiveFn()) {
+        if (isPausedFn()) {
+          lastTick = Date.now();
+          await sleepMs(100);
+          continue;
+        }
+        const now = Date.now();
+        elapsed += Math.max(0, now - lastTick);
+        lastTick = now;
+        const ramp = window.__armAbsRamp || {};
+        if (!ramp.enabled) {
+          if (ramp.phase === 'error') {
+            return { ok: false, error: ramp.last_error || ramp.message || 'abs ramp error' };
+          }
+          if (ramp.phase === 'completed' || ramp.phase === 'idle' || ramp.phase == null) {
+            return { ok: true, phase: ramp.phase || 'idle' };
+          }
+        }
+        if (elapsed > timeoutMs) {
+          return { ok: false, error: 'arrive timeout' };
+        }
+        await sleepMs(120);
+      }
+      return { ok: false, error: 'stopped', stopped: true };
+    };
+    window.__flowPi05Step = async function () {
+      const r = await runInfPi05StepOnce();
+      if (r && r.ok && Array.isArray(r.next_joints_rad) && r.next_joints_rad.length >= 6) {
+        window.__flowLastStepJointsCache = r.next_joints_rad.slice(0, 6).map(Number);
+      } else if (r && r.ok) {
+        const parsed = parseInfArmJoints6();
+        if (parsed && parsed.ok) window.__flowLastStepJointsCache = parsed.joints;
+      }
+      return r;
+    };
+    window.__flowLastStepJoints = function () {
+      return Array.isArray(window.__flowLastStepJointsCache)
+        ? window.__flowLastStepJointsCache.slice()
+        : null;
+    };
+    window.__flowGripper = async function (positionNorm) {
+      const v = Number(positionNorm);
+      if (!Number.isFinite(v)) return { ok: false, error: 'bad_grip' };
+      const agentId = window.__gripWriteAgentId || window.__gripReadAgentId || null;
+      if (!agentId) return { ok: false, error: 'no_gripper_agent' };
+      try {
+        const r = await fetch('/api/gripper/command', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent_id: agentId, position_norm: v }),
+        }).then((x) => x.json());
+        return r;
+      } catch (e) {
+        return { ok: false, error: String(e) };
+      }
+    };
+    window.__flowCancelAbs = async function () {
+      try {
+        const r = await postInfArm({ cancel_abs_ramp: true });
+        if (r && r.ok) window.__armAbsRamp = r;
+        return r;
+      } catch (e) {
+        return { ok: false, error: String(e) };
+      }
+    };
+    window.__syncFlowLoopMutex = function () {
+      const flowOn = !!window.__flowIsRunning;
+      if (infPi05Loop && flowOn && !pi05LoopRunning) infPi05Loop.disabled = true;
+      if (infPi05Step && flowOn) infPi05Step.disabled = true;
+      if (!flowOn && typeof applyPi05PanelFromPayload === 'function') {
+        /* leave panel sync to next status refresh; soft re-enable via status */
+      }
+    };
     function syncPi05LoopButton() {
       if (!infPi05Loop) return;
       infPi05Loop.textContent = pi05LoopRunning ? t('infer.loop_stop') : t('infer.loop');
@@ -5107,10 +5407,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
                 return { ok: false, reason: 'reject', steps: n };
               }
               if (!stepRes.ik_ok || !Array.isArray(stepRes.next_joints_rad)) {
-                const err = stepRes.ik_error || t('infer.ik_fail', { error: 'no next_joints_rad' });
-                showAppModal(t('infer.ik_fail_title'), err);
-                await stopPi05Loop(t('infer.ik_fail', { error: err }));
-                return { ok: false, reason: 'ik', steps: n, error: err };
+                // Real arm: server IK may fail while goal pose is still valid — try client fallback.
+                const recovered = await fillInfArmJointsFromGoalFallback(stepRes);
+                if (!recovered) {
+                  const err = stepRes.ik_error || t('infer.ik_fail', { error: 'no next_joints_rad' });
+                  showAppModal(t('infer.ik_fail_title'), err);
+                  await stopPi05Loop(t('infer.ik_fail', { error: err }));
+                  return { ok: false, reason: 'ik', steps: n, error: err };
+                }
               }
             }
           } finally {
@@ -5122,7 +5426,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           if (!pi05LoopRunning || gen !== pi05LoopGen) {
             return { ok: false, reason: 'stopped', steps: n };
           }
-          if (!fillInfArmJointsFromStep(stepRes)) {
+          if (!(await fillInfArmJointsFromGoalFallback(stepRes))) {
             const err = t('infer.ik_fail', { error: 'bad next_joints_rad' });
             showAppModal(t('infer.ik_fail_title'), err);
             await stopPi05Loop(err);
@@ -5267,6 +5571,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     if (infPi05Step) {
       infPi05Step.addEventListener('click', async () => {
+        if (window.__flowIsRunning) {
+          if (infPi05Hint) infPi05Hint.textContent = t('infer.flow_mutex_flow');
+          return;
+        }
         if (pi05LoopRunning || pi05StepBusy) return;
         pi05StepBusy = true;
         infPi05Step.disabled = true;
@@ -5275,7 +5583,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         try {
           syncChunkSkipInput();
           const r = await runInfPi05StepNTimes(getChunkSkip());
-          if (r && r.ok && r.ik_ok) {
+          if (r && r.ok && (r._joints_filled || r.ik_ok)) {
             if (infPi05Hint) infPi05Hint.textContent = t('infer.joints_filled');
           } else if (r && r.ok && r.ik_ok === false) {
             if (infPi05Hint) {
@@ -5284,10 +5592,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
               });
             }
           }
+          window.__infStepHintSticky = (infPi05Hint && infPi05Hint.textContent) || '';
         } finally {
           pi05StepBusy = false;
           const st = await fetch('/api/pi05/status').then((x) => x.json()).catch(() => ({}));
           applyPi05PanelFromPayload(st);
+          // status refresh resets hint to "connected"; restore step outcome briefly
+          if (infPi05Hint && window.__infStepHintSticky) {
+            infPi05Hint.textContent = window.__infStepHintSticky;
+            infPi05Hint.title = window.__infStepHintSticky;
+            window.__infStepHintSticky = '';
+          }
         }
       });
     }
@@ -5320,6 +5635,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     if (infPi05Loop) {
       infPi05Loop.addEventListener('click', async () => {
+        if (window.__flowIsRunning) {
+          if (infPi05Hint) infPi05Hint.textContent = t('infer.flow_mutex_flow');
+          return;
+        }
         if (pi05LoopRunning) {
           await stopPi05Loop(t('infer.hint_loop_stopped', { n: pi05LoopStepN || 0 }));
           return;
@@ -5734,13 +6053,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
 
     function switchInfPage(name) {
-      const which = (name === 'sensors') ? 'sensors' : 'control';
+      const which = (name === 'sensors' || name === 'flow') ? name : 'control';
       const pageControl = document.getElementById('infPageControl');
       const pageSensors = document.getElementById('infPageSensors');
+      const pageFlow = document.getElementById('infPageFlow');
       const btnControl = document.getElementById('infPageBtnControl');
       const btnSensors = document.getElementById('infPageBtnSensors');
+      const btnFlow = document.getElementById('infPageBtnFlow');
       if (pageControl) pageControl.classList.toggle('active', which === 'control');
       if (pageSensors) pageSensors.classList.toggle('active', which === 'sensors');
+      if (pageFlow) pageFlow.classList.toggle('active', which === 'flow');
       if (btnControl) {
         btnControl.classList.toggle('active', which === 'control');
         btnControl.setAttribute('aria-selected', which === 'control' ? 'true' : 'false');
@@ -5748,6 +6070,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (btnSensors) {
         btnSensors.classList.toggle('active', which === 'sensors');
         btnSensors.setAttribute('aria-selected', which === 'sensors' ? 'true' : 'false');
+      }
+      if (btnFlow) {
+        btnFlow.classList.toggle('active', which === 'flow');
+        btnFlow.setAttribute('aria-selected', which === 'flow' ? 'true' : 'false');
       }
       try { localStorage.setItem('dcs.inf.page', which); } catch (e) {}
       if (which === 'control' && typeof window.__resizeInfPoseViz === 'function') {
@@ -5788,7 +6114,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (which === 'infer') {
         try {
           const ls = localStorage.getItem('dcs.inf.page');
-          if (ls === 'sensors' || ls === 'control') switchInfPage(ls);
+          if (ls === 'sensors' || ls === 'control' || ls === 'flow') switchInfPage(ls);
         } catch (e) {}
         if (typeof window.__resizeInfPoseViz === 'function') {
           requestAnimationFrame(() => window.__resizeInfPoseViz());
@@ -5797,11 +6123,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     const infPageBtnControl = document.getElementById('infPageBtnControl');
     const infPageBtnSensors = document.getElementById('infPageBtnSensors');
+    const infPageBtnFlow = document.getElementById('infPageBtnFlow');
     if (infPageBtnControl) infPageBtnControl.addEventListener('click', () => switchInfPage('control'));
     if (infPageBtnSensors) infPageBtnSensors.addEventListener('click', () => switchInfPage('sensors'));
+    if (infPageBtnFlow) infPageBtnFlow.addEventListener('click', () => switchInfPage('flow'));
     try {
       const lsInfPage = localStorage.getItem('dcs.inf.page');
-      if (lsInfPage === 'sensors' || lsInfPage === 'control') switchInfPage(lsInfPage);
+      if (lsInfPage === 'sensors' || lsInfPage === 'control' || lsInfPage === 'flow') switchInfPage(lsInfPage);
     } catch (e) {}
     function syncSideNavChrome() {
       document.querySelectorAll('#appTabs button.tab').forEach((btn) => {
@@ -7537,6 +7865,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (cmd) cmd.remove();
       const norm = p.position_norm;
       const raw = p.raw_value != null ? p.raw_value : p.position_raw;
+      if (norm != null && Number.isFinite(Number(norm))) {
+        window.__gripReadNorm = Number(norm);
+        window.__gripReadAgentId = frame.agent_id;
+      }
       renderJointVals(root, [{
         lab: 'grip',
         showRaw: true,
@@ -7547,6 +7879,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
     function renderGripperWrite(card, frame, hzText) {
       card.querySelector('h2').textContent = 'gripper · Write';
+      window.__gripWriteAgentId = frame.agent_id;
       card.querySelector('.k-kind').textContent = frame.kind;
       card.querySelector('.k-seq').textContent = String(frame.seq);
       card.querySelector('.k-hz').textContent = hzText;
@@ -8358,6 +8691,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     fetch('/api/record/status').then((r) => r.json()).then(applyRecordUi).catch(() => {});
     connect();
   </script>
+  <script src="/assets/flow_editor.js"></script>
+  <script src="/assets/flow_runtime.js"></script>
 </body>
 </html>
 """

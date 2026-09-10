@@ -595,13 +595,31 @@ class Orchestrator:
             return {"ok": False, "error": "next_state missing xyzrpy[6]", "joints_rad": None}
         return self._xyzrpy_to_joints(list(next_state)[:6])
 
+    def _ik_seed_joints(self) -> list[float] | None:
+        """Live arm_read joints, else configured home — dry_run always has synth live joints."""
+        import math
+
+        reader = self._arm_read_agent()
+        if reader is not None:
+            seed = self._joints6_from_ring(reader)
+            if seed is not None:
+                return seed
+        home = getattr(self, "_home_joints_rad", None)
+        if isinstance(home, (list, tuple)) and len(home) >= 6:
+            try:
+                out = [float(home[i]) for i in range(6)]
+            except (TypeError, ValueError):
+                return None
+            if all(math.isfinite(x) for x in out):
+                return out
+        return None
+
     def _xyzrpy_to_joints(self, xyzrpy: list[float]) -> dict[str, Any]:
         from sensors_dcs.arm_pose import xyzrpy_to_joints_rad
 
-        reader = self._arm_read_agent()
-        if reader is None:
+        if self._arm_read_agent() is None:
             return {"ok": False, "error": "no arm_read agent for IK seed", "joints_rad": None}
-        seed = self._joints6_from_ring(reader)
+        seed = self._ik_seed_joints()
         if seed is None:
             return {
                 "ok": False,
@@ -1035,19 +1053,24 @@ class Orchestrator:
 
     @staticmethod
     def _joints6_from_ring(agent: BaseAgent, *, prefer_key: str = "joints_rad") -> list[float] | None:
+        import math
+
         fr = agent.ring.latest.get()
         if fr is None:
             return None
         raw = fr.payload.get(prefer_key)
-        if not isinstance(raw, list) or len(raw) < 6:
+        if not isinstance(raw, (list, tuple)) or len(raw) < 6:
             # arm_write feedback fallback
             raw = fr.payload.get("feedback_joints_rad") or fr.payload.get("joints_rad")
-        if not isinstance(raw, list) or len(raw) < 6:
+        if not isinstance(raw, (list, tuple)) or len(raw) < 6:
             return None
         try:
-            return [float(raw[i]) for i in range(6)]
+            out = [float(raw[i]) for i in range(6)]
         except (TypeError, ValueError):
             return None
+        if any(not math.isfinite(x) for x in out):
+            return None
+        return out
 
     @staticmethod
     def _delta_max_joint(qa: list[float], qg: list[float]) -> tuple[float, int]:

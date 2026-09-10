@@ -25,6 +25,11 @@ def test_inject_preview_and_login() -> None:
     assert 'id="tabBtnHome"' in p and 'data-tab="home"' in p
     assert "switchTab('home')" in p or 'switchTab("home")' in p
     assert 'id="bootBanner"' in p
+    assert 'data-i18n="infer.page_flow"' in p
+    assert 'id="infPageFlow"' in p
+    assert "/assets/flow_editor.js" in p
+    assert "/assets/flow_runtime.js" in p
+    assert "/assets/flow.css" in p
 
 
 def test_inject_is_valid_js_object_literal() -> None:

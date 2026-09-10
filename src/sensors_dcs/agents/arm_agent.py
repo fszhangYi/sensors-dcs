@@ -78,6 +78,15 @@ class ArmAgent(BaseAgent):
                 "synth": True,
             }
 
+        # Normalize to plain list[float] so ring consumers (IK seed) never see ndarray/tuple quirks.
+        if joints is not None:
+            try:
+                joints = [float(x) for x in list(joints)[: self._n_joints]]
+                if len(joints) < self._n_joints or any(not math.isfinite(x) for x in joints):
+                    joints = None
+            except (TypeError, ValueError):
+                joints = None
+
         payload: dict[str, Any] = {
             "joints_rad": joints,
             "joints_deg": sample.get("joints_deg"),
@@ -92,7 +101,7 @@ class ArmAgent(BaseAgent):
         try:
             from sensors_dcs.arm_pose import cartesian_payload
 
-            payload.update(cartesian_payload(joints if isinstance(joints, list) else None))
+            payload.update(cartesian_payload(joints))
         except Exception:  # noqa: BLE001
             payload["cartesian_xyzrpy"] = None
         return Frame(
