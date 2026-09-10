@@ -1,5 +1,5 @@
 /**
- * Infer Tab · Flow runtime (P1/P2): program + infer module execution.
+ * Infer Tab · Flow runtime (P1/P2): program + infer + pose_check module execution.
  * Depends on window.__flow* adapters from viz.py and window.__flowEditor.
  */
 (function () {
@@ -21,7 +21,6 @@
     paused: false,
     gen: 0,
     currentModuleId: null,
-    goalPause: false, // infer term_cond triggered → waiting for Continue
   };
 
   function ed() {
@@ -51,23 +50,32 @@
     }
   }
 
+  function normalizeTermCond(tc) {
+    if (!tc || typeof tc !== 'object') return null;
+    if (tc.direction === 'z_rise' || tc.direction === 'z_fall') {
+      const th = tc.threshold;
+      if (th == null || !Number.isFinite(Number(th))) return null;
+      return { direction: tc.direction, threshold: Number(th) };
+    }
+    if (tc.z_rise_to != null && Number.isFinite(Number(tc.z_rise_to))) {
+      return { direction: 'z_rise', threshold: Number(tc.z_rise_to) };
+    }
+    if (tc.z_fall_to != null && Number.isFinite(Number(tc.z_fall_to))) {
+      return { direction: 'z_fall', threshold: Number(tc.z_fall_to) };
+    }
+    return null;
+  }
+
   function termCondConfigured(tc) {
-    if (!tc) return false;
-    const rise = tc.z_rise_to;
-    const fall = tc.z_fall_to;
-    return (rise != null && Number.isFinite(Number(rise))) ||
-      (fall != null && Number.isFinite(Number(fall)));
+    return !!normalizeTermCond(tc);
   }
 
   function termCondTriggered(z, tc) {
-    if (z == null || !Number.isFinite(Number(z)) || !tc) return false;
+    const n = normalizeTermCond(tc);
+    if (z == null || !Number.isFinite(Number(z)) || !n) return false;
     const zf = Number(z);
-    if (tc.z_rise_to != null && Number.isFinite(Number(tc.z_rise_to)) && zf >= Number(tc.z_rise_to)) {
-      return true;
-    }
-    if (tc.z_fall_to != null && Number.isFinite(Number(tc.z_fall_to)) && zf <= Number(tc.z_fall_to)) {
-      return true;
-    }
+    if (n.direction === 'z_rise') return zf >= n.threshold;
+    if (n.direction === 'z_fall') return zf <= n.threshold;
     return false;
   }
 
@@ -115,14 +123,15 @@
     return state.running && gen === state.gen;
   }
 
-  async function runProgramModule(mod, gen) {
-    setMod(mod.id, 'running');
-    const gate = await checkStart(mod);
-    if (!gate.ok) return { ok: false, error: gate.error };
-    if (!(await waitWhileFlowPaused(gen))) return { ok: false, stopped: true };
-
+  async function moveToGoal(mod, gen, opts) {
+    opts = opts || {};
     if (typeof window.__flowIk !== 'function' || typeof window.__flowSendAbs !== 'function') {
       const err = 'missing_flow_adapters';
+      setMod(mod.id, 'failed', err);
+      return { ok: false, error: err };
+    }
+    if (!mod.goal || !mod.goal.xyzrpy) {
+      const err = 'missing_goal';
       setMod(mod.id, 'failed', err);
       return { ok: false, error: err };
     }
@@ -134,8 +143,8 @@
       return { ok: false, error: err };
     }
 
-    if (typeof window.__flowGripper === 'function' && mod.start.gripper != null) {
-      await window.__flowGripper(mod.start.gripper);
+    if (opts.preGripper != null && typeof window.__flowGripper === 'function') {
+      await window.__flowGripper(opts.preGripper);
     }
     if (!(await waitWhileFlowPaused(gen))) return { ok: false, stopped: true };
 
@@ -157,13 +166,41 @@
         return { ok: false, error: err };
       }
     }
-    if (typeof window.__flowGripper === 'function' && mod.goal.gripper != null) {
+    if (mod.goal.gripper != null && typeof window.__flowGripper === 'function') {
       await window.__flowGripper(mod.goal.gripper);
     }
+    return { ok: true };
+  }
+
+  /** Program basic: start gate → move to goal. */
+  async function runProgramModule(mod, gen) {
+    setMod(mod.id, 'running');
+    const gate = await checkStart(mod);
+    if (!gate.ok) return { ok: false, error: gate.error };
+    if (!(await waitWhileFlowPaused(gen))) return { ok: false, stopped: true };
+
+    const r = await moveToGoal(mod, gen, {
+      preGripper: (mod.start && mod.start.gripper != null) ? mod.start.gripper : null,
+    });
+    if (!r.ok) return r;
     setMod(mod.id, 'succeeded');
     return { ok: true };
   }
 
+  /** Pose-check: no start gate; from current pose → goal (program only). */
+  async function runPoseCheckModule(mod, gen) {
+    setMod(mod.id, 'running');
+    if (!(await waitWhileFlowPaused(gen))) return { ok: false, stopped: true };
+    const r = await moveToGoal(mod, gen, {});
+    if (!r.ok) return r;
+    setMod(mod.id, 'succeeded');
+    return { ok: true };
+  }
+
+  /**
+   * Infer basic: start gate → pi05 step loop until term_cond (dir+threshold).
+   * On trigger: module succeeds immediately (no goal / no loop-end pause).
+   */
   async function runInferModule(mod, gen) {
     setMod(mod.id, 'running');
     const gate = await checkStart(mod);
@@ -189,13 +226,6 @@
     while (state.running && gen === state.gen) {
       if (!(await waitWhileFlowPaused(gen))) return { ok: false, stopped: true };
 
-      // User Continue after goal-pause → module succeeded (Q3 default)
-      if (state.goalPause && !state.paused) {
-        state.goalPause = false;
-        setMod(mod.id, 'succeeded');
-        return { ok: true, afterGoalPause: true };
-      }
-
       const chunk = (typeof window.__flowChunkSkip === 'function') ? window.__flowChunkSkip() : 1;
       let last = null;
       for (let i = 0; i < chunk; i++) {
@@ -209,7 +239,6 @@
           return { ok: false, error: err };
         }
         if (last.term_flag || last.reject_flag) {
-          // Align with LOOP: treat as stoppable signal but for flow mark failed/pause
           const err = last.reject_flag ? 'reject_flag' : 'term_flag';
           setMod(mod.id, 'failed', err);
           return { ok: false, error: err };
@@ -250,19 +279,8 @@
       const cur = (typeof window.__flowReadPose7 === 'function') ? window.__flowReadPose7() : null;
       const z = cur && cur.xyzrpy ? cur.xyzrpy[2] : null;
       if (termCondTriggered(z, mod.term_cond)) {
-        // Pretend goal is the last point of current LOOP → auto pause (Q7: no near-goal required)
-        state.goalPause = true;
-        state.paused = true;
-        setMod(mod.id, 'paused', t('infer.flow_term_triggered'));
-        setHint(t('infer.flow_hint_term_pause', { n: stepN }));
-        syncToolbar();
-        // Wait until Continue clears pause; then succeed this module
-        while (state.running && gen === state.gen && state.paused) {
-          await sleepMs(100);
-        }
-        if (!(state.running && gen === state.gen)) return { ok: false, stopped: true };
-        state.goalPause = false;
-        setMod(mod.id, 'succeeded');
+        setMod(mod.id, 'succeeded', t('infer.flow_term_triggered'));
+        setHint(t('infer.flow_hint_term_done', { n: stepN }));
         return { ok: true };
       }
       setHint(t('infer.flow_hint_infer_step', { n: stepN }));
@@ -291,7 +309,6 @@
     }
     state.running = true;
     state.paused = false;
-    state.goalPause = false;
     state.gen += 1;
     const gen = state.gen;
     editor.resetModuleStates();
@@ -304,7 +321,9 @@
       if (!mod) break;
       state.currentModuleId = cur;
       let r;
-      if (mod.motion_mode === 'infer') {
+      if (mod.type === 'pose_check') {
+        r = await runPoseCheckModule(mod, gen);
+      } else if (mod.motion_mode === 'infer') {
         r = await runInferModule(mod, gen);
       } else {
         r = await runProgramModule(mod, gen);
@@ -325,7 +344,6 @@
     if (state.gen === gen) {
       state.running = false;
       state.paused = false;
-      state.goalPause = false;
       state.currentModuleId = null;
       syncToolbar();
     }
@@ -349,7 +367,6 @@
     if (!state.running) return;
     state.running = false;
     state.paused = false;
-    state.goalPause = false;
     state.gen += 1;
     state.currentModuleId = null;
     syncToolbar();

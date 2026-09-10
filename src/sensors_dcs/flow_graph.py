@@ -132,27 +132,39 @@ def pose_near(
     return True, None
 
 
+def normalize_term_cond(term_cond: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Normalize {direction, threshold} or legacy {z_rise_to,z_fall_to} → dir+threshold."""
+    if not term_cond:
+        return None
+    direction = term_cond.get("direction")
+    if direction in ("z_rise", "z_fall"):
+        th = term_cond.get("threshold", None)
+        if th is None or not math.isfinite(float(th)):
+            return None
+        return {"direction": direction, "threshold": float(th)}
+    rise = term_cond.get("z_rise_to", None)
+    if rise is not None and math.isfinite(float(rise)):
+        return {"direction": "z_rise", "threshold": float(rise)}
+    fall = term_cond.get("z_fall_to", None)
+    if fall is not None and math.isfinite(float(fall)):
+        return {"direction": "z_fall", "threshold": float(fall)}
+    return None
+
+
 def term_cond_triggered(z: float | None, term_cond: Mapping[str, Any] | None) -> bool:
-    """OR of z_rise_to / z_fall_to; unset sides ignored."""
+    """direction+threshold: z_rise → z≥th; z_fall → z≤th. Legacy OR fields also accepted."""
     if z is None or not math.isfinite(float(z)):
         return False
-    if not term_cond:
+    n = normalize_term_cond(term_cond)
+    if not n:
         return False
     zf = float(z)
-    rise = term_cond.get("z_rise_to", None)
-    fall = term_cond.get("z_fall_to", None)
-    if rise is not None and math.isfinite(float(rise)) and zf >= float(rise):
-        return True
-    if fall is not None and math.isfinite(float(fall)) and zf <= float(fall):
-        return True
+    if n["direction"] == "z_rise":
+        return zf >= float(n["threshold"])
+    if n["direction"] == "z_fall":
+        return zf <= float(n["threshold"])
     return False
 
 
 def term_cond_configured(term_cond: Mapping[str, Any] | None) -> bool:
-    if not term_cond:
-        return False
-    for key in ("z_rise_to", "z_fall_to"):
-        v = term_cond.get(key, None)
-        if v is not None and math.isfinite(float(v)):
-            return True
-    return False
+    return normalize_term_cond(term_cond) is not None

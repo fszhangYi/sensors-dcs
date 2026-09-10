@@ -6,7 +6,8 @@
   'use strict';
 
   const LS_KEY = 'dcs.inf.flow.graph';
-  const NODE_W = 216;
+  const NODE_W = 168;
+  const LINK_SNAP_PX = 140;
 
   function t(key, vars) {
     try {
@@ -37,6 +38,29 @@
     return { pos_m: 0.01, rot_rad: 0.05, grip: 0.05 };
   }
 
+  function defaultTermCond() {
+    return { direction: 'z_rise', threshold: null };
+  }
+
+  /** Normalize legacy {z_rise_to,z_fall_to} → {direction,threshold}. */
+  function normalizeTermCond(tc) {
+    if (!tc || typeof tc !== 'object') return defaultTermCond();
+    if (tc.direction === 'z_rise' || tc.direction === 'z_fall') {
+      const th = tc.threshold;
+      return {
+        direction: tc.direction,
+        threshold: (th != null && Number.isFinite(Number(th))) ? Number(th) : null,
+      };
+    }
+    if (tc.z_rise_to != null && Number.isFinite(Number(tc.z_rise_to))) {
+      return { direction: 'z_rise', threshold: Number(tc.z_rise_to) };
+    }
+    if (tc.z_fall_to != null && Number.isFinite(Number(tc.z_fall_to))) {
+      return { direction: 'z_fall', threshold: Number(tc.z_fall_to) };
+    }
+    return defaultTermCond();
+  }
+
   function createBasicModule(x, y) {
     return {
       id: uid('m'),
@@ -47,14 +71,63 @@
       start: defaultPose7(),
       goal: defaultPose7(),
       motion_mode: 'program',
-      term_cond: { z_rise_to: null, z_fall_to: null },
+      term_cond: defaultTermCond(),
       start_tol: defaultTol(),
       timing: defaultTiming(),
     };
   }
 
+  /** Pose-check: program-only, goal-only (move from current pose → goal). */
+  function createPoseCheckModule(x, y) {
+    return {
+      id: uid('m'),
+      type: 'pose_check',
+      title: '',
+      x: x || 80,
+      y: y || 80,
+      goal: defaultPose7(),
+      motion_mode: 'program',
+      timing: defaultTiming(),
+    };
+  }
+
+  function createModule(type, x, y) {
+    if (type === 'pose_check') return createPoseCheckModule(x, y);
+    return createBasicModule(x, y);
+  }
+
   function emptyGraph() {
     return { version: 1, modules: [], edges: [], meta: { name: '', updated_at: '' } };
+  }
+
+  function migrateModule(m) {
+    if (!m || typeof m !== 'object') return null;
+    const type = m.type === 'pose_check' ? 'pose_check' : 'basic';
+    if (type === 'pose_check') {
+      return {
+        id: m.id || uid('m'),
+        type: 'pose_check',
+        title: m.title || '',
+        x: Number(m.x) || 80,
+        y: Number(m.y) || 80,
+        goal: m.goal || defaultPose7(),
+        motion_mode: 'program',
+        timing: m.timing || defaultTiming(),
+      };
+    }
+    return {
+      id: m.id || uid('m'),
+      type: 'basic',
+      title: m.title || '',
+      x: Number(m.x) || 80,
+      y: Number(m.y) || 80,
+      start: m.start || defaultPose7(),
+      goal: m.goal || defaultPose7(),
+      motion_mode: m.motion_mode === 'infer' ? 'infer' : 'program',
+      term_cond: normalizeTermCond(m.term_cond),
+      start_tol: m.start_tol || defaultTol(),
+      timing: m.timing || defaultTiming(),
+    };
   }
 
   function loadGraph() {
@@ -64,6 +137,7 @@
       const g = JSON.parse(raw);
       if (!g || !Array.isArray(g.modules) || !Array.isArray(g.edges)) return emptyGraph();
       g.version = 1;
+      g.modules = g.modules.map(migrateModule).filter(Boolean);
       return g;
     } catch (_) {
       return emptyGraph();
@@ -142,11 +216,18 @@
   function fmtPoseShort(p) {
     const a = (p && p.xyzrpy) || [0, 0, 0, 0, 0, 0];
     const g = (p && p.gripper != null) ? Number(p.gripper) : 0;
-    return a.slice(0, 3).map((v) => Number(v).toFixed(2)).join(',') + ' | g ' + Number(g).toFixed(2);
+    return a.slice(0, 3).map((v) => Number(v).toFixed(2)).join(',') + ' ·g' + Number(g).toFixed(2);
   }
 
   function parsePoseCsv(text) {
-    const parts = String(text || '').trim().split(/[,\s;]+/).filter(Boolean).map(Number);
+    const normalized = String(text || '')
+      .trim()
+      .replace(/[［\[]/g, '')
+      .replace(/[］\]]/g, '')
+      .replace(/，/g, ',')
+      .replace(/；/g, ';')
+      .replace(/[|／/]/g, ',');
+    const parts = normalized.split(/[,\s;]+/).filter((p) => p !== '').map(Number);
     if (parts.length < 6 || parts.some((v) => !Number.isFinite(v))) return null;
     const grip = parts.length >= 7 && Number.isFinite(parts[6]) ? parts[6] : 0;
     return { xyzrpy: parts.slice(0, 6), gripper: grip };
@@ -158,9 +239,85 @@
     return a.map((v) => Number(v).toFixed(4)).join(',') + ',' + Number(g).toFixed(3);
   }
 
+  function escapeAttr(s) {
+    return String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function poseFieldsHtml(idPrefix, pose, label, syncBtnId) {
+    const a = (pose && pose.xyzrpy) || [0, 0, 0, 0, 0, 0];
+    const g = (pose && pose.gripper != null) ? pose.gripper : 0;
+    const keys = ['x', 'y', 'z', 'rx', 'ry', 'rz', 'g'];
+    const vals = a.slice(0, 6).concat([g]);
+    let head = '<div class="flow-field-head"><label>' + label + '</label>';
+    if (syncBtnId) {
+      head += '<button type="button" class="flow-sync-btn" id="' + syncBtnId + '">' + t('infer.flow_sync') + '</button>';
+    }
+    head += '</div>';
+    let grid = '<div class="flow-pose-grid">';
+    for (let i = 0; i < 7; i++) {
+      grid += '<label class="flow-pose-cell">' + keys[i] +
+        '<input type="number" step="any" id="' + idPrefix + keys[i] + '" value="' +
+        (Number.isFinite(Number(vals[i])) ? vals[i] : 0) + '" /></label>';
+    }
+    grid += '</div>';
+    return '<div class="flow-field">' + head + grid + '</div>';
+  }
+
+  function poseCsvFieldHtml(textareaId, pose, label, syncBtnId) {
+    let head = '<div class="flow-field-head"><label>' + label + ' (x,y,z,rx,ry,rz,g)</label>';
+    if (syncBtnId) {
+      head += '<button type="button" class="flow-sync-btn" id="' + syncBtnId + '">' + t('infer.flow_sync') + '</button>';
+    }
+    head += '</div>';
+    return (
+      '<div class="flow-field">' + head +
+        '<textarea id="' + textareaId + '">' + poseToCsv(pose) + '</textarea></div>'
+    );
+  }
+
+  function bindSyncPose(box, btnId, onPose) {
+    const btn = box.querySelector('#' + btnId);
+    if (!btn) return;
+    btn.onclick = (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const p = readPoseFromLive();
+      if (!p) { setHint(t('infer.flow_need_read')); return; }
+      onPose(p);
+      setHint(t('infer.flow_synced'));
+    };
+  }
+
+  function readPoseFields(box, idPrefix) {
+    const keys = ['x', 'y', 'z', 'rx', 'ry', 'rz', 'g'];
+    const vals = keys.map((k) => {
+      const el = box.querySelector('#' + idPrefix + k);
+      return el ? Number(el.value) : NaN;
+    });
+    if (vals.some((v) => !Number.isFinite(v))) return null;
+    return { xyzrpy: vals.slice(0, 6), gripper: vals[6] };
+  }
+
+  function fillPoseFields(box, idPrefix, pose) {
+    if (!pose) return;
+    const a = pose.xyzrpy || [0, 0, 0, 0, 0, 0];
+    const vals = {
+      x: a[0], y: a[1], z: a[2], rx: a[3], ry: a[4], rz: a[5], g: pose.gripper || 0,
+    };
+    Object.keys(vals).forEach((k) => {
+      const el = box.querySelector('#' + idPrefix + k);
+      if (el) el.value = String(vals[k]);
+    });
+  }
+
   const editor = {
     graph: emptyGraph(),
     selectedId: null,
+    selectedEdgeId: null,
     pan: { x: 40, y: 40 },
     zoom: 1,
     linking: null,
@@ -196,50 +353,214 @@
   }
 
   function portCenter(mod, which) {
-    const h = 88;
+    // Prefer local layout sizes (untransformed); screen rect + pan/zoom is easy to get wrong.
+    const el = editor.els.nodes && editor.els.nodes.querySelector('.flow-node[data-id="' + mod.id + '"]');
+    const w = (el && el.offsetWidth) ? el.offsetWidth : NODE_W;
+    const h = (el && el.offsetHeight) ? el.offsetHeight : 72;
     return {
-      x: mod.x + (which === 'out' ? NODE_W : 0),
-      y: mod.y + h / 2,
+      x: Number(mod.x) + (which === 'out' ? w : 0),
+      y: Number(mod.y) + h / 2,
     };
+  }
+
+  function edgeControls(p0, p1) {
+    const dx = Math.max(48, Math.abs(p1.x - p0.x) * 0.5);
+    return {
+      c1: { x: p0.x + dx, y: p0.y },
+      c2: { x: p1.x - dx, y: p1.y },
+    };
+  }
+
+  function cubicAt(p0, c1, c2, p1, t) {
+    const u = 1 - t;
+    return {
+      x: u * u * u * p0.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * p1.x,
+      y: u * u * u * p0.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * p1.y,
+    };
+  }
+
+  function edgePathD(p0, p1) {
+    const { c1, c2 } = edgeControls(p0, p1);
+    return {
+      d: 'M' + p0.x + ',' + p0.y + ' C' + c1.x + ',' + c1.y + ' ' + c2.x + ',' + c2.y + ' ' + p1.x + ',' + p1.y,
+      mid: cubicAt(p0, c1, c2, p1, 0.5),
+      c1: c1,
+      c2: c2,
+    };
+  }
+
+  function svgEl(name, attrs) {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', name);
+    if (attrs) {
+      Object.keys(attrs).forEach((k) => {
+        if (attrs[k] != null) el.setAttribute(k, String(attrs[k]));
+      });
+    }
+    return el;
+  }
+
+  function deleteEdgeById(edgeId) {
+    if (!edgeId) return;
+    const before = editor.graph.edges.length;
+    editor.graph.edges = editor.graph.edges.filter((e) => e.id !== edgeId);
+    if (editor.graph.edges.length === before) return;
+    if (editor.selectedEdgeId === edgeId) editor.selectedEdgeId = null;
+    persist();
+    redrawEdges();
+    setHint(t('infer.flow_hint_edge_deleted'));
+  }
+
+  function selectEdge(edgeId) {
+    editor.selectedEdgeId = edgeId || null;
+    editor.selectedId = null;
+    if (editor.els.nodes) {
+      editor.els.nodes.querySelectorAll('.flow-node').forEach((n) => n.classList.remove('selected'));
+    }
+    redrawEdges();
+    renderInspector();
+    if (edgeId) setHint(t('infer.flow_hint_edge_selected'));
   }
 
   function redrawEdges() {
     const svg = editor.els.edges;
     if (!svg) return;
-    const parts = [
-      '<defs><marker id="flowArrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">' +
-        '<path d="M0,0 L6,3 L0,6 Z" fill="currentColor" /></marker></defs>',
-    ];
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+    const defs = svgEl('defs');
+    // Slim chevron arrowheads (userSpaceOnUse = stable size, not chunky stroke-scaled wedges)
+    [
+      { id: 'flowArrow', fill: '#7eb8ad' },
+      { id: 'flowArrowActive', fill: '#3dd6c0' },
+      { id: 'flowArrowTemp', fill: '#e6b84d' },
+    ].forEach((m) => {
+      const marker = svgEl('marker', {
+        id: m.id,
+        viewBox: '0 0 12 12',
+        refX: '10',
+        refY: '6',
+        markerWidth: '8',
+        markerHeight: '8',
+        orient: 'auto',
+        markerUnits: 'userSpaceOnUse',
+      });
+      marker.appendChild(svgEl('path', {
+        d: 'M2,1.5 L10,6 L2,10.5 L4.2,6 Z',
+        fill: m.fill,
+      }));
+      defs.appendChild(marker);
+    });
+    svg.appendChild(defs);
+
     editor.graph.edges.forEach((e) => {
       const a = moduleById(e.from);
       const b = moduleById(e.to);
       if (!a || !b) return;
       const p0 = portCenter(a, 'out');
       const p1 = portCenter(b, 'in');
-      const mx = (p0.x + p1.x) / 2;
-      parts.push(
-        '<path d="M' + p0.x + ',' + p0.y + ' C' + mx + ',' + p0.y + ' ' + mx + ',' + p1.y + ' ' + p1.x + ',' + p1.y + '" />'
-      );
+      const geom = edgePathD(p0, p1);
+      const selected = editor.selectedEdgeId === e.id;
+      const g = svgEl('g', {
+        class: 'flow-edge-group' + (selected ? ' is-selected' : ''),
+        'data-edge-id': e.id,
+      });
+
+      const hit = svgEl('path', {
+        class: 'flow-edge-hit',
+        d: geom.d,
+        fill: 'none',
+        stroke: 'transparent',
+        'stroke-width': '16',
+      });
+      const line = svgEl('path', {
+        class: 'flow-edge-line',
+        d: geom.d,
+        fill: 'none',
+        stroke: selected ? '#3dd6c0' : '#7eb8ad',
+        'stroke-width': selected ? '2.25' : '1.75',
+        'stroke-linecap': 'round',
+        'stroke-linejoin': 'round',
+        'marker-end': selected ? 'url(#flowArrowActive)' : 'url(#flowArrow)',
+        opacity: selected ? '1' : '0.92',
+      });
+
+      // Midpoint delete control
+      const btn = svgEl('g', {
+        class: 'flow-edge-del',
+        transform: 'translate(' + geom.mid.x + ',' + geom.mid.y + ')',
+      });
+      btn.appendChild(svgEl('circle', {
+        class: 'flow-edge-del-bg',
+        cx: '0',
+        cy: '0',
+        r: selected ? '9' : '7',
+      }));
+      btn.appendChild(svgEl('path', {
+        class: 'flow-edge-del-x',
+        d: 'M-3.2,-3.2 L3.2,3.2 M3.2,-3.2 L-3.2,3.2',
+        fill: 'none',
+        'stroke-width': '1.6',
+        'stroke-linecap': 'round',
+      }));
+
+      g.appendChild(hit);
+      g.appendChild(line);
+      g.appendChild(btn);
+      svg.appendChild(g);
+
+      const onSelect = (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        selectEdge(e.id);
+      };
+      hit.addEventListener('pointerdown', onSelect);
+      line.addEventListener('pointerdown', onSelect);
+      btn.addEventListener('pointerdown', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        deleteEdgeById(e.id);
+      });
+      g.addEventListener('dblclick', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        deleteEdgeById(e.id);
+      });
     });
+
     if (editor.linking && editor.linking.fromId && editor.linking.cur) {
       const a = moduleById(editor.linking.fromId);
       if (a) {
         const p0 = portCenter(a, 'out');
         const p1 = editor.linking.cur;
-        const mx = (p0.x + p1.x) / 2;
-        parts.push(
-          '<path class="flow-edge-temp" d="M' + p0.x + ',' + p0.y +
-            ' C' + mx + ',' + p0.y + ' ' + mx + ',' + p1.y + ' ' + p1.x + ',' + p1.y + '" />'
-        );
+        const geom = edgePathD(p0, p1);
+        svg.appendChild(svgEl('path', {
+          class: 'flow-edge-temp',
+          d: geom.d,
+          fill: 'none',
+          stroke: '#e6b84d',
+          'stroke-width': '1.75',
+          'stroke-dasharray': '5 5',
+          'stroke-linecap': 'round',
+          'marker-end': 'url(#flowArrowTemp)',
+          opacity: '0.9',
+        }));
       }
     }
-    svg.innerHTML = parts.join('');
+
     svg.setAttribute('width', '4000');
     svg.setAttribute('height', '3000');
+    svg.setAttribute('viewBox', '0 0 4000 3000');
+    svg.style.width = '4000px';
+    svg.style.height = '3000px';
   }
 
   function stateLabel(st) {
     return st || 'idle';
+  }
+
+  function typeLabel(m) {
+    if (m.title) return m.title;
+    if (m.type === 'pose_check') return t('infer.flow_pose_check');
+    return t('infer.flow_basic');
   }
 
   function renderNodes() {
@@ -252,23 +573,45 @@
       const el = document.createElement('div');
       el.className = 'flow-node' + (m.id === editor.selectedId ? ' selected' : '');
       el.dataset.id = m.id;
+      el.dataset.type = m.type || 'basic';
       el.dataset.state = st;
       el.style.left = m.x + 'px';
       el.style.top = m.y + 'px';
-      const modeLab = m.motion_mode === 'infer' ? t('infer.flow_mode_infer') : t('infer.flow_mode_program');
+      const isCheck = m.type === 'pose_check';
+      const modeLab = isCheck
+        ? t('infer.flow_mode_program')
+        : (m.motion_mode === 'infer' ? t('infer.flow_mode_infer') : t('infer.flow_mode_program'));
+      let body = '<div class="flow-node-mode">' + modeLab + '</div>';
+      if (isCheck) {
+        body +=
+          '<div class="flow-node-line"><span class="flow-node-k">' + t('infer.flow_goal') +
+          '</span><span class="flow-node-v">' + fmtPoseShort(m.goal) + '</span></div>';
+      } else {
+        body +=
+          '<div class="flow-node-line"><span class="flow-node-k">' + t('infer.flow_start') +
+          '</span><span class="flow-node-v">' + fmtPoseShort(m.start) + '</span></div>';
+        if (m.motion_mode !== 'infer') {
+          body +=
+            '<div class="flow-node-line"><span class="flow-node-k">' + t('infer.flow_goal') +
+            '</span><span class="flow-node-v">' + fmtPoseShort(m.goal) + '</span></div>';
+        } else {
+          const tc = normalizeTermCond(m.term_cond);
+          const dirLab = tc.direction === 'z_fall' ? t('infer.flow_z_fall') : t('infer.flow_z_rise');
+          const th = tc.threshold != null ? String(tc.threshold) : '—';
+          body +=
+            '<div class="flow-node-line"><span class="flow-node-k">' + t('infer.flow_term_cond') +
+            '</span><span class="flow-node-v">' + dirLab + ' ' + th + '</span></div>';
+        }
+      }
+      if (err) body += '<div class="flow-node-state">' + err + '</div>';
       el.innerHTML =
         '<div class="flow-node-head">' +
-          '<span>' + (m.title || t('infer.flow_basic')) + '</span>' +
+          '<span>' + typeLabel(m) + '</span>' +
           '<span class="flow-node-state">' + stateLabel(st) + '</span>' +
         '</div>' +
-        '<div class="flow-node-body">' +
-          '<div><strong>' + modeLab + '</strong></div>' +
-          '<div>' + t('infer.flow_start') + ': ' + fmtPoseShort(m.start) + '</div>' +
-          '<div>' + t('infer.flow_goal') + ': ' + fmtPoseShort(m.goal) + '</div>' +
-          (err ? '<div class="flow-node-state">' + err + '</div>' : '') +
-        '</div>' +
-        '<span class="flow-port in" data-port="in"></span>' +
-        '<span class="flow-port out" data-port="out"></span>';
+        '<div class="flow-node-body">' + body + '</div>' +
+        '<span class="flow-port in" data-port="in" title="in"></span>' +
+        '<span class="flow-port out" data-port="out" title="out"></span>';
       layer.appendChild(el);
       wireNode(el, m);
     });
@@ -277,80 +620,215 @@
 
   function selectModule(id) {
     editor.selectedId = id;
+    editor.selectedEdgeId = null;
     renderNodes();
     renderInspector();
   }
 
+  /** Update selection without destroying node DOM (safe during drag). */
+  function markSelected(id) {
+    editor.selectedId = id;
+    editor.selectedEdgeId = null;
+    if (editor.els.nodes) {
+      editor.els.nodes.querySelectorAll('.flow-node').forEach((n) => {
+        n.classList.toggle('selected', n.dataset.id === id);
+      });
+    }
+    redrawEdges();
+    renderInspector();
+  }
+
+  function beginNodeDrag(mod, el, clientX, clientY) {
+    markSelected(mod.id);
+    el.classList.add('flow-dragging');
+    const start = worldPointFromClient(clientX, clientY);
+    const ox = mod.x;
+    const oy = mod.y;
+    let moved = false;
+    const onMove = (e2) => {
+      if (!el.isConnected) return;
+      e2.preventDefault();
+      const p = worldPointFromClient(e2.clientX, e2.clientY);
+      const nx = Math.round(ox + (p.x - start.x));
+      const ny = Math.round(oy + (p.y - start.y));
+      if (nx !== mod.x || ny !== mod.y) moved = true;
+      mod.x = nx;
+      mod.y = ny;
+      el.style.left = mod.x + 'px';
+      el.style.top = mod.y + 'px';
+      redrawEdges();
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove, true);
+      window.removeEventListener('pointerup', onUp, true);
+      window.removeEventListener('pointercancel', onUp, true);
+      if (el.isConnected) el.classList.remove('flow-dragging');
+      if (moved) persist();
+    };
+    window.addEventListener('pointermove', onMove, true);
+    window.addEventListener('pointerup', onUp, true);
+    window.addEventListener('pointercancel', onUp, true);
+  }
+
   function deleteSelected() {
+    if (editor.selectedEdgeId) {
+      deleteEdgeById(editor.selectedEdgeId);
+      return;
+    }
     if (!editor.selectedId) return;
     const id = editor.selectedId;
     editor.graph.modules = editor.graph.modules.filter((m) => m.id !== id);
     editor.graph.edges = editor.graph.edges.filter((e) => e.from !== id && e.to !== id);
     delete editor.moduleStates[id];
     editor.selectedId = null;
+    editor.selectedEdgeId = null;
     persist();
     renderNodes();
     renderInspector();
+  }
+
+  /** Resolve link drop target: hit node, or nearest node (screen-space rect distance). */
+  function distPointToRect(x, y, r) {
+    const dx = Math.max(r.left - x, 0, x - r.right);
+    const dy = Math.max(r.top - y, 0, y - r.bottom);
+    return Math.hypot(dx, dy);
+  }
+
+  function resolveLinkTarget(clientX, clientY, fromId) {
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+    const nodes = editor.els.nodes ? editor.els.nodes.querySelectorAll('.flow-node') : [];
+
+    // Prefer exact hit (ignore SVG / captured source port)
+    const stack = (typeof document.elementsFromPoint === 'function')
+      ? document.elementsFromPoint(clientX, clientY)
+      : [document.elementFromPoint(clientX, clientY)].filter(Boolean);
+    for (let i = 0; i < stack.length; i++) {
+      const el = stack[i];
+      if (!el || !el.closest) continue;
+      const node = el.closest('.flow-node');
+      if (node && node.dataset.id && node.dataset.id !== fromId) {
+        return node.dataset.id;
+      }
+    }
+
+    // Snap to nearest other node by distance to its bounding box
+    let bestId = null;
+    let bestDist = LINK_SNAP_PX;
+    nodes.forEach((node) => {
+      const id = node.dataset.id;
+      if (!id || id === fromId) return;
+      const d = distPointToRect(clientX, clientY, node.getBoundingClientRect());
+      if (d < bestDist) {
+        bestDist = d;
+        bestId = id;
+      }
+    });
+    return bestId;
+  }
+
+  function clearLinkHighlights() {
+    if (!editor.els.nodes) return;
+    editor.els.nodes.querySelectorAll('.flow-node').forEach((n) => {
+      n.classList.remove('flow-link-target', 'flow-linking-from');
+    });
+  }
+
+  function commitLink(fromId, toId) {
+    if (!fromId || !toId || fromId === toId) return false;
+    editor.graph.edges = editor.graph.edges.filter((e) => e.from !== fromId);
+    editor.graph.edges.push({ id: uid('e'), from: fromId, to: toId });
+    persist();
+    const v = validateChain(editor.graph.modules, editor.graph.edges);
+    if (!v.ok) setHint(t('infer.flow_warn_' + v.error) || v.error);
+    else setHint(t('infer.flow_hint_linked'));
+    return true;
+  }
+
+  function endLinking(clientX, clientY) {
+    const fromId = editor.linking && editor.linking.fromId;
+    const toId = fromId ? resolveLinkTarget(clientX, clientY, fromId) : null;
+    clearLinkHighlights();
+    editor.linking = null;
+    if (fromId && toId) commitLink(fromId, toId);
+    renderNodes();
+    // Layout then redraw so port heights are accurate and the edge is visible
+    requestAnimationFrame(function () { redrawEdges(); });
+  }
+
+  function beginLinkDrag(mod, clientX, clientY) {
+    editor.linking = {
+      fromId: mod.id,
+      cur: worldPointFromClient(clientX, clientY),
+    };
+    const srcEl = editor.els.nodes && editor.els.nodes.querySelector('.flow-node[data-id="' + mod.id + '"]');
+    if (srcEl) srcEl.classList.add('flow-linking-from');
+    setHint(t('infer.flow_hint_linking'));
+    redrawEdges();
+
+    const onMove = (e2) => {
+      if (!editor.linking) return;
+      editor.linking.cur = worldPointFromClient(e2.clientX, e2.clientY);
+      const hoverId = resolveLinkTarget(e2.clientX, e2.clientY, mod.id);
+      if (editor.els.nodes) {
+        editor.els.nodes.querySelectorAll('.flow-node').forEach((n) => {
+          n.classList.toggle('flow-link-target', n.dataset.id === hoverId);
+        });
+      }
+      redrawEdges();
+    };
+    const onUp = (e2) => {
+      window.removeEventListener('pointermove', onMove, true);
+      window.removeEventListener('pointerup', onUp, true);
+      window.removeEventListener('pointercancel', onUp, true);
+      endLinking(e2.clientX, e2.clientY);
+    };
+    window.addEventListener('pointermove', onMove, true);
+    window.addEventListener('pointerup', onUp, true);
+    window.addEventListener('pointercancel', onUp, true);
   }
 
   function wireNode(el, mod) {
     const head = el.querySelector('.flow-node-head');
     head.addEventListener('pointerdown', (ev) => {
       if (ev.button !== 0) return;
+      if (editor.linking) return;
       ev.stopPropagation();
-      selectModule(mod.id);
-      const start = worldPointFromClient(ev.clientX, ev.clientY);
-      const ox = mod.x;
-      const oy = mod.y;
-      const onMove = (e2) => {
-        const p = worldPointFromClient(e2.clientX, e2.clientY);
-        mod.x = Math.round(ox + (p.x - start.x));
-        mod.y = Math.round(oy + (p.y - start.y));
-        el.style.left = mod.x + 'px';
-        el.style.top = mod.y + 'px';
-        redrawEdges();
-      };
-      const onUp = () => {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-        persist();
-      };
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
+      ev.preventDefault();
+      beginNodeDrag(mod, el, ev.clientX, ev.clientY);
     });
     el.addEventListener('click', (ev) => {
       ev.stopPropagation();
+      // Click-to-connect: if an unfinished click-link is pending, complete it
+      if (editor.linking && editor.linking.clickMode && editor.linking.fromId && editor.linking.fromId !== mod.id) {
+        const fromId = editor.linking.fromId;
+        clearLinkHighlights();
+        editor.linking = null;
+        commitLink(fromId, mod.id);
+        renderNodes();
+        return;
+      }
       selectModule(mod.id);
+    });
+    // Body: left/center drag module; right edge starts a link
+    el.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0 || editor.linking) return;
+      if (ev.target.closest && (ev.target.closest('.flow-port') || ev.target.closest('.flow-node-head'))) return;
+      const rect = el.getBoundingClientRect();
+      const relX = (ev.clientX - rect.left) / Math.max(rect.width, 1);
+      ev.stopPropagation();
+      ev.preventDefault();
+      if (relX >= 0.72) {
+        beginLinkDrag(mod, ev.clientX, ev.clientY);
+      } else {
+        beginNodeDrag(mod, el, ev.clientX, ev.clientY);
+      }
     });
     const out = el.querySelector('.flow-port.out');
     out.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0) return;
       ev.stopPropagation();
       ev.preventDefault();
-      editor.linking = { fromId: mod.id, cur: portCenter(mod, 'out') };
-      const onMove = (e2) => {
-        editor.linking.cur = worldPointFromClient(e2.clientX, e2.clientY);
-        redrawEdges();
-      };
-      const onUp = (e2) => {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-        const target = document.elementFromPoint(e2.clientX, e2.clientY);
-        const port = target && target.closest ? target.closest('.flow-port.in') : null;
-        const node = port && port.closest ? port.closest('.flow-node') : null;
-        if (node && node.dataset.id && node.dataset.id !== mod.id) {
-          const toId = node.dataset.id;
-          editor.graph.edges = editor.graph.edges.filter((e) => e.from !== mod.id);
-          editor.graph.edges.push({ id: uid('e'), from: mod.id, to: toId });
-          persist();
-          const v = validateChain(editor.graph.modules, editor.graph.edges);
-          if (!v.ok) setHint(t('infer.flow_warn_' + v.error) || v.error);
-          else setHint(t('infer.flow_hint_linked'));
-        }
-        editor.linking = null;
-        renderNodes();
-      };
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
+      beginLinkDrag(mod, ev.clientX, ev.clientY);
     });
   }
 
@@ -362,9 +840,108 @@
     return { xyzrpy: xyz.slice(0, 6).map(Number), gripper: g };
   }
 
+  function timingFieldsHtml(tm) {
+    const rows = [
+      { id: 'flowInsTMin', key: 'infer.flow_t_min', step: '0.1', val: tm.t_min_s },
+      { id: 'flowInsTMax', key: 'infer.flow_t_max', step: '0.1', val: tm.t_max_s },
+      { id: 'flowInsVNorm', key: 'infer.flow_v_norm', step: '0.001', val: tm.v_norm_rad_s },
+      { id: 'flowInsTj', key: 'infer.flow_tj', step: '0.01', val: tm.jerk_seg_frac },
+      { id: 'flowInsTa', key: 'infer.flow_ta', step: '0.01', val: tm.accel_seg_frac },
+    ];
+    let html = '<div class="flow-field"><label>' + t('infer.flow_timing') + '</label>';
+    html += '<div class="flow-timing-list">';
+    rows.forEach((r) => {
+      html +=
+        '<div class="flow-timing-row">' +
+          '<label for="' + r.id + '">' + t(r.key) + '</label>' +
+          '<input type="number" step="' + r.step + '" id="' + r.id + '" value="' + r.val + '" />' +
+        '</div>';
+    });
+    html += '</div></div>';
+    return html;
+  }
+
+  function readTimingFromBox(box) {
+    return {
+      t_min_s: Number(box.querySelector('#flowInsTMin').value) || 0.1,
+      t_max_s: Number(box.querySelector('#flowInsTMax').value) || 30,
+      v_norm_rad_s: Number(box.querySelector('#flowInsVNorm').value) || 0.02,
+      jerk_seg_frac: Number(box.querySelector('#flowInsTj').value) || 0.1,
+      accel_seg_frac: Number(box.querySelector('#flowInsTa').value) || 0.15,
+    };
+  }
+
+  function setElHidden(el, hide) {
+    if (!el) return;
+    el.hidden = !!hide;
+    // Belt-and-suspenders: .flow-field { display:flex } can override [hidden]
+    el.style.display = hide ? 'none' : '';
+  }
+
+  function syncInspectorModeVisibility(box, mode) {
+    const isInfer = mode === 'infer';
+    setElHidden(box.querySelector('.flow-term-block'), !isInfer);
+    setElHidden(box.querySelector('.flow-goal-block'), isInfer);
+  }
+
+  function applyPoseCheckModule(box, m) {
+    const goal = readPoseFields(box, 'flowInsGoal_');
+    if (!goal) {
+      // Fallback: allow CSV paste in a hidden/legacy textarea if present
+      const ta = box.querySelector('#flowInsGoal');
+      const parsed = ta ? parsePoseCsv(ta.value) : null;
+      if (!parsed) {
+        setHint(t('infer.flow_bad_pose'));
+        return false;
+      }
+      m.goal = parsed;
+    } else {
+      m.goal = goal;
+    }
+    const titleEl = box.querySelector('#flowInsTitle');
+    m.title = titleEl ? String(titleEl.value || '') : (m.title || '');
+    m.type = 'pose_check';
+    m.motion_mode = 'program';
+    m.timing = readTimingFromBox(box);
+    persist();
+    renderNodes();
+    renderInspector();
+    setHint(t('infer.flow_saved'));
+    return true;
+  }
+
   function renderInspector() {
     const box = editor.els.inspector;
     if (!box) return;
+
+    if (editor.selectedEdgeId) {
+      const edge = editor.graph.edges.find((e) => e.id === editor.selectedEdgeId);
+      if (!edge) {
+        editor.selectedEdgeId = null;
+      } else {
+        const fromM = moduleById(edge.from);
+        const toM = moduleById(edge.to);
+        box.innerHTML =
+          '<h3 class="flow-inspector-title">' + t('infer.flow_inspector') + ' · ' + t('infer.flow_edge') + '</h3>' +
+          '<p class="flow-inspector-empty">' +
+            escapeAttr(typeLabel(fromM || { type: 'basic' })) + ' → ' +
+            escapeAttr(typeLabel(toM || { type: 'basic' })) +
+          '</p>' +
+          '<div class="flow-inspector-actions">' +
+            '<button type="button" class="primary" id="flowInsDeleteEdge">' + t('infer.flow_delete_edge') + '</button>' +
+          '</div>';
+        const del = box.querySelector('#flowInsDeleteEdge');
+        if (del) {
+          del.onclick = (ev) => {
+            ev.preventDefault();
+            deleteEdgeById(edge.id);
+            renderInspector();
+          };
+        }
+        return;
+      }
+    }
+
     const m = moduleById(editor.selectedId);
     if (!m) {
       box.innerHTML =
@@ -372,29 +949,65 @@
         '<p class="flow-inspector-empty" data-i18n="infer.flow_inspector_empty">' + t('infer.flow_inspector_empty') + '</p>';
       return;
     }
-    const tc = m.term_cond || {};
+
+    if (m.type === 'pose_check') {
+      const tm = m.timing || defaultTiming();
+      box.innerHTML =
+        '<h3 class="flow-inspector-title">' + t('infer.flow_inspector') + ' · ' + t('infer.flow_pose_check') + '</h3>' +
+        '<div class="flow-field"><label>' + t('infer.flow_title') + '</label>' +
+          '<input type="text" id="flowInsTitle" value="' + escapeAttr(m.title || '') + '" /></div>' +
+        '<div class="flow-field"><label>' + t('infer.flow_mode') + '</label>' +
+          '<input type="text" value="' + escapeAttr(t('infer.flow_mode_fixed_program')) + '" disabled /></div>' +
+        poseFieldsHtml('flowInsGoal_', m.goal || defaultPose7(), t('infer.flow_goal_only'), 'flowInsFillGoal') +
+        timingFieldsHtml(tm) +
+        '<div class="flow-inspector-actions">' +
+          '<button type="button" class="primary" id="flowInsApply">' + t('btn.apply') + '</button>' +
+          '<button type="button" id="flowInsDelete">' + t('infer.flow_delete') + '</button>' +
+        '</div>';
+      bindSyncPose(box, 'flowInsFillGoal', (p) => fillPoseFields(box, 'flowInsGoal_', p));
+      const applyBtn = box.querySelector('#flowInsApply');
+      const delBtn = box.querySelector('#flowInsDelete');
+      if (delBtn) delBtn.onclick = () => { deleteSelected(); };
+      if (applyBtn) {
+        applyBtn.onclick = (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const mod = moduleById(editor.selectedId);
+          if (!mod) return;
+          applyPoseCheckModule(box, mod);
+        };
+      }
+      return;
+    }
+
+    const tc = normalizeTermCond(m.term_cond);
     const tol = m.start_tol || defaultTol();
     const tm = m.timing || defaultTiming();
+    const isInfer = m.motion_mode === 'infer';
     box.innerHTML =
       '<h3 class="flow-inspector-title">' + t('infer.flow_inspector') + '</h3>' +
       '<div class="flow-field"><label>' + t('infer.flow_title') + '</label>' +
-        '<input type="text" id="flowInsTitle" value="' + (m.title || '').replace(/"/g, '&quot;') + '" /></div>' +
+        '<input type="text" id="flowInsTitle" value="' + escapeAttr(m.title || '') + '" /></div>' +
       '<div class="flow-field"><label>' + t('infer.flow_mode') + '</label>' +
         '<select id="flowInsMode">' +
-          '<option value="program"' + (m.motion_mode === 'program' ? ' selected' : '') + '>' + t('infer.flow_mode_program') + '</option>' +
-          '<option value="infer"' + (m.motion_mode === 'infer' ? ' selected' : '') + '>' + t('infer.flow_mode_infer') + '</option>' +
+          '<option value="program"' + (!isInfer ? ' selected' : '') + '>' + t('infer.flow_mode_program') + '</option>' +
+          '<option value="infer"' + (isInfer ? ' selected' : '') + '>' + t('infer.flow_mode_infer') + '</option>' +
         '</select></div>' +
-      '<div class="flow-field"><label>' + t('infer.flow_start') + ' (x,y,z,rx,ry,rz,g)</label>' +
-        '<textarea id="flowInsStart">' + poseToCsv(m.start) + '</textarea></div>' +
-      '<div class="flow-field"><label>' + t('infer.flow_goal') + ' (x,y,z,rx,ry,rz,g)</label>' +
-        '<textarea id="flowInsGoal">' + poseToCsv(m.goal) + '</textarea></div>' +
-      '<div class="flow-field flow-term-block"' + (m.motion_mode === 'infer' ? '' : ' hidden') + '>' +
+      poseCsvFieldHtml('flowInsStart', m.start, t('infer.flow_start'), 'flowInsFillStart') +
+      '<div class="flow-goal-block"' + (isInfer ? ' hidden' : '') + '>' +
+        poseCsvFieldHtml('flowInsGoal', m.goal, t('infer.flow_goal'), 'flowInsFillGoal') +
+      '</div>' +
+      '<div class="flow-field flow-term-block"' + (isInfer ? '' : ' hidden') + '>' +
         '<label>' + t('infer.flow_term_cond') + '</label>' +
         '<div class="flow-term-row">' +
-          '<div><label>' + t('infer.flow_z_rise') + '</label>' +
-            '<input type="number" step="0.001" id="flowInsZRise" value="' + (tc.z_rise_to != null ? tc.z_rise_to : '') + '" /></div>' +
-          '<div><label>' + t('infer.flow_z_fall') + '</label>' +
-            '<input type="number" step="0.001" id="flowInsZFall" value="' + (tc.z_fall_to != null ? tc.z_fall_to : '') + '" /></div>' +
+          '<div><label>' + t('infer.flow_term_dir') + '</label>' +
+            '<select id="flowInsTermDir">' +
+              '<option value="z_rise"' + (tc.direction !== 'z_fall' ? ' selected' : '') + '>' + t('infer.flow_z_rise') + '</option>' +
+              '<option value="z_fall"' + (tc.direction === 'z_fall' ? ' selected' : '') + '>' + t('infer.flow_z_fall') + '</option>' +
+            '</select></div>' +
+          '<div><label>' + t('infer.flow_term_threshold') + '</label>' +
+            '<input type="number" step="0.001" id="flowInsTermTh" value="' +
+              (tc.threshold != null ? tc.threshold : '') + '" /></div>' +
         '</div></div>' +
       '<div class="flow-field"><label>' + t('infer.flow_tol') + '</label>' +
         '<div class="flow-timing-grid">' +
@@ -402,75 +1015,80 @@
           '<input type="number" step="0.001" id="flowInsTolRot" title="rot_rad" value="' + tol.rot_rad + '" />' +
           '<input type="number" step="0.001" id="flowInsTolGrip" title="grip" value="' + tol.grip + '" />' +
         '</div></div>' +
-      '<div class="flow-field"><label>' + t('infer.flow_timing') + '</label>' +
-        '<div class="flow-timing-grid">' +
-          '<input type="number" step="0.1" id="flowInsTMin" title="t_min" value="' + tm.t_min_s + '" />' +
-          '<input type="number" step="0.1" id="flowInsTMax" title="t_max" value="' + tm.t_max_s + '" />' +
-          '<input type="number" step="0.001" id="flowInsVNorm" title="v_norm" value="' + tm.v_norm_rad_s + '" />' +
-          '<input type="number" step="0.01" id="flowInsTj" title="Tj" value="' + tm.jerk_seg_frac + '" />' +
-          '<input type="number" step="0.01" id="flowInsTa" title="Ta" value="' + tm.accel_seg_frac + '" />' +
-        '</div></div>' +
+      timingFieldsHtml(tm) +
       '<div class="flow-inspector-actions">' +
-        '<button type="button" id="flowInsFillStart">' + t('infer.flow_fill_start') + '</button>' +
-        '<button type="button" id="flowInsFillGoal">' + t('infer.flow_fill_goal') + '</button>' +
-        '<button type="button" id="flowInsApply">' + t('btn.apply') + '</button>' +
+        '<button type="button" class="primary" id="flowInsApply">' + t('btn.apply') + '</button>' +
         '<button type="button" id="flowInsDelete">' + t('infer.flow_delete') + '</button>' +
       '</div>';
 
     const modeEl = box.querySelector('#flowInsMode');
+    syncInspectorModeVisibility(box, modeEl.value);
     modeEl.addEventListener('change', () => {
-      const term = box.querySelector('.flow-term-block');
-      if (term) term.hidden = modeEl.value !== 'infer';
+      const mode = modeEl.value === 'infer' ? 'infer' : 'program';
+      // Persist mode immediately so node card + inspector stay in sync
+      m.motion_mode = mode;
+      if (mode === 'infer') {
+        m.term_cond = normalizeTermCond(m.term_cond);
+      }
+      persist();
+      renderNodes();
+      renderInspector();
     });
-    box.querySelector('#flowInsFillStart').addEventListener('click', () => {
-      const p = readPoseFromLive();
-      if (!p) { setHint(t('infer.flow_need_read')); return; }
-      box.querySelector('#flowInsStart').value = poseToCsv(p);
+    bindSyncPose(box, 'flowInsFillStart', (p) => {
+      const el = box.querySelector('#flowInsStart');
+      if (el) el.value = poseToCsv(p);
     });
-    box.querySelector('#flowInsFillGoal').addEventListener('click', () => {
-      const p = readPoseFromLive();
-      if (!p) { setHint(t('infer.flow_need_read')); return; }
-      box.querySelector('#flowInsGoal').value = poseToCsv(p);
+    bindSyncPose(box, 'flowInsFillGoal', (p) => {
+      const el = box.querySelector('#flowInsGoal');
+      if (el) el.value = poseToCsv(p);
     });
     box.querySelector('#flowInsDelete').addEventListener('click', deleteSelected);
     box.querySelector('#flowInsApply').addEventListener('click', () => {
       const start = parsePoseCsv(box.querySelector('#flowInsStart').value);
-      const goal = parsePoseCsv(box.querySelector('#flowInsGoal').value);
-      if (!start || !goal) {
+      if (!start) {
         setHint(t('infer.flow_bad_pose'));
         return;
       }
+      const mode = modeEl.value === 'infer' ? 'infer' : 'program';
+      let goal = m.goal || defaultPose7();
+      if (mode !== 'infer') {
+        goal = parsePoseCsv(box.querySelector('#flowInsGoal').value);
+        if (!goal) {
+          setHint(t('infer.flow_bad_pose'));
+          return;
+        }
+      }
+      const dir = box.querySelector('#flowInsTermDir').value === 'z_fall' ? 'z_fall' : 'z_rise';
+      const thRaw = box.querySelector('#flowInsTermTh').value;
+      const term = {
+        direction: dir,
+        threshold: thRaw === '' ? null : Number(thRaw),
+      };
+      if (mode === 'infer' && (term.threshold == null || !Number.isFinite(term.threshold))) {
+        setHint(t('infer.flow_warn_missing_term'));
+        return;
+      }
       m.title = String(box.querySelector('#flowInsTitle').value || '');
-      m.motion_mode = modeEl.value === 'infer' ? 'infer' : 'program';
+      m.motion_mode = mode;
       m.start = start;
       m.goal = goal;
-      const zr = box.querySelector('#flowInsZRise').value;
-      const zf = box.querySelector('#flowInsZFall').value;
-      m.term_cond = {
-        z_rise_to: zr === '' ? null : Number(zr),
-        z_fall_to: zf === '' ? null : Number(zf),
-      };
+      m.term_cond = term;
       m.start_tol = {
         pos_m: Number(box.querySelector('#flowInsTolPos').value) || 0.01,
         rot_rad: Number(box.querySelector('#flowInsTolRot').value) || 0.05,
         grip: Number(box.querySelector('#flowInsTolGrip').value) || 0.05,
       };
-      m.timing = {
-        t_min_s: Number(box.querySelector('#flowInsTMin').value) || 0.1,
-        t_max_s: Number(box.querySelector('#flowInsTMax').value) || 30,
-        v_norm_rad_s: Number(box.querySelector('#flowInsVNorm').value) || 0.02,
-        jerk_seg_frac: Number(box.querySelector('#flowInsTj').value) || 0.1,
-        accel_seg_frac: Number(box.querySelector('#flowInsTa').value) || 0.15,
-      };
+      m.timing = readTimingFromBox(box);
       persist();
       renderNodes();
+      renderInspector();
       setHint(t('infer.flow_saved'));
     });
   }
 
-  function addModuleAt(clientX, clientY) {
+  function addModuleAt(type, clientX, clientY) {
     const p = worldPointFromClient(clientX, clientY);
-    const m = createBasicModule(p.x - NODE_W / 2, p.y - 40);
+    const m = createModule(type, p.x - NODE_W / 2, p.y - 40);
     editor.graph.modules.push(m);
     persist();
     selectModule(m.id);
@@ -485,6 +1103,7 @@
   function clearGraph() {
     editor.graph = emptyGraph();
     editor.selectedId = null;
+    editor.selectedEdgeId = null;
     editor.moduleStates = {};
     persist();
     renderNodes();
@@ -509,6 +1128,111 @@
     return editor.graph;
   }
 
+  function graphForExport() {
+    const g = editor.graph || emptyGraph();
+    return {
+      version: 1,
+      modules: (g.modules || []).map((m) => migrateModule(m)).filter(Boolean),
+      edges: (g.edges || []).map((e) => ({
+        id: e.id || uid('e'),
+        from: String(e.from || ''),
+        to: String(e.to || ''),
+      })).filter((e) => e.from && e.to),
+      meta: {
+        name: (g.meta && g.meta.name) || '',
+        updated_at: new Date().toISOString(),
+        exported_at: new Date().toISOString(),
+      },
+    };
+  }
+
+  function parseGraphPayload(raw) {
+    let data = raw;
+    if (typeof raw === 'string') {
+      data = JSON.parse(raw);
+    }
+    if (!data || typeof data !== 'object') throw new Error('not_object');
+    // Allow wrapping as { graph: {...} }
+    if (data.graph && typeof data.graph === 'object') data = data.graph;
+    if (!Array.isArray(data.modules) || !Array.isArray(data.edges)) {
+      throw new Error('bad_shape');
+    }
+    const modules = data.modules.map(migrateModule).filter(Boolean);
+    const moduleIds = new Set(modules.map((m) => m.id));
+    const edges = data.edges
+      .map((e) => ({
+        id: (e && e.id) || uid('e'),
+        from: String((e && e.from) || ''),
+        to: String((e && e.to) || ''),
+      }))
+      .filter((e) => e.from && e.to && moduleIds.has(e.from) && moduleIds.has(e.to));
+    return {
+      version: 1,
+      modules: modules,
+      edges: edges,
+      meta: {
+        name: (data.meta && data.meta.name) || '',
+        updated_at: new Date().toISOString(),
+      },
+    };
+  }
+
+  function setGraph(g, opts) {
+    opts = opts || {};
+    editor.graph = g || emptyGraph();
+    editor.selectedId = null;
+    editor.selectedEdgeId = null;
+    editor.moduleStates = {};
+    if (opts.persist !== false) persist();
+    renderNodes();
+    renderInspector();
+    fitView();
+  }
+
+  function exportGraphJson() {
+    const payload = graphForExport();
+    const text = JSON.stringify(payload, null, 2);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const name = (payload.meta && payload.meta.name) ? String(payload.meta.name).replace(/[^\w.-]+/g, '_') : 'flow';
+    const filename = 'sensors-dcs-flow-' + (name || 'flow') + '-' + stamp + '.json';
+    const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
+    setHint(t('infer.flow_exported'));
+  }
+
+  function importGraphJsonText(text) {
+    let g;
+    try {
+      g = parseGraphPayload(text);
+    } catch (err) {
+      const code = String((err && err.message) || err || '');
+      if (code === 'bad_shape' || code === 'not_object') {
+        setHint(t('infer.flow_import_bad'));
+      } else {
+        setHint(t('infer.flow_import_fail'));
+      }
+      return false;
+    }
+    setGraph(g);
+    setHint(t('infer.flow_imported', { n: g.modules.length }));
+    return true;
+  }
+
+  function bindToolDrag(el, type) {
+    if (!el) return;
+    el.addEventListener('dragstart', (ev) => {
+      ev.dataTransfer.setData('text/flow-type', type);
+      ev.dataTransfer.effectAllowed = 'copy';
+    });
+  }
+
   function init() {
     const page = document.getElementById('infPageFlow');
     if (!page || page.dataset.flowInited === '1') return;
@@ -521,18 +1245,15 @@
     editor.els.inspector = document.getElementById('infFlowInspector');
     editor.els.hint = document.getElementById('infFlowHint');
     editor.els.toolBasic = document.getElementById('infFlowToolBasic');
+    editor.els.toolPoseCheck = document.getElementById('infFlowToolPoseCheck');
 
     editor.graph = loadGraph();
     applyWorldTransform();
     renderNodes();
     renderInspector();
 
-    if (editor.els.toolBasic) {
-      editor.els.toolBasic.addEventListener('dragstart', (ev) => {
-        ev.dataTransfer.setData('text/flow-type', 'basic');
-        ev.dataTransfer.effectAllowed = 'copy';
-      });
-    }
+    bindToolDrag(editor.els.toolBasic, 'basic');
+    bindToolDrag(editor.els.toolPoseCheck, 'pose_check');
     if (editor.els.wrap) {
       editor.els.wrap.addEventListener('dragover', (ev) => {
         ev.preventDefault();
@@ -540,11 +1261,13 @@
       });
       editor.els.wrap.addEventListener('drop', (ev) => {
         ev.preventDefault();
-        const typ = ev.dataTransfer.getData('text/flow-type');
-        if (typ === 'basic') addModuleAt(ev.clientX, ev.clientY);
+        const typ = ev.dataTransfer.getData('text/flow-type') || 'basic';
+        if (typ === 'basic' || typ === 'pose_check') addModuleAt(typ, ev.clientX, ev.clientY);
       });
-      editor.els.wrap.addEventListener('click', () => {
+      editor.els.wrap.addEventListener('click', (ev) => {
+        if (ev.target && ev.target.closest && ev.target.closest('.flow-edge-group')) return;
         editor.selectedId = null;
+        editor.selectedEdgeId = null;
         renderNodes();
         renderInspector();
       });
@@ -570,11 +1293,10 @@
       });
       window.addEventListener('pointerup', () => { panning = null; });
 
-      // Space+drag pan
       let spaceDown = false;
       window.addEventListener('keydown', (ev) => {
         if (ev.code === 'Space') spaceDown = true;
-        if ((ev.key === 'Delete' || ev.key === 'Backspace') && editor.selectedId) {
+        if ((ev.key === 'Delete' || ev.key === 'Backspace') && (editor.selectedId || editor.selectedEdgeId)) {
           const tag = (ev.target && ev.target.tagName) || '';
           if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
           deleteSelected();
@@ -593,8 +1315,25 @@
 
     const btnFit = document.getElementById('infFlowFit');
     const btnClear = document.getElementById('infFlowClear');
+    const btnExport = document.getElementById('infFlowExport');
+    const btnImport = document.getElementById('infFlowImport');
+    const fileImport = document.getElementById('infFlowImportFile');
     if (btnFit) btnFit.addEventListener('click', fitView);
     if (btnClear) btnClear.addEventListener('click', clearGraph);
+    if (btnExport) btnExport.addEventListener('click', exportGraphJson);
+    if (btnImport && fileImport) {
+      btnImport.addEventListener('click', () => { fileImport.value = ''; fileImport.click(); });
+      fileImport.addEventListener('change', () => {
+        const f = fileImport.files && fileImport.files[0];
+        if (!f) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          importGraphJsonText(String(reader.result || ''));
+        };
+        reader.onerror = () => { setHint(t('infer.flow_import_fail')); };
+        reader.readAsText(f);
+      });
+    }
 
     const v = validateChain(editor.graph.modules, editor.graph.edges);
     if (editor.graph.modules.length && !v.ok) {
@@ -607,6 +1346,9 @@
   window.__flowEditor = {
     init: init,
     getGraph: getGraph,
+    setGraph: setGraph,
+    exportGraphJson: exportGraphJson,
+    importGraphJsonText: importGraphJsonText,
     validateChain: validateChain,
     setModuleState: setModuleState,
     resetModuleStates: resetModuleStates,

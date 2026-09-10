@@ -84,9 +84,15 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   background:
-    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--border) 55%, transparent) 1px, transparent 0) 0 0 / 18px 18px,
-    color-mix(in srgb, var(--surface, #121a26) 88%, #000);
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--muted) 32%, transparent) 1px, transparent 0) 0 0 / 18px 18px,
+    color-mix(in srgb, var(--surface, #1a2433) 72%, #3d4f66);
   overflow: hidden;
+}
+
+html[data-theme='light'] .flow-canvas-wrap {
+  background:
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--muted) 26%, transparent) 1px, transparent 0) 0 0 / 18px 18px,
+    color-mix(in srgb, var(--surface) 82%, white);
 }
 
 .flow-world {
@@ -101,37 +107,95 @@
   position: absolute;
   left: 0;
   top: 0;
+  width: 4000px;
+  height: 3000px;
   overflow: visible;
   pointer-events: none;
+  z-index: 1;
 }
 
-.flow-edges path {
+.flow-edge-hit,
+.flow-edge-del {
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.flow-edge-del {
+  pointer-events: auto;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.flow-edge-group:hover .flow-edge-del,
+.flow-edge-group.is-selected .flow-edge-del {
+  opacity: 1;
+}
+
+.flow-edge-line {
+  pointer-events: none;
   fill: none;
-  stroke: color-mix(in srgb, var(--accent) 70%, var(--muted));
-  stroke-width: 2;
-  marker-end: url(#flowArrow);
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-.flow-edges path.flow-edge-temp {
-  stroke-dasharray: 5 4;
-  stroke: var(--spark);
+.flow-edge-temp {
+  pointer-events: none;
+  fill: none;
+}
+
+.flow-edge-del-bg {
+  fill: color-mix(in srgb, var(--panel, #1a2433) 88%, #000);
+  stroke: color-mix(in srgb, var(--danger, #e85d75) 70%, var(--border, #445));
+  stroke-width: 1.25;
+}
+
+.flow-edge-group.is-selected .flow-edge-del-bg {
+  fill: color-mix(in srgb, var(--danger, #e85d75) 22%, var(--panel, #1a2433));
+  stroke: var(--danger, #e85d75);
+}
+
+.flow-edge-del-x {
+  stroke: var(--danger, #e85d75);
+}
+
+.flow-nodes {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  z-index: 2;
 }
 
 .flow-node {
   position: absolute;
-  width: 13.5rem;
+  width: 10.5rem;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 7px;
   background: var(--panel);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16), 0 0 0 1px color-mix(in srgb, var(--border) 55%, transparent);
   color: var(--text);
   user-select: none;
+  touch-action: none;
   z-index: 2;
+}
+
+html[data-theme='light'] .flow-node {
+  border-color: color-mix(in srgb, var(--text) 20%, transparent);
+  box-shadow: var(--shadow-sm), 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.flow-node.flow-dragging {
+  z-index: 20;
+  cursor: grabbing;
+  opacity: 0.97;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
 }
 
 .flow-node.selected {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent), 0 8px 22px rgba(0, 0, 0, 0.28);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent), 0 3px 10px rgba(0, 0, 0, 0.2);
 }
 
 .flow-node[data-state="running"] {
@@ -154,34 +218,80 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.35rem;
-  padding: 0.4rem 0.55rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  font-size: 0.78rem;
+  gap: 0.3rem;
+  padding: 0.28rem 0.42rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  font-size: 0.7rem;
   font-weight: 600;
+  letter-spacing: 0.01em;
   cursor: move;
+  line-height: 1.2;
+}
+
+.flow-node-head > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .flow-node-body {
-  padding: 0.4rem 0.55rem 0.55rem;
-  font-size: 0.72rem;
+  padding: 0.28rem 0.42rem 0.34rem;
+  font-size: 0.62rem;
   color: var(--muted);
   line-height: 1.35;
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
 }
 
-.flow-node-body strong {
-  color: var(--text);
+.flow-node-mode {
+  color: var(--accent);
   font-weight: 550;
+  font-size: 0.6rem;
+  letter-spacing: 0.02em;
+}
+
+.flow-node-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.28rem;
+  min-width: 0;
+}
+
+.flow-node-k {
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+
+.flow-node-v {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.58rem;
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
 }
 
 .flow-node-state {
   display: inline-block;
-  margin-top: 0.25rem;
-  padding: 0.08rem 0.35rem;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--surface, #1a2433) 80%, transparent);
+  flex: 0 0 auto;
+  margin-top: 0;
+  padding: 0.04rem 0.28rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--surface, #1a2433) 75%, transparent);
   color: var(--muted);
-  font-size: 0.68rem;
+  font-size: 0.58rem;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.flow-node-body > .flow-node-state {
+  margin-top: 0.1rem;
+  align-self: flex-start;
 }
 
 .flow-node[data-state="failed"] .flow-node-state {
@@ -202,24 +312,86 @@
 
 .flow-port {
   position: absolute;
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   border-radius: 50%;
-  border: 2px solid var(--accent);
+  border: 1.5px solid var(--accent);
   background: var(--panel);
   top: 50%;
   transform: translateY(-50%);
-  z-index: 3;
+  z-index: 5;
   cursor: crosshair;
+  touch-action: none;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+
+.flow-node:hover .flow-port,
+.flow-node.selected .flow-port,
+.flow-node.flow-linking-from .flow-port,
+.flow-node.flow-link-target .flow-port {
+  opacity: 1;
   pointer-events: auto;
 }
 
+/* Invisible hit pad — transparent box-shadow does NOT receive clicks */
+.flow-port::before {
+  content: "";
+  position: absolute;
+  inset: -12px;
+  border-radius: 50%;
+}
+
 .flow-port.in {
-  left: -7px;
+  left: -6px;
 }
 
 .flow-port.out {
-  right: -7px;
+  right: -6px;
+}
+
+.flow-node.flow-link-target {
+  border-color: var(--spark);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--spark) 55%, transparent);
+}
+
+.flow-node.flow-linking-from {
+  border-color: var(--accent);
+}
+
+.flow-node.flow-linking-from .flow-port.out {
+  background: var(--spark);
+  border-color: var(--spark);
+}
+
+.flow-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  margin-bottom: 0.2rem;
+}
+
+.flow-field-head > label {
+  margin: 0;
+}
+
+.flow-sync-btn {
+  flex: 0 0 auto;
+  padding: 0.12rem 0.45rem;
+  font-size: 0.7rem;
+  line-height: 1.3;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent-dim, #1a3a36) 55%, transparent);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.flow-sync-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .flow-inspector .flow-field {
@@ -227,6 +399,12 @@
   flex-direction: column;
   gap: 0.2rem;
   margin-bottom: 0.35rem;
+}
+
+/* display:flex above beats the UA [hidden] rule — force hide */
+.flow-inspector [hidden],
+.flow-inspector-actions [hidden] {
+  display: none !important;
 }
 
 .flow-inspector label {
@@ -276,6 +454,55 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.3rem;
+}
+
+.flow-timing-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.flow-timing-row {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.flow-timing-row > label {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.flow-timing-row input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.flow-pose-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.3rem;
+}
+
+.flow-pose-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+.flow-pose-cell input {
+  width: 100%;
+}
+
+.flow-inspector-actions .primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #041018;
 }
 
 @media (max-width: 960px) {

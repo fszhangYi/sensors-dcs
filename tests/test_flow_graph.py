@@ -57,10 +57,15 @@ def test_pose_near() -> None:
 def test_term_cond() -> None:
     assert not term_cond_configured(None)
     assert not term_cond_configured({})
+    assert term_cond_configured({"direction": "z_rise", "threshold": 0.4})
+    assert term_cond_configured({"direction": "z_fall", "threshold": 0.1})
+    assert not term_cond_configured({"direction": "z_rise", "threshold": None})
+    # legacy fields still accepted
     assert term_cond_configured({"z_rise_to": 0.4})
     assert term_cond_configured({"z_fall_to": 0.1})
-    assert not term_cond_triggered(0.3, {"z_rise_to": 0.4})
+    assert not term_cond_triggered(0.3, {"direction": "z_rise", "threshold": 0.4})
+    assert term_cond_triggered(0.41, {"direction": "z_rise", "threshold": 0.4})
+    assert term_cond_triggered(0.05, {"direction": "z_fall", "threshold": 0.1})
+    assert not term_cond_triggered(0.2, {"direction": "z_fall", "threshold": 0.1})
     assert term_cond_triggered(0.41, {"z_rise_to": 0.4})
     assert term_cond_triggered(0.05, {"z_fall_to": 0.1})
-    assert term_cond_triggered(0.5, {"z_rise_to": 0.4, "z_fall_to": 0.1})
-    assert not term_cond_triggered(0.2, {"z_rise_to": 0.4, "z_fall_to": 0.1})

@@ -2443,12 +2443,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <button type="button" id="infFlowResume" data-i18n="infer.flow_resume" disabled>继续</button>
           <button type="button" id="infFlowStop" data-i18n="infer.flow_stop" disabled>停止</button>
           <button type="button" id="infFlowFit" data-i18n="infer.flow_fit">适应画布</button>
+          <button type="button" id="infFlowExport" data-i18n="infer.flow_export">导出 JSON</button>
+          <button type="button" id="infFlowImport" data-i18n="infer.flow_import">加载 JSON</button>
+          <input type="file" id="infFlowImportFile" accept="application/json,.json" hidden />
           <button type="button" id="infFlowClear" data-i18n="infer.flow_clear">清空</button>
-          <span class="hint" id="infFlowHint" data-i18n="infer.flow_hint_ready">拖入基础模块并连线后点 Run</span>
+          <span class="hint" id="infFlowHint" data-i18n="infer.flow_hint_ready">拖入模块并连线后点 Run</span>
         </div>
         <aside class="flow-toolbox" aria-label="Flow toolbox">
           <h3 class="flow-toolbox-title" data-i18n="infer.flow_toolbox">模块</h3>
           <button type="button" class="flow-tool-item" id="infFlowToolBasic" draggable="true" data-i18n="infer.flow_basic">基础模块</button>
+          <button type="button" class="flow-tool-item" id="infFlowToolPoseCheck" draggable="true" data-i18n="infer.flow_pose_check">位置校验</button>
           <span class="hint" data-i18n="infer.flow_toolbox_hint">拖到画布空白处</span>
         </aside>
         <div class="flow-canvas-wrap" id="infFlowCanvasWrap">
