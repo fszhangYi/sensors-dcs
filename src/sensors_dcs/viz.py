@@ -48,6 +48,8 @@ class ArmCommandBody(BaseModel):
     t_min_s: float | None = None
     t_max_s: float | None = None
     v_norm_rad_s: float | None = None
+    jerk_seg_frac: float | None = None
+    accel_seg_frac: float | None = None
 
 
 class PostprocessBody(BaseModel):
@@ -105,6 +107,8 @@ class ArmHomeGoBody(BaseModel):
     t_min_s: float | None = None
     t_max_s: float | None = None
     v_norm_rad_s: float | None = None
+    jerk_seg_frac: float | None = None
+    accel_seg_frac: float | None = None
 
 
 class ArmIkBody(BaseModel):
@@ -2239,7 +2243,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         <h3 class="inf-pi05-sec-title" id="infSecArm" data-i18n="infer.sec_arm">臂控制</h3>
         <div class="inf-pi05-row">
           <button type="button" id="infArmHome" data-i18n="arm.home">Home</button>
-          <div class="arm-abs-timing" data-i18n-title="arm.abs_timing_hint" title="T=clamp(d/v_norm, t_min, t_max)">
+          <div class="arm-abs-timing" data-i18n-title="arm.abs_timing_hint" title="T=clamp(d/v_norm, t_min, t_max)；七段 jerk：Tj / Ta">
             <label>
               <span data-i18n="arm.abs_t_min">t_min</span>
               <input type="number" id="infArmTMin" class="arm-abs-t-min" min="0.1" max="30" step="0.1" value="0.1" />
@@ -2254,6 +2258,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
               <span data-i18n="arm.abs_v_norm">v_norm</span>
               <input type="number" id="infArmVNorm" class="arm-abs-v-norm" min="0.001" max="5" step="0.001" value="0.02" />
               <span class="arm-abs-unit" data-i18n="arm.abs_v_unit">rad/s</span>
+            </label>
+            <label>
+              <span data-i18n="arm.abs_jerk_frac">Tj</span>
+              <input type="number" id="infArmJerkFrac" class="arm-abs-jerk-frac" min="0.02" max="0.22" step="0.01" value="0.10" />
+            </label>
+            <label>
+              <span data-i18n="arm.abs_accel_frac">Ta</span>
+              <input type="number" id="infArmAccelFrac" class="arm-abs-accel-frac" min="0" max="0.30" step="0.01" value="0.15" />
             </label>
           </div>
         </div>
@@ -2864,6 +2876,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
             t_min_s: timing.t_min_s,
             t_max_s: timing.t_max_s,
             v_norm_rad_s: timing.v_norm_rad_s,
+            jerk_seg_frac: timing.jerk_seg_frac,
+            accel_seg_frac: timing.accel_seg_frac,
           }),
         }).then((x) => x.json());
         if (r && r.home) {
@@ -3192,8 +3206,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const infArmTMin = document.getElementById('infArmTMin');
     const infArmTMax = document.getElementById('infArmTMax');
     const infArmVNorm = document.getElementById('infArmVNorm');
+    const infArmJerkFrac = document.getElementById('infArmJerkFrac');
+    const infArmAccelFrac = document.getElementById('infArmAccelFrac');
     const infArmProg = document.getElementById('infArmProg');
-    window.__armAbsTiming = window.__armAbsTiming || { t_min_s: 0.1, t_max_s: 30.0, v_norm_rad_s: 0.02 };
+    window.__armAbsTiming = window.__armAbsTiming || {
+      t_min_s: 0.1, t_max_s: 30.0, v_norm_rad_s: 0.02,
+      jerk_seg_frac: 0.10, accel_seg_frac: 0.15,
+    };
     const LS_PI05 = 'dcs.inf.pi05';
     let pi05StepBusy = false;
     let pi05LoopRunning = false;
@@ -3405,30 +3424,49 @@ PREVIEW_HTML = """<!DOCTYPE html>
       infArmJoints.value = vals.join(',');
       return true;
     }
-    function clampArmAbsTiming(tMin, tMax, vNorm) {
+    function clampArmAbsTiming(tMin, tMax, vNorm, jerkFrac, accelFrac) {
       let t_min_s = Number(tMin);
       let t_max_s = Number(tMax);
       let v_norm_rad_s = Number(vNorm);
+      let jerk_seg_frac = Number(jerkFrac);
+      let accel_seg_frac = Number(accelFrac);
       if (!Number.isFinite(t_min_s)) t_min_s = 0.1;
       if (!Number.isFinite(t_max_s)) t_max_s = 30.0;
       if (!Number.isFinite(v_norm_rad_s) || v_norm_rad_s <= 0) v_norm_rad_s = 0.02;
+      if (!Number.isFinite(jerk_seg_frac)) jerk_seg_frac = 0.10;
+      if (!Number.isFinite(accel_seg_frac)) accel_seg_frac = 0.15;
       t_min_s = Math.max(0.1, Math.min(30, t_min_s));
       t_max_s = Math.max(0.1, Math.min(30, t_max_s));
       if (t_min_s > t_max_s) {
         const tmp = t_min_s; t_min_s = t_max_s; t_max_s = tmp;
       }
       v_norm_rad_s = Math.max(0.001, Math.min(5, v_norm_rad_s));
-      return { t_min_s: t_min_s, t_max_s: t_max_s, v_norm_rad_s: v_norm_rad_s };
+      jerk_seg_frac = Math.max(0.02, Math.min(0.22, jerk_seg_frac));
+      accel_seg_frac = Math.max(0, Math.min(0.30, accel_seg_frac));
+      const need = 4 * jerk_seg_frac + 2 * accel_seg_frac;
+      if (need > 0.999) {
+        const scale = 0.999 / need;
+        jerk_seg_frac *= scale;
+        accel_seg_frac *= scale;
+      }
+      return {
+        t_min_s: t_min_s, t_max_s: t_max_s, v_norm_rad_s: v_norm_rad_s,
+        jerk_seg_frac: jerk_seg_frac, accel_seg_frac: accel_seg_frac,
+      };
     }
     function readArmAbsTimingFrom(root) {
       const tMinEl = root ? root.querySelector('.arm-abs-t-min') : infArmTMin;
       const tMaxEl = root ? root.querySelector('.arm-abs-t-max') : infArmTMax;
       const vEl = root ? root.querySelector('.arm-abs-v-norm') : infArmVNorm;
+      const jEl = root ? root.querySelector('.arm-abs-jerk-frac') : infArmJerkFrac;
+      const aEl = root ? root.querySelector('.arm-abs-accel-frac') : infArmAccelFrac;
       const cur = window.__armAbsTiming || {};
       return clampArmAbsTiming(
         tMinEl ? tMinEl.value : cur.t_min_s,
         tMaxEl ? tMaxEl.value : cur.t_max_s,
-        vEl ? vEl.value : cur.v_norm_rad_s
+        vEl ? vEl.value : cur.v_norm_rad_s,
+        jEl ? jEl.value : cur.jerk_seg_frac,
+        aEl ? aEl.value : cur.accel_seg_frac
       );
     }
     function applyArmAbsTimingTo(root, timing) {
@@ -3436,9 +3474,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const tMinEl = root ? root.querySelector('.arm-abs-t-min') : infArmTMin;
       const tMaxEl = root ? root.querySelector('.arm-abs-t-max') : infArmTMax;
       const vEl = root ? root.querySelector('.arm-abs-v-norm') : infArmVNorm;
+      const jEl = root ? root.querySelector('.arm-abs-jerk-frac') : infArmJerkFrac;
+      const aEl = root ? root.querySelector('.arm-abs-accel-frac') : infArmAccelFrac;
       if (tMinEl && t.t_min_s != null) tMinEl.value = String(t.t_min_s);
       if (tMaxEl && t.t_max_s != null) tMaxEl.value = String(t.t_max_s);
       if (vEl && t.v_norm_rad_s != null) vEl.value = String(t.v_norm_rad_s);
+      if (jEl && t.jerk_seg_frac != null) jEl.value = String(Number(t.jerk_seg_frac).toFixed(2));
+      if (aEl && t.accel_seg_frac != null) aEl.value = String(Number(t.accel_seg_frac).toFixed(2));
     }
     function syncArmAbsTimingFromUi(root) {
       const t = readArmAbsTimingFrom(root || null);
@@ -3449,8 +3491,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     function wireArmAbsTimingInputs(root) {
       const els = root
-        ? root.querySelectorAll('.arm-abs-t-min, .arm-abs-t-max, .arm-abs-v-norm')
-        : [infArmTMin, infArmTMax, infArmVNorm].filter(Boolean);
+        ? root.querySelectorAll('.arm-abs-t-min, .arm-abs-t-max, .arm-abs-v-norm, .arm-abs-jerk-frac, .arm-abs-accel-frac')
+        : [infArmTMin, infArmTMax, infArmVNorm, infArmJerkFrac, infArmAccelFrac].filter(Boolean);
       els.forEach((el) => {
         if (!el || el.dataset.timingWired === '1') return;
         el.dataset.timingWired = '1';
@@ -4490,6 +4532,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
         t_min_s: timing.t_min_s,
         t_max_s: timing.t_max_s,
         v_norm_rad_s: timing.v_norm_rad_s,
+        jerk_seg_frac: timing.jerk_seg_frac,
+        accel_seg_frac: timing.accel_seg_frac,
       });
       const usedDur = (r && r.duration_s != null) ? Number(r.duration_s) : timing.t_min_s;
       if (infArmProg) {
@@ -7152,7 +7196,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             '<input type="text" class="arm-abs-input" data-i18n-placeholder="arm.abs_ph" placeholder="0.00,0.00,0.00,0.00,0.00,0.00" autocomplete="off" spellcheck="false" />' +
             '<button type="button" class="arm-abs-send" data-i18n="arm.abs_send">下发</button>' +
             '<button type="button" class="arm-home-go" data-i18n="arm.home">Home</button>' +
-            '<div class="arm-abs-timing" data-i18n-title="arm.abs_timing_hint" title="T=clamp(d/v_norm, t_min, t_max)">' +
+            '<div class="arm-abs-timing" data-i18n-title="arm.abs_timing_hint" title="T=clamp(d/v_norm, t_min, t_max)；七段 jerk：Tj / Ta">' +
               '<label><span data-i18n="arm.abs_t_min">t_min</span>' +
               '<input type="number" class="arm-abs-t-min" min="0.1" max="30" step="0.1" value="0.1" />' +
               '<span class="arm-abs-unit" data-i18n="arm.abs_t_unit">s</span></label>' +
@@ -7162,6 +7206,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
               '<label><span data-i18n="arm.abs_v_norm">v_norm</span>' +
               '<input type="number" class="arm-abs-v-norm" min="0.001" max="5" step="0.001" value="0.02" />' +
               '<span class="arm-abs-unit" data-i18n="arm.abs_v_unit">rad/s</span></label>' +
+              '<label><span data-i18n="arm.abs_jerk_frac">Tj</span>' +
+              '<input type="number" class="arm-abs-jerk-frac" min="0.02" max="0.22" step="0.01" value="0.10" /></label>' +
+              '<label><span data-i18n="arm.abs_accel_frac">Ta</span>' +
+              '<input type="number" class="arm-abs-accel-frac" min="0" max="0.30" step="0.01" value="0.15" /></label>' +
             '</div>' +
           '</div>' +
           '<div class="arm-abs-prog" data-i18n="arm.abs_idle">绝对下发：空闲</div>' +
@@ -7487,6 +7535,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
                 t_min_s: timing.t_min_s,
                 t_max_s: timing.t_max_s,
                 v_norm_rad_s: timing.v_norm_rad_s,
+                jerk_seg_frac: timing.jerk_seg_frac,
+                accel_seg_frac: timing.accel_seg_frac,
               });
               const usedDur = (r && r.duration_s != null) ? Number(r.duration_s) : timing.t_min_s;
               runHint.textContent = r.ok
@@ -7635,6 +7685,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
             t_min_s: Number(msg.arm_abs_ramp.params.t_min_s),
             t_max_s: Number(msg.arm_abs_ramp.params.t_max_s),
             v_norm_rad_s: Number(msg.arm_abs_ramp.params.v_norm_rad_s),
+            jerk_seg_frac: Number(msg.arm_abs_ramp.params.jerk_seg_frac != null
+              ? msg.arm_abs_ramp.params.jerk_seg_frac : 0.10),
+            accel_seg_frac: Number(msg.arm_abs_ramp.params.accel_seg_frac != null
+              ? msg.arm_abs_ramp.params.accel_seg_frac : 0.15),
           };
           if (typeof applyArmAbsTimingTo === 'function') {
             applyArmAbsTimingTo(null, window.__armAbsTiming);
@@ -8313,6 +8367,8 @@ def create_viz_app(
             t_min_s=req.t_min_s,
             t_max_s=req.t_max_s,
             v_norm_rad_s=req.v_norm_rad_s,
+            jerk_seg_frac=req.jerk_seg_frac,
+            accel_seg_frac=req.accel_seg_frac,
         )
 
     @app.post("/api/arm/ik")
@@ -8475,6 +8531,8 @@ def create_viz_app(
             t_min_s=body.t_min_s,
             t_max_s=body.t_max_s,
             v_norm_rad_s=body.v_norm_rad_s,
+            jerk_seg_frac=body.jerk_seg_frac,
+            accel_seg_frac=body.accel_seg_frac,
         )
 
     @app.post("/api/shutdown")

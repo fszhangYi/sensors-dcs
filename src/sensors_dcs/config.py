@@ -76,14 +76,19 @@ class GelloArmTeleopConfig(BaseModel):
 
 
 class ArmAbsRampConfig(BaseModel):
-    """Joint-space abs send: T=clamp(d/v_norm, t_min, t_max) + S-curve (see docs/arm-abs-ramp-enhance.md)."""
+    """Joint-space abs send: T=clamp(d/v_norm, t_min, t_max) + profile (see docs/jerk-seven-segment.md)."""
 
     t_min_s: float = 0.1
     t_max_s: float = 30.0
     # Max-joint-rad speed used for T≈d/v_norm (rad/s). UI label: v_norm.
     v_norm_rad_s: float = 0.02
-    # cosine = ease-in-out S-curve approx; linear kept for callers that opt in.
-    profile: str = "cosine"
+    # seven_segment = jerk-limited (default); cosine = legacy; linear for opt-in.
+    profile: str = "seven_segment"
+    # Seven-segment time fractions of total T (see docs/jerk-seven-segment.md).
+    jerk_seg_frac: float = 0.10
+    accel_seg_frac: float = 0.15
+    # Abs command rate; None → fall back to gello_arm_sync.ramp_hz.
+    ramp_hz: float | None = 20.0
 
     @field_validator("t_min_s", "t_max_s", mode="before")
     @classmethod
@@ -108,15 +113,54 @@ class ArmAbsRampConfig(BaseModel):
     @field_validator("profile", mode="before")
     @classmethod
     def _profile(cls, v: Any) -> str:
-        s = str(v or "cosine").strip().lower()
-        if s not in ("cosine", "linear"):
-            raise ValueError("arm_abs_ramp.profile must be cosine or linear")
+        s = str(v or "seven_segment").strip().lower()
+        if s in ("seven", "jerk", "7seg", "7-segment"):
+            s = "seven_segment"
+        if s not in ("seven_segment", "cosine", "linear"):
+            raise ValueError(
+                "arm_abs_ramp.profile must be seven_segment, cosine, or linear"
+            )
         return s
+
+    @field_validator("jerk_seg_frac", mode="before")
+    @classmethod
+    def _jerk_frac(cls, v: Any) -> float:
+        if v is None or v == "":
+            return 0.10
+        f = float(v)
+        if f != f or f in (float("inf"), float("-inf")):
+            raise ValueError("jerk_seg_frac must be finite")
+        return max(0.02, min(0.22, f))
+
+    @field_validator("accel_seg_frac", mode="before")
+    @classmethod
+    def _accel_frac(cls, v: Any) -> float:
+        if v is None or v == "":
+            return 0.15
+        f = float(v)
+        if f != f or f in (float("inf"), float("-inf")):
+            raise ValueError("accel_seg_frac must be finite")
+        return max(0.0, min(0.30, f))
+
+    @field_validator("ramp_hz", mode="before")
+    @classmethod
+    def _ramp_hz(cls, v: Any) -> float | None:
+        if v is None or v == "":
+            return 20.0
+        f = float(v)
+        if f != f or f in (float("inf"), float("-inf")) or f <= 0:
+            raise ValueError("arm_abs_ramp.ramp_hz must be a positive finite float")
+        return max(0.1, min(200.0, f))
 
     @model_validator(mode="after")
     def _t_min_le_t_max(self) -> ArmAbsRampConfig:
         if self.t_min_s > self.t_max_s:
             raise ValueError("arm_abs_ramp.t_min_s must be <= t_max_s")
+        need = 4.0 * float(self.jerk_seg_frac) + 2.0 * float(self.accel_seg_frac)
+        if need > 1.0 - 1e-9:
+            scale = (1.0 - 1e-6) / need
+            object.__setattr__(self, "jerk_seg_frac", float(self.jerk_seg_frac) * scale)
+            object.__setattr__(self, "accel_seg_frac", float(self.accel_seg_frac) * scale)
         return self
 
 

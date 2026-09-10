@@ -96,3 +96,37 @@ def test_path_peak_step_cosine_gt_linear_avg() -> None:
     peak_lin = Orchestrator._path_peak_step(qa, lin)
     peak_cos = Orchestrator._path_peak_step(qa, cos)
     assert peak_cos > peak_lin  # mid of S-curve faster than uniform
+
+
+def test_seven_segment_path_endpoints_and_slower_ends() -> None:
+    qa = [0.0] * 6
+    qg = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    n = 40
+    path = Orchestrator._interp_path(qa, qg, n, profile="seven_segment")
+    assert len(path) == n
+    assert abs(path[-1][0] - 1.0) < 1e-12
+    step0 = abs(path[0][0] - qa[0])
+    mid_i = n // 2
+    step_mid = abs(path[mid_i][0] - path[mid_i - 1][0])
+    assert step0 < step_mid
+
+
+def test_seven_segment_alpha_monotonic() -> None:
+    prev = -1.0
+    for k in range(1, 101):
+        u = k / 100
+        a = Orchestrator._seven_segment_alpha(u)
+        assert a >= prev - 1e-12
+        prev = a
+    assert abs(Orchestrator._seven_segment_alpha(0.0)) < 1e-12
+    assert abs(Orchestrator._seven_segment_alpha(1.0) - 1.0) < 1e-12
+
+
+def test_arm_abs_ramp_config_defaults_seven_segment() -> None:
+    from sensors_dcs.config import ArmAbsRampConfig
+
+    cfg = ArmAbsRampConfig()
+    assert cfg.profile == "seven_segment"
+    assert cfg.jerk_seg_frac == 0.10
+    assert cfg.accel_seg_frac == 0.15
+    assert cfg.ramp_hz == 20.0

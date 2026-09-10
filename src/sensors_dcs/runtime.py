@@ -262,11 +262,13 @@ class Orchestrator:
         t_min_s: float | None = None,
         t_max_s: float | None = None,
         v_norm_rad_s: float | None = None,
+        jerk_seg_frac: float | None = None,
+        accel_seg_frac: float | None = None,
     ) -> dict[str, Any]:
         """Sugar for abs-send to configured ``home_joints_rad``.
 
         Same joint-space ramp as Infer/Collect「下发」:
-        ``T=clamp(d/v_norm, t_min, t_max)`` + cosine S-curve.
+        ``T=clamp(d/v_norm, t_min, t_max)`` + configured profile (default 7-seg jerk).
         ``duration_s`` is ignored (kept for API compatibility).
         """
         del duration_s  # Home no longer uses a dedicated fixed duration.
@@ -284,6 +286,8 @@ class Orchestrator:
             t_min_s=t_min_s,
             t_max_s=t_max_s,
             v_norm_rad_s=v_norm_rad_s,
+            jerk_seg_frac=jerk_seg_frac,
+            accel_seg_frac=accel_seg_frac,
         )
         out = dict(out)
         out["home"] = self.arm_home_status()
@@ -1039,24 +1043,105 @@ class Orchestrator:
         return 0.5 * (1.0 - math.cos(math.pi * u))
 
     @staticmethod
+    def _clamp_seven_segment_fracs(
+        jerk_seg_frac: float,
+        accel_seg_frac: float,
+    ) -> tuple[float, float, float]:
+        """Return (Tj, Ta, Tv) with Tv = 1 - 4*Tj - 2*Ta >= 0."""
+        tj = max(0.02, min(0.22, float(jerk_seg_frac)))
+        ta = max(0.0, min(0.30, float(accel_seg_frac)))
+        need = 4.0 * tj + 2.0 * ta
+        if need > 1.0 - 1e-9:
+            scale = (1.0 - 1e-6) / need
+            tj *= scale
+            ta *= scale
+        tv = max(0.0, 1.0 - 4.0 * tj - 2.0 * ta)
+        return tj, ta, tv
+
+    @staticmethod
+    def _seven_segment_alpha(
+        u: float,
+        *,
+        jerk_seg_frac: float = 0.10,
+        accel_seg_frac: float = 0.15,
+    ) -> float:
+        """Symmetric 7-segment jerk-limited α(u)∈[0,1]; α̇=α̈=0 at ends.
+
+        Time layout (normalized): +J Tj | 0 Ta | -J Tj | 0 Tv | -J Tj | 0 Ta | +J Tj.
+        """
+        u = max(0.0, min(1.0, float(u)))
+        if u <= 0.0:
+            return 0.0
+        if u >= 1.0:
+            return 1.0
+        tj, ta, tv = Orchestrator._clamp_seven_segment_fracs(
+            jerk_seg_frac, accel_seg_frac
+        )
+        # Jerk square-wave with |J|=1; normalize position by final raw value.
+        segs: list[tuple[float, float]] = [
+            (tj, 1.0),
+            (ta, 0.0),
+            (tj, -1.0),
+            (tv, 0.0),
+            (tj, -1.0),
+            (ta, 0.0),
+            (tj, 1.0),
+        ]
+
+        def _integrate(t_query: float) -> float:
+            a = 0.0
+            v = 0.0
+            p = 0.0
+            t_left = float(t_query)
+            for dur, j in segs:
+                if dur <= 0.0:
+                    continue
+                if t_left <= 0.0:
+                    break
+                dt = dur if t_left >= dur else t_left
+                # a(t)=a0+j*t; v=v0+a0*t+0.5*j*t^2; p=p0+v0*t+0.5*a0*t^2+(1/6)*j*t^3
+                p = p + v * dt + 0.5 * a * dt * dt + (1.0 / 6.0) * j * dt * dt * dt
+                v = v + a * dt + 0.5 * j * dt * dt
+                a = a + j * dt
+                t_left -= dt
+            return p
+
+        p_end = _integrate(1.0)
+        if abs(p_end) < 1e-18:
+            return u  # degenerate → linear fallback
+        return max(0.0, min(1.0, _integrate(u) / p_end))
+
+    @staticmethod
     def _interp_path(
         qa: list[float],
         qg: list[float],
         n: int,
         *,
         profile: str = "linear",
+        jerk_seg_frac: float = 0.10,
+        accel_seg_frac: float = 0.15,
     ) -> list[list[float]]:
         """Path q_a → q_g with N points (k=1..N); last == q_g.
 
         ``profile=linear``: uniform α=k/N (gello sync).
-        ``profile=cosine``: shared S-curve α (abs send).
+        ``profile=cosine``: shared cosine S-curve α (legacy abs).
+        ``profile=seven_segment``: shared jerk-limited 7-segment α (abs default).
         """
         n = max(1, int(n))
-        use_s = str(profile or "linear").strip().lower() == "cosine"
+        prof = str(profile or "linear").strip().lower()
         out: list[list[float]] = []
         for k in range(1, n + 1):
             u = k / n
-            a = Orchestrator._s_curve_alpha(u) if use_s else u
+            if prof == "seven_segment":
+                a = Orchestrator._seven_segment_alpha(
+                    u,
+                    jerk_seg_frac=jerk_seg_frac,
+                    accel_seg_frac=accel_seg_frac,
+                )
+            elif prof == "cosine":
+                a = Orchestrator._s_curve_alpha(u)
+            else:
+                a = u
             out.append(
                 [float(qa[i]) + a * (float(qg[i]) - float(qa[i])) for i in range(6)]
             )
@@ -1821,7 +1906,14 @@ class Orchestrator:
             "t_min_s": float(getattr(cfg, "t_min_s", 0.1) if cfg else 0.1),
             "t_max_s": float(getattr(cfg, "t_max_s", 30.0) if cfg else 30.0),
             "v_norm_rad_s": float(getattr(cfg, "v_norm_rad_s", 0.02) if cfg else 0.02),
-            "profile": str(getattr(cfg, "profile", "cosine") if cfg else "cosine"),
+            "profile": str(
+                getattr(cfg, "profile", "seven_segment") if cfg else "seven_segment"
+            ),
+            "jerk_seg_frac": float(getattr(cfg, "jerk_seg_frac", 0.10) if cfg else 0.10),
+            "accel_seg_frac": float(
+                getattr(cfg, "accel_seg_frac", 0.15) if cfg else 0.15
+            ),
+            "ramp_hz": float(getattr(cfg, "ramp_hz", 20.0) if cfg else 20.0),
         }
         with self._abs_ramp_lock:
             return {
@@ -1876,11 +1968,13 @@ class Orchestrator:
         t_min_s: float | None = None,
         t_max_s: float | None = None,
         v_norm_rad_s: float | None = None,
+        jerk_seg_frac: float | None = None,
+        accel_seg_frac: float | None = None,
     ) -> dict[str, Any]:
         """Timed **joint-space** ramp from live arm read → target joints.
 
-        - ``timing=scale_by_d`` (abs-send / Home): ``T=clamp(d/v_norm, t_min, t_max)`` + S-curve.
-        - ``timing=fixed``: use ``duration_s`` as total T + same S-curve profile
+        - ``timing=scale_by_d`` (abs-send / Home): ``T=clamp(d/v_norm, t_min, t_max)`` + profile.
+        - ``timing=fixed``: use ``duration_s`` as total T + same profile
           (legacy; gello sync / callers that pass only duration_s).
         Path is linear in q with shared α(t). Not Cartesian+IK.
         """
@@ -1955,7 +2049,10 @@ class Orchestrator:
             if v_norm_rad_s is not None
             else getattr(cfg, "v_norm_rad_s", 0.02)
         )
-        profile = str(getattr(cfg, "profile", "cosine") or "cosine")
+        profile = str(getattr(cfg, "profile", "seven_segment") or "seven_segment")
+        tj_in = jerk_seg_frac if jerk_seg_frac is not None else getattr(cfg, "jerk_seg_frac", 0.10)
+        ta_in = accel_seg_frac if accel_seg_frac is not None else getattr(cfg, "accel_seg_frac", 0.15)
+        jerk_frac, accel_frac, _tv = self._clamp_seven_segment_fracs(tj_in, ta_in)
         mode = str(timing or "scale_by_d").strip().lower()
         if mode not in ("scale_by_d", "fixed"):
             mode = "scale_by_d"
@@ -1974,11 +2071,22 @@ class Orchestrator:
                 t_max_s=t_max,
             )
 
-        hz = float(getattr(self.cfg.gello_arm_sync, "ramp_hz", 5.0) or 5.0)
+        abs_hz = getattr(cfg, "ramp_hz", None) if cfg is not None else None
+        if abs_hz is not None:
+            hz = float(abs_hz)
+        else:
+            hz = float(getattr(self.cfg.gello_arm_sync, "ramp_hz", 5.0) or 5.0)
         hz = max(0.1, hz)
         n = max(1, int(round(dur * hz)))
 
-        path = self._interp_path(qa0, q_star, n, profile=profile)
+        path = self._interp_path(
+            qa0,
+            q_star,
+            n,
+            profile=profile,
+            jerk_seg_frac=jerk_frac,
+            accel_seg_frac=accel_frac,
+        )
         peak = self._path_peak_step(qa0, path)
         max_delta = float(getattr(writer.sensor, "max_delta_rad", 0.0) or 0.0)
         if max_delta > 0 and peak > max_delta + 1e-12:
@@ -2034,7 +2142,17 @@ class Orchestrator:
         self._abs_ramp_thread = threading.Thread(
             target=self._arm_abs_ramp_loop,
             name="arm-abs-ramp",
-            args=(reader.agent_id, writer.agent_id, list(qa0), list(q_star), n, hz, profile),
+            args=(
+                reader.agent_id,
+                writer.agent_id,
+                list(qa0),
+                list(q_star),
+                n,
+                hz,
+                profile,
+                jerk_frac,
+                accel_frac,
+            ),
             daemon=True,
         )
         self._abs_ramp_thread.start()
@@ -2043,6 +2161,8 @@ class Orchestrator:
             "t_min_s": t_min,
             "t_max_s": t_max,
             "v_norm_rad_s": v_norm,
+            "jerk_seg_frac": jerk_frac,
+            "accel_seg_frac": accel_frac,
             "timing": mode,
             "delta_max": dmax,
             "peak_step": peak,
@@ -2057,13 +2177,22 @@ class Orchestrator:
         q_star: list[float],
         n: int,
         hz: float,
-        profile: str = "cosine",
+        profile: str = "seven_segment",
+        jerk_seg_frac: float = 0.10,
+        accel_seg_frac: float = 0.15,
     ) -> None:
         from sensors_dcs.agents.arm_agent import ArmAgent
         from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
 
         period = 1.0 / max(0.1, float(hz))
-        path = self._interp_path(qa0, q_star, n, profile=profile)
+        path = self._interp_path(
+            qa0,
+            q_star,
+            n,
+            profile=profile,
+            jerk_seg_frac=jerk_seg_frac,
+            accel_seg_frac=accel_seg_frac,
+        )
         final_error: str | None = None
         final_message: str | None = None
         completed = False
@@ -2143,6 +2272,8 @@ class Orchestrator:
         t_min_s: float | None = None,
         t_max_s: float | None = None,
         v_norm_rad_s: float | None = None,
+        jerk_seg_frac: float | None = None,
+        accel_seg_frac: float | None = None,
     ) -> dict[str, Any]:
         """Dispatch arm/disarm/jog to ``arm_write``; absolute joints use timed ramp."""
         import math
@@ -2269,6 +2400,8 @@ class Orchestrator:
                 t_min_s=t_min_s,
                 t_max_s=t_max_s,
                 v_norm_rad_s=v_norm_rad_s,
+                jerk_seg_frac=jerk_seg_frac,
+                accel_seg_frac=accel_seg_frac,
             )
 
         return {"ok": False, "error": "arm, disarm/stop, joints_rad, or jog_joint required"}
