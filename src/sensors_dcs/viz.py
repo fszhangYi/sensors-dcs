@@ -5231,6 +5231,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         }
       } finally {
         if (typeof syncAutoHomeRoundsUi === 'function') syncAutoHomeRoundsUi();
+        syncPi05LoopPauseUi();
       }
       if (pi05LoopRunning && gen === pi05LoopGen) {
         await stopPi05Loop(t('infer.hint_rounds_done', { R: roundTotal }));
