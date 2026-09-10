@@ -30,6 +30,7 @@ class ArmAgent(BaseAgent):
         hz: float = 50.0,
         buffer_frames: int = 64,
         dry_run_synth: bool = True,
+        home_joints_rad: list[float] | None = None,
     ) -> None:
         super().__init__(
             agent_id=agent_id,
@@ -39,6 +40,23 @@ class ArmAgent(BaseAgent):
         )
         self.dry_run_synth = dry_run_synth
         self._n_joints = int(getattr(sensor, "num_joints", None) or 6)
+        self._home_joints_rad: list[float] | None = None
+        self.set_home_joints_rad(home_joints_rad)
+
+    def set_home_joints_rad(self, joints: list[float] | None) -> None:
+        """Configure dry-run fallback pose (DCS ``home_joints_rad``)."""
+        if joints is None:
+            self._home_joints_rad = None
+            return
+        try:
+            vals = [float(x) for x in list(joints)[: self._n_joints]]
+        except (TypeError, ValueError):
+            self._home_joints_rad = None
+            return
+        if len(vals) < self._n_joints or any(not math.isfinite(x) for x in vals):
+            self._home_joints_rad = None
+            return
+        self._home_joints_rad = vals
 
     def read_frame(self) -> Frame:
         sample = dict(self.sensor.read())
@@ -88,8 +106,12 @@ class ArmAgent(BaseAgent):
         )
 
     def _synth_joints(self, t_wall: float) -> list[float]:
-        """Sine demo so dry-run viz looks alive without the controller."""
-        out: list[float] = []
-        for i in range(self._n_joints):
-            out.append(0.25 * math.sin(t_wall * (0.55 + 0.09 * i) + i * 0.35))
-        return out
+        """Dry-run pose when the driver has no joints yet.
+
+        Prefer configured ``home_joints_rad`` (static). If unset, hold zeros —
+        not a sine demo — so Read matches Home semantics offline.
+        """
+        del t_wall  # home/zeros are static; keep signature for call sites
+        if self._home_joints_rad is not None and len(self._home_joints_rad) >= self._n_joints:
+            return list(self._home_joints_rad[: self._n_joints])
+        return [0.0] * self._n_joints

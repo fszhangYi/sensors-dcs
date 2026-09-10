@@ -209,6 +209,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
   <script src="/assets/vendor/three.min.js"></script>
   <script src="/assets/vendor/STLLoader.js"></script>
   <script src="/assets/vendor/URDFLoader.js"></script>
+  <script src="/assets/vendor/ec616_ik.js"></script>
   <style>
     :root,
     html[data-theme='dark'] {
@@ -942,6 +943,27 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .inf-tcp-drag-status.is-err { color: #ff8a9a; }
     .inf-tcp-drag-status.is-ok { color: #7dcca0; }
+    .settings-tcp-mass-control {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      min-width: 11rem;
+      flex: 1 1 auto;
+    }
+    .settings-tcp-mass-control input[type="range"] {
+      flex: 1 1 auto;
+      min-width: 7rem;
+      max-width: 14rem;
+      margin: 0;
+      accent-color: #f0b429;
+      cursor: pointer;
+    }
+    .settings-tcp-mass-val {
+      min-width: 2rem;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      color: var(--muted);
+    }
     .inf-pose-canvas-wrap .inf-pose-trail-clear {
       --btn-h: 2rem;
       --btn-fs: 0.72rem;
@@ -2513,6 +2535,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <span class="settings-nav-label" data-i18n="settings.tabs.language.label">语言</span>
             <span class="settings-nav-hint" data-i18n="settings.tabs.language.hint">界面中英</span>
           </button>
+          <button type="button" class="settings-nav-item" id="settingsNavInfer" data-settings-tab="infer">
+            <span class="settings-nav-label" data-i18n="settings.tabs.infer.label">推理</span>
+            <span class="settings-nav-hint" data-i18n="settings.tabs.infer.hint">TCP 拖拽与 IK</span>
+          </button>
           <button type="button" class="settings-nav-item" id="settingsNavSensors" data-settings-tab="sensors">
             <span class="settings-nav-label" data-i18n="settings.tabs.sensors.label">传感器</span>
             <span class="settings-nav-hint" data-i18n="settings.tabs.sensors.hint">sensors-view 嵌入地址</span>
@@ -2593,6 +2619,24 @@ PREVIEW_HTML = """<!DOCTYPE html>
               <div class="settings-seg" role="group" data-i18n-attr="aria-label" data-i18n="settings.lang_label" aria-label="界面语言">
                 <button type="button" class="settings-seg-btn active" data-locale="zh" data-i18n="lang.zh">中文</button>
                 <button type="button" class="settings-seg-btn" data-locale="en" data-i18n="lang.en">EN</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="settings-panel" id="settingsPanelInfer" data-settings-panel="infer" role="tabpanel">
+          <h3 class="settings-panel-title" data-i18n="settings.tabs.infer.label">推理</h3>
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <div class="settings-row-title">
+                <span data-i18n="settings.infer.tcp_mass">琥珀球质量</span>
+                <span class="settings-badge" data-i18n="common.live">实时</span>
+              </div>
+              <p class="settings-row-desc" data-i18n="settings.infer.tcp_mass_desc">拖拽 IK 时琥珀 TCP 球的虚拟质量；数值越小越容易拖动。</p>
+            </div>
+            <div class="settings-row-control">
+              <div class="settings-tcp-mass-control">
+                <input type="range" id="settingsTcpMass" min="5" max="200" step="1" value="90" data-i18n-attr="aria-label" data-i18n="settings.infer.tcp_mass" aria-label="琥珀球质量" />
+                <span class="settings-tcp-mass-val" id="settingsTcpMassVal">90</span>
               </div>
             </div>
           </div>
@@ -3711,6 +3755,31 @@ PREVIEW_HTML = """<!DOCTYPE html>
     function sleepMs(ms) {
       return new Promise((resolve) => setTimeout(resolve, ms));
     }
+    (function initTcpMassPref() {
+      const LS_TCP_MASS = 'dcs.inf.tcpMass';
+      const MIN = 5;
+      const MAX = 200;
+      const DEF = 90;
+      function clampTcpMass(v) {
+        let n = Math.round(Number(v));
+        if (!Number.isFinite(n)) n = DEF;
+        return Math.max(MIN, Math.min(MAX, n));
+      }
+      window.__getTcpMass = function getTcpMass() {
+        if (window.__tcpMassCached != null) return window.__tcpMassCached;
+        return DEF;
+      };
+      window.__setTcpMass = function setTcpMass(v) {
+        const n = clampTcpMass(v);
+        window.__tcpMassCached = n;
+        return n;
+      };
+      try {
+        const saved = localStorage.getItem(LS_TCP_MASS);
+        if (saved != null && saved !== '') window.__setTcpMass(saved);
+      } catch (_) {}
+      window.__setTcpMass(window.__getTcpMass());
+    })();
     (function initInfPoseViz() {
       const canvas = document.getElementById('infPoseCanvas');
       const hud = document.getElementById('infPoseHud');
@@ -3927,19 +3996,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         new THREE.MeshBasicMaterial({ color: 0xf0b429 }),
       );
       const tipAxes = new THREE.AxesHelper(0.035);
+      tipAxes.raycast = function() {};
       tcpMarker.add(tipAxes);
-      // Larger invisible pick target (visual sphere is tiny).
-      const tcpHit = new THREE.Mesh(
-        new THREE.SphereGeometry(0.028, 12, 12),
-        new THREE.MeshBasicMaterial({
-          color: 0xf0b429,
-          transparent: true,
-          opacity: 0.0,
-          depthWrite: false,
-        }),
-      );
-      tcpHit.name = 'tcpHit';
-      tcpMarker.add(tcpHit);
+      // Pick only via screen-space test on the visible amber dot (see tcpPointerOver).
+      tcpMarker.raycast = function() {};
       scene.add(tcpMarker);
       // Current server goal — small red/pink (latest)
       const goalMarker = new THREE.Mesh(
@@ -4061,6 +4121,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
         hud.textContent = tcpPart + '\\n' + goalPart;
       }
       function setTcpPose(xyzrpy) {
+        // While scrubbing TCP, ignore live Read/FK updates — they fight the drag
+        // integrator and cause back-and-forth oscillation after direct sends.
+        if (tcpDragActive) return false;
         const xyz = parseXyz(xyzrpy);
         if (!xyz) return false;
         const rx = Number(xyzrpy[3]);
@@ -4110,14 +4173,27 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const up = new THREE.Vector3();
       const raycaster = new THREE.Raycaster();
       const pointerNdc = new THREE.Vector2();
-      // Heavy-mass TCP scrub: impulse / MASS → laggy trend following (not cursor snap).
-      const TCP_MASS = 90;
-      const TCP_DAMP = 0.92;
-      const TCP_V_MAX = 0.06;
+      // Heavy-mass TCP scrub: impulse / mass → laggy trend following (not cursor snap).
+      const TCP_MASS_MIN = 5;
+      const TCP_MASS_MAX = 200;
+      const TCP_MASS_DEFAULT = 90;
+      const TCP_DAMP = 0.88;
+      const TCP_V_MAX = 0.05;
       const TCP_IMPULSE_PX = 0.012;
-      const IK_MIN_INTERVAL_MS = 100;
+      // Live IK while dragging is preview-only; local solver is ms-scale so keep responsive.
+      const IK_MIN_INTERVAL_MS = 50;
+      const IK_MIN_INTERVAL_DRAG_MS = 50;
+      function getTcpMass() {
+        if (typeof window.__getTcpMass === 'function') {
+          return Math.max(TCP_MASS_MIN, window.__getTcpMass());
+        }
+        return TCP_MASS_DEFAULT;
+      }
       let tcpDragActive = false;
       let tcpPointerDown = false;
+      let tcpAwaitingFinalIk = false;
+      let tcpAutoSendAfterIk = false;
+      let tcpAutoSendInFlight = false;
       let dragXyzrpy = null;
       let dragVelThree = new THREE.Vector3();
       let lastTickMs = performance.now();
@@ -4170,6 +4246,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       function closeTcpDragPreview() {
         tcpDragActive = false;
         tcpPointerDown = false;
+        tcpAwaitingFinalIk = false;
+        tcpAutoSendAfterIk = false;
+        tcpAutoSendInFlight = false;
         dragMode = null;
         dragVelThree.set(0, 0, 0);
         dragXyzrpy = null;
@@ -4194,12 +4273,31 @@ PREVIEW_HTML = """<!DOCTYPE html>
         pointerNdc.x = ((ev.clientX - rect.left) / w) * 2 - 1;
         pointerNdc.y = -((ev.clientY - rect.top) / h) * 2 + 1;
       }
-      function hitTcpMarker(ev) {
+      /** Project amber TCP center to canvas px; pick radius tracks visible dot size. */
+      function tcpPointerOver(ev) {
         if (!hasTcp) return false;
-        pointerToNdc(ev);
-        raycaster.setFromCamera(pointerNdc, camera);
-        const hits = raycaster.intersectObject(tcpMarker, true);
-        return !!(hits && hits.length);
+        const rect = canvas.getBoundingClientRect();
+        tcpMarker.updateMatrixWorld(true);
+        const worldPos = new THREE.Vector3();
+        tcpMarker.getWorldPosition(worldPos);
+        const center = worldPos.clone().project(camera);
+        if (center.z > 1) return false;
+        const sx = (center.x * 0.5 + 0.5) * rect.width;
+        const sy = (-center.y * 0.5 + 0.5) * rect.height;
+        const mx = ev.clientX - rect.left;
+        const my = ev.clientY - rect.top;
+        const edge = worldPos.clone().add(new THREE.Vector3(0.006, 0, 0)).project(camera);
+        const pickR = Math.max(
+          12,
+          Math.min(28, Math.hypot(
+            (edge.x - center.x) * 0.5 * rect.width,
+            (edge.y - center.y) * 0.5 * rect.height,
+          ) * 2.2),
+        );
+        return ((mx - sx) * (mx - sx) + (my - sy) * (my - sy)) <= pickR * pickR;
+      }
+      function hitTcpMarker(ev) {
+        return tcpPointerOver(ev);
       }
       function beginTcpDrag() {
         const src = Array.isArray(window.__armReadCartesian) && window.__armReadCartesian.length >= 6
@@ -4217,12 +4315,97 @@ PREVIEW_HTML = """<!DOCTYPE html>
           Number.isFinite(rz) ? rz : 0,
         ];
         dragVelThree.set(0, 0, 0);
-        tcpDragActive = true;
         followTcp = false;
+        // Seed marker before arming tcpDragActive (setTcpPose no-ops while scrubbing).
         openTcpDragPanel();
-        setTcpPose(dragXyzrpy);
+        const p0 = robotToThree(dragXyzrpy[0], dragXyzrpy[1], dragXyzrpy[2]);
+        tcpMarker.position.set(p0.x, p0.y, p0.z);
+        hasTcp = true;
+        refreshHud(
+          { x: dragXyzrpy[0], y: dragXyzrpy[1], z: dragXyzrpy[2] },
+          lastGoal,
+        );
+        tcpDragActive = true;
+        tcpAwaitingFinalIk = false;
+        tcpAutoSendAfterIk = false;
         scheduleIk(true);
         return true;
+      }
+      function tcpMotionSettled() {
+        return dragVelThree.lengthSq() < 1e-10;
+      }
+      /** After each IK (during drag or after release), queue an abs-send of latest joints. */
+      function queueTcpIkSend() {
+        if (!tcpDragActive) return;
+        tcpAutoSendAfterIk = true;
+        if (!tcpAutoSendInFlight) autoSendTcpIkJoints();
+      }
+      function queueTcpFinalIkAndSend() {
+        if (!tcpDragActive || tcpPointerDown) return;
+        if (!tcpMotionSettled()) {
+          tcpAwaitingFinalIk = true;
+          return;
+        }
+        tcpAwaitingFinalIk = false;
+        tcpAutoSendAfterIk = true;
+        scheduleIk(true);
+      }
+      async function autoSendTcpIkJoints() {
+        if (tcpAutoSendInFlight || !tcpAutoSendAfterIk || !tcpDragActive) return;
+        if (!Array.isArray(window.__infPoseDragJoints) || window.__infPoseDragJoints.length < 6) return;
+        if (typeof window.__sendInfArmJointsDirect !== 'function') return;
+        tcpAutoSendInFlight = true;
+        tcpAutoSendAfterIk = false;
+        setDragStatus('', t('infer.tcp_drag_sending'));
+        try {
+          const r = await window.__sendInfArmJointsDirect(window.__infPoseDragJoints);
+          if (!tcpDragActive) return;
+          if (r && r.ok) {
+            setDragStatus('ok', t('infer.tcp_drag_sent'));
+          } else {
+            const err = (r && r.error) ? String(r.error) : 'unknown';
+            setDragStatus('err', t('infer.tcp_drag_send_fail', { error: err }));
+          }
+        } catch (e) {
+          if (tcpDragActive) {
+            setDragStatus('err', t('infer.tcp_drag_send_fail', {
+              error: String(e && e.message || e),
+            }));
+          }
+        } finally {
+          tcpAutoSendInFlight = false;
+          // Coalesce: if IK produced a newer target while we were sending, send again.
+          if (tcpAutoSendAfterIk && tcpDragActive) {
+            autoSendTcpIkJoints();
+          }
+        }
+      }
+      function ikSeedJoints() {
+        if (Array.isArray(window.__infPoseDragJoints) && window.__infPoseDragJoints.length >= 6
+          && window.__infPoseDragJoints.slice(0, 6).every((v) => Number.isFinite(Number(v)))) {
+          return window.__infPoseDragJoints.slice(0, 6).map(Number);
+        }
+        if (Array.isArray(window.__armReadJoints) && window.__armReadJoints.length >= 6
+          && window.__armReadJoints.slice(0, 6).every((v) => Number.isFinite(Number(v)))) {
+          return window.__armReadJoints.slice(0, 6).map(Number);
+        }
+        const home = window.__armHome && window.__armHome.home_joints_rad;
+        if (Array.isArray(home) && home.length >= 6
+          && home.slice(0, 6).every((v) => Number.isFinite(Number(v)))) {
+          return home.slice(0, 6).map(Number);
+        }
+        return null;
+      }
+      function solveIkLocal(xyzrpy) {
+        if (!window.Ec616Ik || typeof window.Ec616Ik.xyzrpyToJoints !== 'function') return null;
+        const seed = ikSeedJoints();
+        if (!seed) return { ok: false, error: 'no live arm joints for IK seed', joints_rad: null };
+        const t0 = performance.now();
+        const r = window.Ec616Ik.xyzrpyToJoints(xyzrpy, seed, {
+          maxNfev: tcpPointerDown ? 48 : 80,
+        });
+        if (r && typeof r === 'object') r.solve_ms = performance.now() - t0;
+        return r;
       }
       async function runIkOnce() {
         if (!tcpDragActive || !dragXyzrpy) return;
@@ -4233,27 +4416,44 @@ PREVIEW_HTML = """<!DOCTYPE html>
         ikInFlight = true;
         ikPending = false;
         lastIkMs = performance.now();
-        setDragStatus('', t('infer.tcp_drag_waiting'));
-        const body = { xyzrpy: dragXyzrpy.slice(0, 6) };
+        if (!tcpPointerDown) setDragStatus('', t('infer.tcp_drag_waiting'));
         try {
-          const r = await fetch('/api/arm/ik', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-          }).then((x) => x.json());
+          let r = solveIkLocal(dragXyzrpy.slice(0, 6));
+          // Server fallback: no local solver, or final settle when local failed.
+          const needServer = !window.Ec616Ik
+            || (r && !r.ok && !tcpPointerDown)
+            || (r && r.error === 'no live arm joints for IK seed');
+          if (needServer) {
+            const body = { xyzrpy: dragXyzrpy.slice(0, 6) };
+            r = await fetch('/api/arm/ik', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            }).then((x) => x.json());
+          }
           if (!tcpDragActive) return;
           if (r && r.ok && Array.isArray(r.joints_rad) && r.joints_rad.length >= 6) {
             window.__infPoseDragJoints = r.joints_rad.slice(0, 6).map(Number);
             renderDragJoints(window.__infPoseDragJoints);
             fillInfArmJointsFromIk(window.__infPoseDragJoints);
             setEc616JointsFromMachineRad(window.__infPoseDragJoints);
-            setDragStatus('ok', t('infer.tcp_drag_ok'));
+            // Live stream: every successful IK triggers abs-send (coalesced).
+            queueTcpIkSend();
+            if (!tcpPointerDown && !tcpAutoSendInFlight) {
+              const ms = (r.solve_ms != null) ? ` ${Number(r.solve_ms).toFixed(1)}ms` : '';
+              const src = r.source === 'local' ? 'local' : 'server';
+              setDragStatus('ok', t('infer.tcp_drag_ok') + ` (${src}${ms})`);
+            }
           } else {
             const err = (r && r.error) ? String(r.error) : 'unknown';
+            tcpAutoSendAfterIk = false;
+            tcpAwaitingFinalIk = false;
             setDragStatus('err', t('infer.tcp_drag_fail', { error: err }));
           }
         } catch (e) {
           if (tcpDragActive) {
+            tcpAutoSendAfterIk = false;
+            tcpAwaitingFinalIk = false;
             setDragStatus('err', t('infer.tcp_drag_fail', { error: String(e && e.message || e) }));
           }
         } finally {
@@ -4267,7 +4467,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       function scheduleIk(force) {
         if (!tcpDragActive || !dragXyzrpy) return;
         const now = performance.now();
-        if (!force && (now - lastIkMs) < IK_MIN_INTERVAL_MS) {
+        const minMs = tcpPointerDown ? IK_MIN_INTERVAL_DRAG_MS : IK_MIN_INTERVAL_MS;
+        if (!force && (now - lastIkMs) < minMs) {
           ikPending = true;
           return;
         }
@@ -4280,6 +4481,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
           if (hitTcpMarker(ev) && beginTcpDrag()) {
             dragMode = 'tcp';
             tcpPointerDown = true;
+            tcpAwaitingFinalIk = false;
+            tcpAutoSendAfterIk = false;
           } else {
             dragMode = 'orbit';
           }
@@ -4313,13 +4516,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
           orbitTarget.add(panWorld);
           applyCam();
         } else if (dragMode === 'tcp' && tcpPointerDown && dragXyzrpy) {
-          // Mouse delta → weak impulse in camera plane (heavy mass).
+          // Screen-plane grab: mouse right/up moves the ball with the cursor
+          // (not camera-pan inverted signs).
           const dist = Math.max(0.15, spherical.radius);
           const scale = dist * TCP_IMPULSE_PX;
           right.setFromMatrixColumn(camera.matrix, 0);
           up.setFromMatrixColumn(camera.matrix, 1);
-          const ix = (-dx * scale) / TCP_MASS;
-          const iy = (dy * scale) / TCP_MASS;
+          const mass = Math.max(TCP_MASS_MIN, getTcpMass());
+          const ix = (dx * scale) / mass;
+          const iy = (-dy * scale) / mass;
           dragVelThree.addScaledVector(right, ix);
           dragVelThree.addScaledVector(up, iy);
           const speed = dragVelThree.length();
@@ -4330,7 +4535,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       function onPointerUp(ev) {
         if (dragMode === 'tcp') {
           tcpPointerDown = false;
-          // Keep tcpDragActive + panel open; inertia damps out in tick.
+          queueTcpFinalIkAndSend();
         }
         dragMode = null;
         try { canvas.releasePointerCapture(ev.pointerId); } catch (_) {}
@@ -4382,8 +4587,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
               lastGoal,
             );
             scheduleIk(false);
-          } else if (ikPending) {
-            scheduleIk(true);
+          } else {
+            if (tcpAwaitingFinalIk) queueTcpFinalIkAndSend();
+            else if (ikPending) scheduleIk(true);
           }
         } else {
           const qLive = jointsForEc616Viz();
@@ -4544,6 +4750,41 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (r.ok) window.__armAbsRamp = r;
       return Object.assign({ duration_s: usedDur }, r);
     }
+    window.__sendInfArmJointsOnce = sendInfArmJointsOnce;
+    /** TCP-drag: write target joints immediately (no abs-ramp / jerk profile). */
+    async function sendInfArmJointsDirect(jointsRad) {
+      const src = Array.isArray(jointsRad) ? jointsRad : null;
+      let joints = null;
+      if (src && src.length >= 6) {
+        joints = [];
+        for (let i = 0; i < 6; i++) {
+          const v = Number(src[i]);
+          if (!Number.isFinite(v)) return { ok: false, error: 'joints_rad must be 6 floats' };
+          joints.push(v);
+        }
+      } else {
+        const parsed = parseInfArmJoints6();
+        if (!parsed.ok) return { ok: false, error: parsed.error };
+        joints = parsed.joints;
+      }
+      if (!Array.isArray(window.__armReadJoints) || window.__armReadJoints.length < 6) {
+        return { ok: false, error: t('arm.need_read') };
+      }
+      if (!window.__armWriteAgentId) {
+        return { ok: false, error: t('infer.arm_need_writer') };
+      }
+      const r = await postInfArm({
+        joints_rad: joints,
+        timing: 'direct',
+      });
+      if (infArmProg) {
+        infArmProg.textContent = r.ok
+          ? t('infer.tcp_drag_sent')
+          : t('arm.abs_fail', { error: r.error || JSON.stringify(r) });
+      }
+      return r;
+    }
+    window.__sendInfArmJointsDirect = sendInfArmJointsDirect;
     async function waitInfArmArrive(gen, duration_s) {
       const timeoutMs = Math.max(5000, (Number(duration_s) || 10) * 1500 + 2000);
       const t0 = Date.now();
@@ -5424,13 +5665,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const btnSettingsDone = document.getElementById('btnSettingsDone');
     const settingsNavAppearance = document.getElementById('settingsNavAppearance');
     const settingsNavLanguage = document.getElementById('settingsNavLanguage');
+    const settingsNavInfer = document.getElementById('settingsNavInfer');
     const settingsNavSensors = document.getElementById('settingsNavSensors');
     const settingsNavAuth = document.getElementById('settingsNavAuth');
     const settingsNavConfig = document.getElementById('settingsNavConfig');
     const settingsNavUsers = document.getElementById('settingsNavUsers');
     const settingsPanelAppearance = document.getElementById('settingsPanelAppearance');
     const settingsPanelLanguage = document.getElementById('settingsPanelLanguage');
+    const settingsPanelInfer = document.getElementById('settingsPanelInfer');
     const settingsPanelSensors = document.getElementById('settingsPanelSensors');
+    const settingsTcpMass = document.getElementById('settingsTcpMass');
+    const settingsTcpMassVal = document.getElementById('settingsTcpMassVal');
     const settingsPanelAuth = document.getElementById('settingsPanelAuth');
     const settingsPanelConfig = document.getElementById('settingsPanelConfig');
     const settingsPanelUsers = document.getElementById('settingsPanelUsers');
@@ -5478,11 +5723,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
 
     function switchSettingsTab(name) {
-      const allowed = { appearance: 1, language: 1, sensors: 1, auth: 1, config: 1, users: 1 };
+      const allowed = { appearance: 1, language: 1, infer: 1, sensors: 1, auth: 1, config: 1, users: 1 };
       const which = allowed[name] ? name : 'appearance';
       const navs = {
         appearance: settingsNavAppearance,
         language: settingsNavLanguage,
+        infer: settingsNavInfer,
         sensors: settingsNavSensors,
         auth: settingsNavAuth,
         config: settingsNavConfig,
@@ -5491,6 +5737,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const panels = {
         appearance: settingsPanelAppearance,
         language: settingsPanelLanguage,
+        infer: settingsPanelInfer,
         sensors: settingsPanelSensors,
         auth: settingsPanelAuth,
         config: settingsPanelConfig,
@@ -6147,6 +6394,24 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     if (settingsNavAppearance) settingsNavAppearance.addEventListener('click', () => switchSettingsTab('appearance'));
     if (settingsNavLanguage) settingsNavLanguage.addEventListener('click', () => switchSettingsTab('language'));
+    if (settingsTcpMass) {
+      const LS_TCP_MASS = 'dcs.inf.tcpMass';
+      function syncSettingsTcpMassFromUi() {
+        if (typeof window.__setTcpMass !== 'function') return;
+        const n = window.__setTcpMass(settingsTcpMass.value);
+        settingsTcpMass.value = String(n);
+        if (settingsTcpMassVal) settingsTcpMassVal.textContent = String(n);
+        try { localStorage.setItem(LS_TCP_MASS, String(n)); } catch (_) {}
+      }
+      if (typeof window.__getTcpMass === 'function') {
+        const cur = window.__getTcpMass();
+        settingsTcpMass.value = String(cur);
+        if (settingsTcpMassVal) settingsTcpMassVal.textContent = String(cur);
+      }
+      settingsTcpMass.addEventListener('input', syncSettingsTcpMassFromUi);
+      settingsTcpMass.addEventListener('change', syncSettingsTcpMassFromUi);
+    }
+    if (settingsNavInfer) settingsNavInfer.addEventListener('click', () => switchSettingsTab('infer'));
     if (settingsNavSensors) {
       settingsNavSensors.addEventListener('click', () => {
         switchSettingsTab('sensors');

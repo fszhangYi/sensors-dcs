@@ -33,21 +33,44 @@ def test_robot_only_config_loads() -> None:
 
 
 def test_arm_agent_dry_run_synth() -> None:
+    """Dry-run Read uses configured home (static), not a sine demo."""
+    home = [3.1754, -1.9317, 1.8884, -1.2678, 1.6674, -0.0654]
     cfg = load_dcs_config("configs/robot_only.yaml")
     mgr = SensorManager.from_yaml(cfg.sensors_config, dry_run=True)
     sensor = mgr.get("arm-elite")
     sensor.open()
     try:
-        agent = ArmAgent(agent_id="arm", sensor=sensor, hz=50.0)
+        agent = ArmAgent(agent_id="arm", sensor=sensor, hz=50.0, home_joints_rad=home)
         fr = agent.read_frame()
         assert fr.kind == "arm_read"
         assert fr.payload.get("mode") == "read_only"
         assert fr.payload.get("synth") is True
         joints = fr.payload["joints_rad"]
-        assert len(joints) == 6
-        assert all(isinstance(x, float) for x in joints)
+        assert joints == pytest.approx(home)
+        # Unset home → zeros
+        agent.set_home_joints_rad(None)
+        fr2 = agent.read_frame()
+        assert fr2.payload["joints_rad"] == pytest.approx([0.0] * 6)
     finally:
         sensor.close()
+
+
+def test_orchestrator_wires_home_into_arm_agent() -> None:
+    from sensors_dcs.agents.arm_agent import ArmAgent
+    from sensors_dcs.runtime import Orchestrator
+
+    cfg = load_dcs_config("configs/default.yaml")
+    assert cfg.dry_run is True
+    assert cfg.home_joints_rad is not None
+    orch = Orchestrator(cfg)
+    arm = orch.agents.get("arm")
+    assert isinstance(arm, ArmAgent)
+    assert arm._home_joints_rad == pytest.approx(list(cfg.home_joints_rad)[:6])
+    # Shared arm_write device should be seeded so Read returns home without sine.
+    sens = arm.sensor
+    last = getattr(sens, "_last_cmd_rad", None)
+    if last is not None:
+        assert list(last)[:6] == pytest.approx(list(cfg.home_joints_rad)[:6])
 
 
 def test_arm_read_write_forbidden() -> None:

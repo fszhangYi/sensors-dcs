@@ -144,6 +144,31 @@ class Orchestrator:
             getattr(cfg, "home_duration_s", None), default=20.0
         )
         self._home_source: str = "yaml" if hj is not None else "unset"
+        self._sync_home_to_arm_agents()
+
+    def _sync_home_to_arm_agents(self) -> None:
+        """Push home into ArmAgent dry-run synth and seed shared arm_write last_cmd."""
+        from sensors_dcs.agents.arm_agent import ArmAgent
+        from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
+
+        with self._home_lock:
+            hj = list(self._home_joints_rad) if self._home_joints_rad is not None else None
+        for agent in self.agents.values():
+            if isinstance(agent, ArmAgent):
+                agent.set_home_joints_rad(hj)
+        if not bool(getattr(self.manager.ctx, "dry_run", False)) or hj is None:
+            return
+        # Shared arm_write device: seed last command so Read returns home (not zeros).
+        for agent in self.agents.values():
+            if not isinstance(agent, ArmWriteAgent):
+                continue
+            sens = agent.sensor
+            last = getattr(sens, "_last_cmd_rad", None)
+            if last is None and hasattr(sens, "_last_cmd_rad"):
+                try:
+                    sens._last_cmd_rad = [float(x) for x in hj[: int(getattr(sens, "num_joints", 6) or 6)]]
+                except Exception:  # noqa: BLE001
+                    pass
 
     def status(self) -> dict[str, Any]:
         return {
@@ -219,6 +244,7 @@ class Orchestrator:
                 self._home_joints_rad = list(parsed)
                 self._home_source = "live" if from_live else "set"
             updates["home_joints_rad"] = list(parsed)
+            self._sync_home_to_arm_agents()
         if duration_s is not None:
             dur = parse_home_duration_s(duration_s)
             with self._home_lock:
@@ -2352,7 +2378,10 @@ class Orchestrator:
                 **self.gello_arm_sync_status(),
             }
 
-        if self._abs_ramp_enabled:
+        if self._abs_ramp_enabled and joints_rad is None:
+            # Jog/arm/misc blocked while ramping. A new joints_rad abs-send is
+            # allowed through — start_arm_abs_ramp cancels and replaces the old path
+            # (needed for TCP-drag live streaming).
             return {
                 "ok": False,
                 "error": "absolute ramp active; cancel or wait before jog",
@@ -2392,6 +2421,37 @@ class Orchestrator:
                     mode = "fixed"
                 else:
                     mode = "scale_by_d"
+            mode_l = str(mode or "").strip().lower()
+            # TCP-drag / scrub: one-shot write of the target joints (no jerk ramp).
+            if mode_l in ("direct", "immediate", "step"):
+                if self._abs_ramp_enabled:
+                    self.cancel_arm_abs_ramp(message="因直接下发取消斜坡")
+                armed = bool(getattr(agent.sensor, "armed", False))
+                if not armed:
+                    fr = agent.ring.latest.get()
+                    if fr is not None:
+                        armed = bool(fr.payload.get("armed"))
+                if not armed:
+                    return {
+                        "ok": False,
+                        "error": "arm_write not armed; click Arm before direct write",
+                    }
+                try:
+                    q_star = [float(x) for x in joints_rad]
+                except (TypeError, ValueError):
+                    return {"ok": False, "error": "joints_rad must be 6 floats"}
+                if len(q_star) != 6 or any(not (x == x) for x in q_star):
+                    return {"ok": False, "error": "joints_rad must be exactly 6 finite values"}
+                base = _read_joints()
+                if base is None:
+                    return {
+                        "ok": False,
+                        "error": "no live arm read joints; refuse direct write without current pose",
+                    }
+                return agent.command(
+                    joints_rad=q_star,
+                    reference_joints_rad=list(base),
+                )
             return self.start_arm_abs_ramp(
                 joints_rad=list(joints_rad),
                 duration_s=duration_s,
