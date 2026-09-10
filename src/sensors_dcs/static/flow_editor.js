@@ -322,6 +322,7 @@
     zoom: 1,
     linking: null,
     moduleStates: {},
+    clipboard: null,
     els: {},
   };
 
@@ -578,10 +579,14 @@
       el.style.left = m.x + 'px';
       el.style.top = m.y + 'px';
       const isCheck = m.type === 'pose_check';
+      const modeKey = isCheck
+        ? 'fixed_program'
+        : (m.motion_mode === 'infer' ? 'infer' : 'program');
       const modeLab = isCheck
-        ? t('infer.flow_mode_program')
+        ? t('infer.flow_mode_fixed_program')
         : (m.motion_mode === 'infer' ? t('infer.flow_mode_infer') : t('infer.flow_mode_program'));
-      let body = '<div class="flow-node-mode">' + modeLab + '</div>';
+      el.dataset.mode = modeKey;
+      let body = '<div class="flow-node-mode" data-mode="' + modeKey + '">' + modeLab + '</div>';
       if (isCheck) {
         body +=
           '<div class="flow-node-line"><span class="flow-node-k">' + t('infer.flow_goal') +
@@ -1114,6 +1119,9 @@
   function setModuleState(id, state, error) {
     editor.moduleStates[id] = { state: state || 'idle', error: error || '' };
     renderNodes();
+    if (window.FlowRuntime && typeof window.FlowRuntime.syncToolbar === 'function') {
+      try { window.FlowRuntime.syncToolbar(); } catch (_) {}
+    }
   }
 
   function resetModuleStates() {
@@ -1122,6 +1130,56 @@
       editor.moduleStates[m.id] = { state: 'idle', error: '' };
     });
     renderNodes();
+    if (window.FlowRuntime && typeof window.FlowRuntime.syncToolbar === 'function') {
+      try { window.FlowRuntime.syncToolbar(); } catch (_) {}
+    }
+  }
+
+  /** Clear succeeded → idle (Prepare); leave failed / other states alone. */
+  function clearSucceededStates() {
+    Object.keys(editor.moduleStates || {}).forEach((id) => {
+      const st = editor.moduleStates[id];
+      if (st && st.state === 'succeeded') {
+        editor.moduleStates[id] = { state: 'idle', error: '' };
+      }
+    });
+    renderNodes();
+  }
+
+  function cloneModuleForPaste(src) {
+    if (!src) return null;
+    const migrated = migrateModule(JSON.parse(JSON.stringify(src)));
+    if (!migrated) return null;
+    migrated.id = uid('m');
+    migrated.x = (Number(src.x) || 80) + 36;
+    migrated.y = (Number(src.y) || 80) + 36;
+    if (src.title) migrated.title = String(src.title);
+    return migrated;
+  }
+
+  function copySelectedModule() {
+    if (!editor.selectedId) return false;
+    const m = editor.graph.modules.find((x) => x.id === editor.selectedId);
+    if (!m) return false;
+    editor.clipboard = JSON.parse(JSON.stringify(migrateModule(m)));
+    setHint(t('infer.flow_hint_copied'));
+    return true;
+  }
+
+  function pasteModule() {
+    if (!editor.clipboard) {
+      setHint(t('infer.flow_hint_clipboard_empty'));
+      return false;
+    }
+    const neu = cloneModuleForPaste(editor.clipboard);
+    if (!neu) return false;
+    editor.clipboard.x = neu.x;
+    editor.clipboard.y = neu.y;
+    editor.graph.modules.push(neu);
+    persist();
+    selectModule(neu.id);
+    setHint(t('infer.flow_hint_pasted'));
+    return true;
   }
 
   function getGraph() {
@@ -1296,9 +1354,22 @@
       let spaceDown = false;
       window.addEventListener('keydown', (ev) => {
         if (ev.code === 'Space') spaceDown = true;
+        const tag = (ev.target && ev.target.tagName) || '';
+        const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+          || (ev.target && ev.target.isContentEditable);
+        if ((ev.ctrlKey || ev.metaKey) && !typing) {
+          const k = (ev.key || '').toLowerCase();
+          if (k === 'c') {
+            if (copySelectedModule()) ev.preventDefault();
+            return;
+          }
+          if (k === 'v') {
+            if (pasteModule()) ev.preventDefault();
+            return;
+          }
+        }
         if ((ev.key === 'Delete' || ev.key === 'Backspace') && (editor.selectedId || editor.selectedEdgeId)) {
-          const tag = (ev.target && ev.target.tagName) || '';
-          if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+          if (typing) return;
           deleteSelected();
         }
       });
@@ -1352,9 +1423,13 @@
     validateChain: validateChain,
     setModuleState: setModuleState,
     resetModuleStates: resetModuleStates,
+    clearSucceededStates: clearSucceededStates,
+    get moduleStates() { return editor.moduleStates; },
     setHint: setHint,
     persist: persist,
     selectModule: selectModule,
+    copySelectedModule: copySelectedModule,
+    pasteModule: pasteModule,
     render: function () { renderNodes(); renderInspector(); },
   };
 

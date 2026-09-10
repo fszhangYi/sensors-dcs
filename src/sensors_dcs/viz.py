@@ -50,6 +50,8 @@ class ArmCommandBody(BaseModel):
     v_norm_rad_s: float | None = None
     jerk_seg_frac: float | None = None
     accel_seg_frac: float | None = None
+    # Written on last jerk abs-ramp waypoint (or immediately for timing=direct).
+    gripper_position_norm: float | None = None
 
 
 class PostprocessBody(BaseModel):
@@ -1643,6 +1645,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
       cursor: pointer;
     }
     .inf-auto-home input { width: auto; height: auto; margin: 0; }
+    .inf-elapsed {
+      font-variant-numeric: tabular-nums;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.78rem;
+      color: var(--accent);
+      min-width: 3.5rem;
+      padding: 0 0.35rem;
+    }
     .inf-loop-rounds {
       display: inline-flex;
       align-items: center;
@@ -2275,6 +2285,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <button type="button" id="infPi05Loop" data-i18n="infer.loop" disabled>LOOP</button>
           <button type="button" id="infPi05LoopPause" data-i18n="infer.loop_pause" disabled>LOOP 暂停</button>
           <button type="button" id="infPi05LoopResume" data-i18n="infer.loop_resume" disabled>LOOP 继续</button>
+          <span class="inf-elapsed" id="infLoopElapsed" data-i18n-title="infer.elapsed_hint" title="LOOP 执行计时（暂停不计）">—</span>
           <label class="inf-loop-rounds" data-i18n-title="infer.loop_rounds_hint" title="大循环轮数：勾选自动复位时可用；每轮=LOOP至terminate→Home">
             <span data-i18n="infer.loop_rounds">轮数</span>
             <input type="number" id="infLoopRounds" min="1" max="1000" step="1" value="1" />
@@ -2442,6 +2453,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <button type="button" id="infFlowPause" data-i18n="infer.flow_pause" disabled>暂停</button>
           <button type="button" id="infFlowResume" data-i18n="infer.flow_resume" disabled>继续</button>
           <button type="button" id="infFlowStop" data-i18n="infer.flow_stop" disabled>停止</button>
+          <button type="button" id="infFlowPrepare" data-i18n="infer.flow_prepare" disabled>准备</button>
+          <span class="inf-elapsed" id="infFlowElapsed" data-i18n-title="infer.elapsed_hint" title="编排执行计时（暂停不计）">—</span>
           <button type="button" id="infFlowFit" data-i18n="infer.flow_fit">适应画布</button>
           <button type="button" id="infFlowExport" data-i18n="infer.flow_export">导出 JSON</button>
           <button type="button" id="infFlowImport" data-i18n="infer.flow_import">加载 JSON</button>
@@ -3347,6 +3360,55 @@ PREVIEW_HTML = """<!DOCTYPE html>
     let pi05LoopStepN = 0;
     let pi05LoopRoundIdx = null;
     let pi05LoopRoundTotal = null;
+    const infLoopElapsed = document.getElementById('infLoopElapsed');
+    let loopTimerAccMs = 0;
+    let loopTimerStartedAt = null;
+    let loopTimerTick = null;
+    function formatElapsedMs(ms) {
+      const s = Math.max(0, Number(ms) || 0) / 1000;
+      if (s < 60) return s.toFixed(1) + 's';
+      const m = Math.floor(s / 60);
+      const rem = s - m * 60;
+      return m + 'm' + rem.toFixed(1) + 's';
+    }
+    function loopElapsedMs() {
+      let ms = loopTimerAccMs;
+      if (loopTimerStartedAt != null) ms += Math.max(0, Date.now() - loopTimerStartedAt);
+      return ms;
+    }
+    function renderLoopElapsed(finalMs) {
+      if (!infLoopElapsed) return;
+      const ms = (finalMs != null) ? finalMs : loopElapsedMs();
+      infLoopElapsed.textContent = (ms <= 0 && loopTimerStartedAt == null && !loopTimerAccMs)
+        ? '—'
+        : formatElapsedMs(ms);
+    }
+    function startLoopTimer() {
+      loopTimerAccMs = 0;
+      loopTimerStartedAt = Date.now();
+      if (loopTimerTick) clearInterval(loopTimerTick);
+      loopTimerTick = setInterval(() => { renderLoopElapsed(); }, 200);
+      renderLoopElapsed();
+    }
+    function pauseLoopTimer() {
+      if (loopTimerStartedAt != null) {
+        loopTimerAccMs += Math.max(0, Date.now() - loopTimerStartedAt);
+        loopTimerStartedAt = null;
+      }
+      renderLoopElapsed();
+    }
+    function resumeLoopTimer() {
+      if (loopTimerStartedAt == null) loopTimerStartedAt = Date.now();
+      renderLoopElapsed();
+    }
+    function stopLoopTimer() {
+      const total = loopElapsedMs();
+      if (loopTimerTick) { clearInterval(loopTimerTick); loopTimerTick = null; }
+      loopTimerStartedAt = null;
+      loopTimerAccMs = total;
+      renderLoopElapsed(total);
+      return total;
+    }
     function loadPi05Form() {
       try {
         const raw = localStorage.getItem(LS_PI05);
@@ -4215,8 +4277,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
         out[1] = _trailColTmp.g;
         out[2] = _trailColTmp.b;
       }
-      function applyTrailColor(hexOrNum) {
+      function applyTrailColor(hexOrNum, opts) {
         // Pen color only — already-drawn waypoints/segments keep their baked color.
+        opts = opts || {};
         let n = null;
         if (typeof hexOrNum === 'number' && Number.isFinite(hexOrNum)) n = hexOrNum >>> 0;
         else n = parseTrailColorHex(hexOrNum);
@@ -4225,7 +4288,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const css = trailColorToCss(trailColor);
         const el = document.getElementById('infPoseTrailColor');
         if (el && el.value !== css) el.value = css;
-        try { localStorage.setItem(LS_TRAIL_COLOR, css); } catch (_) {}
+        if (opts.persist !== false) {
+          try { localStorage.setItem(LS_TRAIL_COLOR, css); } catch (_) {}
+        }
         return css;
       }
       let hasTcp = false;
@@ -4836,6 +4901,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       window.__setInfPoseHome = setHomePose;
       window.__applyInfPoseJoints = applyEc616VizJoints;
       window.__clearInfPoseTrail = clearTrail;
+      window.__setInfPoseTrailColor = applyTrailColor;
+      window.__getInfPoseTrailColor = function () { return trailColorToCss(trailColor); };
       window.__resizeInfPoseViz = resize;
       const trailClearBtn = document.getElementById('infPoseTrailClear');
       if (trailClearBtn) {
@@ -4931,11 +4998,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
           ? (base + ' · ' + t('infer.grip_fail', { error: gerr }))
           : t('infer.grip_fail', { error: gerr });
         infPi05Hint.title = infPi05Hint.textContent || '';
-      } else if (r && r.ok && r.grip_ok && r.next_grip != null && infPi05Hint) {
-        const base = infPi05Hint.textContent || '';
-        const note = t('infer.grip_sent', { grip: Number(r.next_grip).toFixed(3) });
-        infPi05Hint.textContent = base ? (base + ' · ' + note) : note;
-        infPi05Hint.title = infPi05Hint.textContent || '';
+      } else if (r && r.ok && r.grip_ok && r.next_grip != null) {
+        window.__infPendingGrip = Number(r.next_grip);
+        if (infPi05Hint) {
+          const base = infPi05Hint.textContent || '';
+          const note = t('infer.grip_deferred', { grip: Number(r.next_grip).toFixed(3) });
+          infPi05Hint.textContent = base ? (base + ' · ' + note) : note;
+          infPi05Hint.title = infPi05Hint.textContent || '';
+        }
+      } else if (r && r.ok) {
+        window.__infPendingGrip = null;
       }
       if (filled && r) r._joints_filled = true;
       return r;
@@ -4974,7 +5046,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
         return { ok: false, error: t('infer.arm_need_writer') };
       }
       const timing = syncArmAbsTimingFromUi(null);
-      const r = await postInfArm({
+      const pendingGrip = window.__infPendingGrip;
+      const body = {
         joints_rad: parsed.joints,
         timing: 'scale_by_d',
         t_min_s: timing.t_min_s,
@@ -4982,7 +5055,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
         v_norm_rad_s: timing.v_norm_rad_s,
         jerk_seg_frac: timing.jerk_seg_frac,
         accel_seg_frac: timing.accel_seg_frac,
-      });
+      };
+      if (pendingGrip != null && Number.isFinite(Number(pendingGrip))) {
+        body.gripper_position_norm = Number(pendingGrip);
+      }
+      const r = await postInfArm(body);
+      if (r && r.ok) window.__infPendingGrip = null;
       const usedDur = (r && r.duration_s != null) ? Number(r.duration_s) : timing.t_min_s;
       if (infArmProg) {
         infArmProg.textContent = r.ok
@@ -5120,7 +5198,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
         return { ok: false, error: String(e) };
       }
     };
-    window.__flowSendAbs = async function (jointsRad, timing) {
+    window.__flowSendAbs = async function (jointsRad, timing, opts) {
+      opts = opts || {};
       if (!Array.isArray(jointsRad) || jointsRad.length < 6) {
         return { ok: false, error: 'joints_rad must be 6 floats' };
       }
@@ -5143,7 +5222,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         timing && timing.jerk_seg_frac,
         timing && timing.accel_seg_frac,
       );
-      const r = await postInfArm({
+      const body = {
         joints_rad: joints,
         timing: 'scale_by_d',
         t_min_s: tm.t_min_s,
@@ -5151,7 +5230,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
         v_norm_rad_s: tm.v_norm_rad_s,
         jerk_seg_frac: tm.jerk_seg_frac,
         accel_seg_frac: tm.accel_seg_frac,
-      });
+      };
+      let grip = opts.gripper_position_norm;
+      if (grip == null && window.__infPendingGrip != null) grip = window.__infPendingGrip;
+      if (grip != null && Number.isFinite(Number(grip))) {
+        body.gripper_position_norm = Number(grip);
+      }
+      const r = await postInfArm(body);
+      if (r && r.ok) window.__infPendingGrip = null;
       const usedDur = (r && r.duration_s != null) ? Number(r.duration_s) : tm.t_min_s;
       if (r && r.ok) window.__armAbsRamp = r;
       return Object.assign({ duration_s: usedDur }, r || { ok: false });
@@ -5328,6 +5414,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     async function stopPi05Loop(reasonHint) {
       if (!pi05LoopRunning) return;
+      const elapsed = stopLoopTimer();
       pi05LoopRunning = false;
       pi05LoopPaused = false;
       pi05LoopGen += 1;
@@ -5344,7 +5431,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
           if (infArmProg && r.ok) infArmProg.textContent = t('arm.abs_cancelled');
         } catch (e) {}
       }
-      if (reasonHint && infPi05Hint) infPi05Hint.textContent = reasonHint;
+      let hint = reasonHint || '';
+      if (hint && elapsed != null) {
+        hint = hint + ' · ' + t('infer.elapsed', { t: formatElapsedMs(elapsed) });
+      }
+      if (hint && infPi05Hint) infPi05Hint.textContent = hint;
       const st = await fetch('/api/pi05/status').then((x) => x.json()).catch(() => ({}));
       applyPi05PanelFromPayload(st);
     }
@@ -5653,6 +5744,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         pi05LoopRunning = true;
         pi05LoopPaused = false;
         pi05LoopGen += 1;
+        startLoopTimer();
         syncPi05LoopButton();
         syncPi05LoopPauseUi();
         if (infPi05Step) infPi05Step.disabled = true;
@@ -5665,6 +5757,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       infPi05LoopPause.addEventListener('click', () => {
         if (!pi05LoopRunning || pi05LoopPaused) return;
         pi05LoopPaused = true;
+        pauseLoopTimer();
         syncPi05LoopPauseUi();
         if (infPi05Hint) {
           infPi05Hint.textContent = t('infer.hint_loop_paused', {
@@ -5680,6 +5773,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       infPi05LoopResume.addEventListener('click', () => {
         if (!pi05LoopRunning || !pi05LoopPaused) return;
         pi05LoopPaused = false;
+        resumeLoopTimer();
         syncPi05LoopPauseUi();
         if (infPi05Hint) {
           infPi05Hint.textContent = t('infer.hint_loop_resumed', {
@@ -9257,6 +9351,7 @@ def create_viz_app(
             v_norm_rad_s=req.v_norm_rad_s,
             jerk_seg_frac=req.jerk_seg_frac,
             accel_seg_frac=req.accel_seg_frac,
+            gripper_position_norm=req.gripper_position_norm,
         )
 
     @app.post("/api/arm/ik")

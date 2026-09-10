@@ -21,6 +21,10 @@
     paused: false,
     gen: 0,
     currentModuleId: null,
+    timerAccMs: 0,
+    timerStartedAt: null,
+    timerTick: null,
+    lastElapsedMs: 0,
   };
 
   function ed() {
@@ -35,15 +39,85 @@
     if (ed() && ed().setModuleState) ed().setModuleState(id, st, err);
   }
 
+  function formatElapsedMs(ms) {
+    const s = Math.max(0, Number(ms) || 0) / 1000;
+    if (s < 60) return s.toFixed(1) + 's';
+    const m = Math.floor(s / 60);
+    const rem = s - m * 60;
+    return m + 'm' + rem.toFixed(1) + 's';
+  }
+
+  function flowElapsedMs() {
+    let ms = state.timerAccMs;
+    if (state.timerStartedAt != null) ms += Math.max(0, Date.now() - state.timerStartedAt);
+    return ms;
+  }
+
+  function renderFlowElapsed(finalMs) {
+    const el = document.getElementById('infFlowElapsed');
+    if (!el) return;
+    const ms = (finalMs != null) ? finalMs : flowElapsedMs();
+    if (ms <= 0 && state.timerStartedAt == null && !state.timerAccMs && finalMs == null) {
+      el.textContent = '—';
+      return;
+    }
+    el.textContent = formatElapsedMs(ms);
+  }
+
+  function startFlowTimer() {
+    state.timerAccMs = 0;
+    state.timerStartedAt = Date.now();
+    state.lastElapsedMs = 0;
+    if (state.timerTick) clearInterval(state.timerTick);
+    state.timerTick = setInterval(() => { renderFlowElapsed(); }, 200);
+    renderFlowElapsed();
+  }
+
+  function pauseFlowTimer() {
+    if (state.timerStartedAt != null) {
+      state.timerAccMs += Math.max(0, Date.now() - state.timerStartedAt);
+      state.timerStartedAt = null;
+    }
+    renderFlowElapsed();
+  }
+
+  function resumeFlowTimer() {
+    if (state.timerStartedAt == null) state.timerStartedAt = Date.now();
+    renderFlowElapsed();
+  }
+
+  function stopFlowTimer() {
+    const total = flowElapsedMs();
+    if (state.timerTick) { clearInterval(state.timerTick); state.timerTick = null; }
+    state.timerStartedAt = null;
+    state.timerAccMs = total;
+    state.lastElapsedMs = total;
+    renderFlowElapsed(total);
+    return total;
+  }
+
+  function hasSucceededModules() {
+    const editor = ed();
+    if (!editor || !editor.getGraph) return false;
+    const graph = editor.getGraph();
+    const states = (editor.moduleStates) || {};
+    return (graph.modules || []).some((m) => {
+      const st = states[m.id] && states[m.id].state;
+      return st === 'succeeded';
+    });
+  }
+
   function syncToolbar() {
     const runBtn = document.getElementById('infFlowRun');
     const pauseBtn = document.getElementById('infFlowPause');
     const resumeBtn = document.getElementById('infFlowResume');
     const stopBtn = document.getElementById('infFlowStop');
+    const prepBtn = document.getElementById('infFlowPrepare');
     if (runBtn) runBtn.disabled = !!state.running;
     if (pauseBtn) pauseBtn.disabled = !state.running || state.paused;
     if (resumeBtn) resumeBtn.disabled = !state.running || !state.paused;
     if (stopBtn) stopBtn.disabled = !state.running;
+    if (prepBtn) prepBtn.disabled = !!state.running || !hasSucceededModules();
     window.__flowIsRunning = !!state.running;
     if (typeof window.__syncFlowLoopMutex === 'function') {
       window.__syncFlowLoopMutex();
@@ -123,6 +197,46 @@
     return state.running && gen === state.gen;
   }
 
+  const FLOW_TRAIL_COLORS = {
+    program: '#3dd6c6',
+    infer: '#fbbf24',
+    fixed_program: '#38bdf8',
+  };
+  let savedTrailColorCss = null;
+
+  function flowModeKey(mod) {
+    if (!mod) return 'program';
+    if (mod.type === 'pose_check') return 'fixed_program';
+    if (mod.motion_mode === 'infer') return 'infer';
+    return 'program';
+  }
+
+  function beginModuleTrailColor(mod) {
+    if (typeof window.__setInfPoseTrailColor !== 'function') return;
+    if (savedTrailColorCss == null) {
+      savedTrailColorCss = (typeof window.__getInfPoseTrailColor === 'function')
+        ? window.__getInfPoseTrailColor()
+        : null;
+    }
+    const css = FLOW_TRAIL_COLORS[flowModeKey(mod)] || FLOW_TRAIL_COLORS.program;
+    window.__setInfPoseTrailColor(css, { persist: false });
+  }
+
+  function endFlowTrailColor() {
+    if (savedTrailColorCss != null && typeof window.__setInfPoseTrailColor === 'function') {
+      try {
+        window.__setInfPoseTrailColor(savedTrailColorCss, { persist: true });
+      } catch (_) {}
+    }
+    savedTrailColorCss = null;
+  }
+
+  function markGoalOnTrail(mod) {
+    if (!mod || !mod.goal || !Array.isArray(mod.goal.xyzrpy)) return;
+    if (typeof window.__setInfPoseGoal !== 'function') return;
+    try { window.__setInfPoseGoal(mod.goal.xyzrpy); } catch (_) {}
+  }
+
   async function moveToGoal(mod, gen, opts) {
     opts = opts || {};
     if (typeof window.__flowIk !== 'function' || typeof window.__flowSendAbs !== 'function') {
@@ -136,6 +250,9 @@
       return { ok: false, error: err };
     }
 
+    // Bake a waypoint in the current mode pen color before / with the move.
+    markGoalOnTrail(mod);
+
     const ikGoal = await window.__flowIk(mod.goal.xyzrpy);
     if (!ikGoal || !ikGoal.ok || !Array.isArray(ikGoal.joints_rad)) {
       const err = 'ik_goal_fail:' + ((ikGoal && ikGoal.error) || 'ik');
@@ -143,12 +260,13 @@
       return { ok: false, error: err };
     }
 
-    if (opts.preGripper != null && typeof window.__flowGripper === 'function') {
-      await window.__flowGripper(opts.preGripper);
-    }
     if (!(await waitWhileFlowPaused(gen))) return { ok: false, stopped: true };
 
-    const send = await window.__flowSendAbs(ikGoal.joints_rad, mod.timing || {});
+    const sendOpts = {};
+    if (mod.goal.gripper != null && Number.isFinite(Number(mod.goal.gripper))) {
+      sendOpts.gripper_position_norm = Number(mod.goal.gripper);
+    }
+    const send = await window.__flowSendAbs(ikGoal.joints_rad, mod.timing || {}, sendOpts);
     if (!send || !send.ok) {
       const err = 'abs_fail:' + ((send && send.error) || 'send');
       setMod(mod.id, 'failed', err);
@@ -166,22 +284,18 @@
         return { ok: false, error: err };
       }
     }
-    if (mod.goal.gripper != null && typeof window.__flowGripper === 'function') {
-      await window.__flowGripper(mod.goal.gripper);
-    }
     return { ok: true };
   }
 
-  /** Program basic: start gate → move to goal. */
+  /** Program basic: start gate → move to goal (goal grip on last jerk point). */
   async function runProgramModule(mod, gen) {
+    beginModuleTrailColor(mod);
     setMod(mod.id, 'running');
     const gate = await checkStart(mod);
     if (!gate.ok) return { ok: false, error: gate.error };
     if (!(await waitWhileFlowPaused(gen))) return { ok: false, stopped: true };
 
-    const r = await moveToGoal(mod, gen, {
-      preGripper: (mod.start && mod.start.gripper != null) ? mod.start.gripper : null,
-    });
+    const r = await moveToGoal(mod, gen, {});
     if (!r.ok) return r;
     setMod(mod.id, 'succeeded');
     return { ok: true };
@@ -189,6 +303,7 @@
 
   /** Pose-check: no start gate; from current pose → goal (program only). */
   async function runPoseCheckModule(mod, gen) {
+    beginModuleTrailColor(mod);
     setMod(mod.id, 'running');
     if (!(await waitWhileFlowPaused(gen))) return { ok: false, stopped: true };
     const r = await moveToGoal(mod, gen, {});
@@ -202,6 +317,7 @@
    * On trigger: module succeeds immediately (no goal / no loop-end pause).
    */
   async function runInferModule(mod, gen) {
+    beginModuleTrailColor(mod);
     setMod(mod.id, 'running');
     const gate = await checkStart(mod);
     if (!gate.ok) return { ok: false, error: gate.error };
@@ -312,6 +428,7 @@
     state.gen += 1;
     const gen = state.gen;
     editor.resetModuleStates();
+    startFlowTimer();
     syncToolbar();
     setHint(t('infer.flow_hint_running'));
 
@@ -336,15 +453,25 @@
       }
       cur = nextId(graph, cur);
       if (!cur) {
-        setHint(t('infer.flow_hint_done'));
+        const elapsed = stopFlowTimer();
+        setHint(t('infer.flow_hint_done') + ' · ' + t('infer.elapsed', { t: formatElapsedMs(elapsed) }));
         break;
       }
     }
 
     if (state.gen === gen) {
+      if (state.timerTick || state.timerStartedAt != null) {
+        const elapsed = stopFlowTimer();
+        const hintEl = document.getElementById('infFlowHint');
+        const curHint = (hintEl && hintEl.textContent) || '';
+        if (hintEl && curHint && curHint.indexOf(formatElapsedMs(elapsed)) < 0) {
+          hintEl.textContent = curHint + ' · ' + t('infer.elapsed', { t: formatElapsedMs(elapsed) });
+        }
+      }
       state.running = false;
       state.paused = false;
       state.currentModuleId = null;
+      endFlowTrailColor();
       syncToolbar();
     }
   }
@@ -352,6 +479,7 @@
   function pauseFlow() {
     if (!state.running || state.paused) return;
     state.paused = true;
+    pauseFlowTimer();
     syncToolbar();
     setHint(t('infer.flow_hint_paused'));
   }
@@ -359,6 +487,7 @@
   function resumeFlow() {
     if (!state.running || !state.paused) return;
     state.paused = false;
+    resumeFlowTimer();
     syncToolbar();
     setHint(t('infer.flow_hint_resumed'));
   }
@@ -369,11 +498,22 @@
     state.paused = false;
     state.gen += 1;
     state.currentModuleId = null;
+    const elapsed = stopFlowTimer();
+    endFlowTrailColor();
     syncToolbar();
     if (typeof window.__flowCancelAbs === 'function') {
       try { await window.__flowCancelAbs(); } catch (_) {}
     }
-    setHint(t('infer.flow_hint_stopped'));
+    setHint(t('infer.flow_hint_stopped') + ' · ' + t('infer.elapsed', { t: formatElapsedMs(elapsed) }));
+  }
+
+  function prepareFlow() {
+    if (state.running) return;
+    const editor = ed();
+    if (!editor || !editor.clearSucceededStates) return;
+    editor.clearSucceededStates();
+    syncToolbar();
+    setHint(t('infer.flow_hint_prepared'));
   }
 
   function init() {
@@ -381,11 +521,14 @@
     const pauseBtn = document.getElementById('infFlowPause');
     const resumeBtn = document.getElementById('infFlowResume');
     const stopBtn = document.getElementById('infFlowStop');
+    const prepBtn = document.getElementById('infFlowPrepare');
     if (runBtn) runBtn.addEventListener('click', () => { runGraph(); });
     if (pauseBtn) pauseBtn.addEventListener('click', pauseFlow);
     if (resumeBtn) resumeBtn.addEventListener('click', resumeFlow);
     if (stopBtn) stopBtn.addEventListener('click', () => { stopFlow(); });
+    if (prepBtn) prepBtn.addEventListener('click', prepareFlow);
     syncToolbar();
+    renderFlowElapsed();
   }
 
   window.FlowRuntime = {
@@ -394,6 +537,8 @@
     pause: pauseFlow,
     resume: resumeFlow,
     stop: stopFlow,
+    prepare: prepareFlow,
+    syncToolbar: syncToolbar,
     isRunning: () => !!state.running,
   };
   window.__flowIsRunning = false;

@@ -136,6 +136,7 @@ class Orchestrator:
         self._abs_ramp_target_joints: list[float] | None = None
         self._abs_ramp_timing: str | None = None
         self._abs_ramp_delta_max: float | None = None
+        self._abs_ramp_gripper: float | None = None
         # Home pose (rad); seeded from YAML, updatable at runtime / via settings save.
         self._home_lock = threading.Lock()
         hj, _herr = parse_home_joints(getattr(cfg, "home_joints_rad", None))
@@ -460,28 +461,23 @@ class Orchestrator:
                     f"[sensors-dcs] pi05 decode failed ({recv_fmt}): {decoded.get('error')}",
                     flush=True,
                 )
-            # Dim 7 = gripper position_norm → gripper_write (step + LOOP share this path).
+            # Dim 7 = gripper position_norm. Deferred to abs-ramp: same S-curve α
+            # as joints (interpolated every waypoint, not on step).
             grip = self._next_state_grip(ns)
             out["next_grip"] = grip
             if grip is None:
                 out["grip_ok"] = False
+                out["grip_deferred"] = False
                 out["grip_error"] = "next_state missing grip (need len>=7)"
             else:
-                gcmd = self.gripper_command(
-                    position_norm=grip, allow_during_sync=True
+                out["grip_ok"] = True
+                out["grip_deferred"] = True
+                out["grip_error"] = None
+                print(
+                    f"[sensors-dcs] pi05 grip deferred  position_norm={grip} "
+                    f"(abs-ramp S-curve with joints)",
+                    flush=True,
                 )
-                out["grip_ok"] = bool(gcmd.get("ok"))
-                out["grip_error"] = gcmd.get("error")
-                if gcmd.get("ok"):
-                    print(
-                        f"[sensors-dcs] pi05 grip ok  position_norm={grip}",
-                        flush=True,
-                    )
-                else:
-                    print(
-                        f"[sensors-dcs] pi05 grip failed: {gcmd.get('error')}",
-                        flush=True,
-                    )
         else:
             print(f"[sensors-dcs] pi05 step failed: {out.get('error')}", flush=True)
             out.setdefault("next_joints_rad", None)
@@ -490,6 +486,7 @@ class Orchestrator:
             out.setdefault("goal_xyzrpy", None)
             out.setdefault("next_grip", None)
             out.setdefault("grip_ok", False)
+            out.setdefault("grip_deferred", False)
             out.setdefault("grip_error", out.get("error"))
         return out
 
@@ -1161,6 +1158,31 @@ class Orchestrator:
         return max(0.0, min(1.0, _integrate(u) / p_end))
 
     @staticmethod
+    def _path_alpha(
+        u: float,
+        *,
+        profile: str = "linear",
+        jerk_seg_frac: float = 0.10,
+        accel_seg_frac: float = 0.15,
+    ) -> float:
+        """Shared path progress α(u)∈[0,1] for joints + gripper.
+
+        ``seven_segment`` / ``cosine``: S-shaped — Δα small at both ends, larger mid-path.
+        ``linear``: uniform α=u.
+        """
+        u = max(0.0, min(1.0, float(u)))
+        prof = str(profile or "linear").strip().lower()
+        if prof == "seven_segment":
+            return Orchestrator._seven_segment_alpha(
+                u,
+                jerk_seg_frac=jerk_seg_frac,
+                accel_seg_frac=accel_seg_frac,
+            )
+        if prof == "cosine":
+            return Orchestrator._s_curve_alpha(u)
+        return u
+
+    @staticmethod
     def _interp_path(
         qa: list[float],
         qg: list[float],
@@ -1177,24 +1199,38 @@ class Orchestrator:
         ``profile=seven_segment``: shared jerk-limited 7-segment α (abs default).
         """
         n = max(1, int(n))
-        prof = str(profile or "linear").strip().lower()
         out: list[list[float]] = []
         for k in range(1, n + 1):
-            u = k / n
-            if prof == "seven_segment":
-                a = Orchestrator._seven_segment_alpha(
-                    u,
-                    jerk_seg_frac=jerk_seg_frac,
-                    accel_seg_frac=accel_seg_frac,
-                )
-            elif prof == "cosine":
-                a = Orchestrator._s_curve_alpha(u)
-            else:
-                a = u
+            a = Orchestrator._path_alpha(
+                k / n,
+                profile=profile,
+                jerk_seg_frac=jerk_seg_frac,
+                accel_seg_frac=accel_seg_frac,
+            )
             out.append(
                 [float(qa[i]) + a * (float(qg[i]) - float(qa[i])) for i in range(6)]
             )
         return out
+
+    def _live_gripper_norm(self) -> float | None:
+        """Latest gripper_read ``position_norm``, or None if unavailable."""
+        from sensors_dcs.agents.gripper_read_agent import GripperReadAgent
+
+        for agent in self.agents.values():
+            if not isinstance(agent, GripperReadAgent):
+                continue
+            fr = agent.ring.latest.get()
+            if fr is None:
+                continue
+            raw = (fr.payload or {}).get("position_norm")
+            try:
+                g = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if g != g or g in (float("inf"), float("-inf")):
+                continue
+            return g
+        return None
 
     @staticmethod
     def _path_peak_step(qa: list[float], path: list[list[float]]) -> float:
@@ -1986,6 +2022,7 @@ class Orchestrator:
                 ),
                 "timing": getattr(self, "_abs_ramp_timing", None),
                 "delta_max": getattr(self, "_abs_ramp_delta_max", None),
+                "gripper_position_norm": getattr(self, "_abs_ramp_gripper", None),
                 "params": defaults,
             }
 
@@ -2019,6 +2056,7 @@ class Orchestrator:
         v_norm_rad_s: float | None = None,
         jerk_seg_frac: float | None = None,
         accel_seg_frac: float | None = None,
+        gripper_position_norm: float | None = None,
     ) -> dict[str, Any]:
         """Timed **joint-space** ramp from live arm read → target joints.
 
@@ -2026,6 +2064,8 @@ class Orchestrator:
         - ``timing=fixed``: use ``duration_s`` as total T + same profile
           (legacy; gello sync / callers that pass only duration_s).
         Path is linear in q with shared α(t). Not Cartesian+IK.
+        Optional ``gripper_position_norm`` is S-curve interpolated with joints
+        (same α as ``profile``; small Δ at ends, larger mid-path).
         """
         from sensors_dcs.agents.arm_agent import ArmAgent
         from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
@@ -2161,6 +2201,22 @@ class Orchestrator:
                 "timing": mode,
             }
 
+        grip_end: float | None = None
+        if gripper_position_norm is not None:
+            try:
+                gv = float(gripper_position_norm)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "gripper_position_norm must be a float"}
+            if not (gv == gv):
+                return {"ok": False, "error": "gripper_position_norm must be finite"}
+            # AG95 useful range is ~0..0.637; keep a soft ceiling at 1.0 for API compat.
+            grip_end = max(0.0, min(1.0, gv))
+
+        grip_start = self._live_gripper_norm()
+        if grip_end is not None and grip_start is None:
+            # No live read — hold target constant across the path (still per-waypoint writes).
+            grip_start = grip_end
+
         # Replace any in-flight abs ramp.
         self._abs_ramp_stop.set()
         th_old = self._abs_ramp_thread
@@ -2178,14 +2234,22 @@ class Orchestrator:
             self._abs_ramp_writer_id = writer.agent_id
             self._abs_ramp_last_ok = None
             self._abs_ramp_last_error = None
+            if grip_end is not None and grip_start is not None:
+                grip_msg = (
+                    f"；夹爪 S 插值 {float(grip_start):g}→{float(grip_end):g}"
+                )
+            else:
+                grip_msg = ""
             self._abs_ramp_last_message = (
                 f"关节斜坡开始：{dur:g}s @ {hz:g}Hz × {n} 点 ({mode}, {profile})"
+                + grip_msg
             )
             self._abs_ramp_write_count = 0
             self._abs_ramp_last_t_wall = time.time()
             self._abs_ramp_target_joints = list(q_star)
             self._abs_ramp_timing = mode
             self._abs_ramp_delta_max = dmax
+            self._abs_ramp_gripper = grip_end
 
         self._abs_ramp_stop.clear()
         self._abs_ramp_thread = threading.Thread(
@@ -2201,6 +2265,8 @@ class Orchestrator:
                 profile,
                 jerk_frac,
                 accel_frac,
+                grip_start,
+                grip_end,
             ),
             daemon=True,
         )
@@ -2229,6 +2295,8 @@ class Orchestrator:
         profile: str = "seven_segment",
         jerk_seg_frac: float = 0.10,
         accel_seg_frac: float = 0.15,
+        gripper_start: float | None = None,
+        gripper_end: float | None = None,
     ) -> None:
         from sensors_dcs.agents.arm_agent import ArmAgent
         from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
@@ -2252,6 +2320,9 @@ class Orchestrator:
             if not isinstance(reader, ArmAgent) or not isinstance(writer, ArmWriteAgent):
                 final_error = "abs ramp agents missing"
             else:
+                g0 = float(gripper_start) if gripper_start is not None else None
+                g1 = float(gripper_end) if gripper_end is not None else None
+                do_grip = g0 is not None and g1 is not None
                 for k, qk in enumerate(path, start=1):
                     if self._abs_ramp_stop.is_set() or self._stop.is_set():
                         final_message = "绝对下发已取消"
@@ -2277,6 +2348,36 @@ class Orchestrator:
                     if not result.get("ok"):
                         final_error = str(result.get("error") or "ramp write failed")
                         break
+
+                    # Gripper: same S-curve α as joints (两头 Δ 小、中间 Δ 大).
+                    if do_grip and result.get("ok"):
+                        a = Orchestrator._path_alpha(
+                            k / n,
+                            profile=profile,
+                            jerk_seg_frac=jerk_seg_frac,
+                            accel_seg_frac=accel_seg_frac,
+                        )
+                        gk = float(g0) + a * (float(g1) - float(g0))
+                        gcmd = self.gripper_command(
+                            position_norm=gk,
+                            allow_during_sync=True,
+                        )
+                        with self._abs_ramp_lock:
+                            if gcmd.get("ok"):
+                                self._abs_ramp_last_message = (
+                                    f"关节斜坡 {k}/{n} · 夹爪={gk:g}"
+                                )
+                            else:
+                                self._abs_ramp_last_ok = False
+                                self._abs_ramp_last_error = gcmd.get("error")
+                                self._abs_ramp_last_message = (
+                                    f"夹爪插值失败 @ {k}/{n}: {gcmd.get('error')}"
+                                )
+                        if not gcmd.get("ok"):
+                            final_error = str(
+                                gcmd.get("error") or "gripper ramp write failed"
+                            )
+                            break
                     self._abs_ramp_stop.wait(period)
                 else:
                     completed = True
@@ -2323,6 +2424,7 @@ class Orchestrator:
         v_norm_rad_s: float | None = None,
         jerk_seg_frac: float | None = None,
         accel_seg_frac: float | None = None,
+        gripper_position_norm: float | None = None,
     ) -> dict[str, Any]:
         """Dispatch arm/disarm/jog to ``arm_write``; absolute joints use timed ramp."""
         import math
@@ -2471,10 +2573,29 @@ class Orchestrator:
                         "ok": False,
                         "error": "no live arm read joints; refuse direct write without current pose",
                     }
-                return agent.command(
+                wr = agent.command(
                     joints_rad=q_star,
                     reference_joints_rad=list(base),
                 )
+                # Direct write has no interp path — apply grip immediately if provided.
+                if (
+                    wr.get("ok")
+                    and gripper_position_norm is not None
+                ):
+                    gcmd = self.gripper_command(
+                        position_norm=float(gripper_position_norm),
+                        allow_during_sync=True,
+                    )
+                    wr = {
+                        **wr,
+                        "grip_ok": bool(gcmd.get("ok")),
+                        "grip_error": gcmd.get("error"),
+                        "gripper_position_norm": float(gripper_position_norm),
+                    }
+                    if not gcmd.get("ok"):
+                        wr["ok"] = False
+                        wr["error"] = gcmd.get("error") or "gripper failed"
+                return wr
             return self.start_arm_abs_ramp(
                 joints_rad=list(joints_rad),
                 duration_s=duration_s,
@@ -2485,6 +2606,7 @@ class Orchestrator:
                 v_norm_rad_s=v_norm_rad_s,
                 jerk_seg_frac=jerk_seg_frac,
                 accel_seg_frac=accel_seg_frac,
+                gripper_position_norm=gripper_position_norm,
             )
 
         return {"ok": False, "error": "arm, disarm/stop, joints_rad, or jog_joint required"}

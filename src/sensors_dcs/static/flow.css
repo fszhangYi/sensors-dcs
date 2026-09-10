@@ -246,10 +246,36 @@ html[data-theme='light'] .flow-node {
 }
 
 .flow-node-mode {
-  color: var(--accent);
   font-weight: 550;
   font-size: 0.6rem;
   letter-spacing: 0.02em;
+}
+
+.flow-node-mode[data-mode="program"],
+.flow-node[data-mode="program"] .flow-node-mode {
+  color: var(--accent);
+}
+
+.flow-node-mode[data-mode="infer"],
+.flow-node[data-mode="infer"] .flow-node-mode {
+  color: var(--warn);
+}
+
+.flow-node-mode[data-mode="fixed_program"],
+.flow-node[data-mode="fixed_program"] .flow-node-mode {
+  color: #38bdf8;
+}
+
+.flow-node[data-mode="program"] {
+  border-left: 3px solid var(--accent);
+}
+
+.flow-node[data-mode="infer"] {
+  border-left: 3px solid var(--warn);
+}
+
+.flow-node[data-mode="fixed_program"] {
+  border-left: 3px solid #38bdf8;
 }
 
 .flow-node-line {
