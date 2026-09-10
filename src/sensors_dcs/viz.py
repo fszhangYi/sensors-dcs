@@ -2268,6 +2268,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <input type="number" id="infChunkSkip" min="1" max="15" step="1" value="1" />
           </label>
           <button type="button" id="infPi05Loop" data-i18n="infer.loop" disabled>LOOP</button>
+          <button type="button" id="infPi05LoopPause" data-i18n="infer.loop_pause" disabled>LOOP 暂停</button>
+          <button type="button" id="infPi05LoopResume" data-i18n="infer.loop_resume" disabled>LOOP 继续</button>
           <label class="inf-loop-rounds" data-i18n-title="infer.loop_rounds_hint" title="大循环轮数：勾选自动复位时可用；每轮=LOOP至terminate→Home">
             <span data-i18n="infer.loop_rounds">轮数</span>
             <input type="number" id="infLoopRounds" min="1" max="1000" step="1" value="1" />
@@ -3268,6 +3270,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const infPi05Disconnect = document.getElementById('infPi05Disconnect');
     const infPi05Step = document.getElementById('infPi05Step');
     const infPi05Loop = document.getElementById('infPi05Loop');
+    const infPi05LoopPause = document.getElementById('infPi05LoopPause');
+    const infPi05LoopResume = document.getElementById('infPi05LoopResume');
     const infChunkSkip = document.getElementById('infChunkSkip');
     const infLoopRounds = document.getElementById('infLoopRounds');
     const infLoopRoundIdx = document.getElementById('infLoopRoundIdx');
@@ -3300,8 +3304,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const LS_PI05 = 'dcs.inf.pi05';
     let pi05StepBusy = false;
     let pi05LoopRunning = false;
+    let pi05LoopPaused = false;
     let pi05LoopGen = 0;
     let pi05LoopStepN = 0;
+    let pi05LoopRoundIdx = null;
+    let pi05LoopRoundTotal = null;
     function loadPi05Form() {
       try {
         const raw = localStorage.getItem(LS_PI05);
@@ -3601,6 +3608,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           infPi05Loop.disabled = true;
           infPi05Loop.textContent = t('infer.loop');
         }
+        if (typeof syncPi05LoopPauseUi === 'function') syncPi05LoopPauseUi();
         if (infPi05Host) infPi05Host.disabled = true;
         if (infPi05Port) infPi05Port.disabled = true;
         setPi05RawPayload(p);
@@ -3622,6 +3630,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         infPi05Loop.disabled = !connected || (pi05StepBusy && !pi05LoopRunning);
         infPi05Loop.textContent = pi05LoopRunning ? t('infer.loop_stop') : t('infer.loop');
       }
+      if (typeof syncPi05LoopPauseUi === 'function') syncPi05LoopPauseUi();
       if (connected) {
         const host = (p && p.host) || ((infPi05Host && infPi05Host.value) || '127.0.0.1');
         const port = (p && p.port != null) ? p.port : ((infPi05Port && infPi05Port.value) || '5000');
@@ -4877,8 +4886,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
     window.__sendInfArmJointsDirect = sendInfArmJointsDirect;
     async function waitInfArmArrive(gen, duration_s) {
       const timeoutMs = Math.max(5000, (Number(duration_s) || 10) * 1500 + 2000);
-      const t0 = Date.now();
+      let elapsed = 0;
+      let lastTick = Date.now();
       while (pi05LoopRunning && gen === pi05LoopGen) {
+        if (pi05LoopPaused) {
+          lastTick = Date.now();
+          await sleepMs(100);
+          continue;
+        }
+        const now = Date.now();
+        elapsed += Math.max(0, now - lastTick);
+        lastTick = now;
         const ramp = window.__armAbsRamp || {};
         if (!ramp.enabled) {
           if (ramp.phase === 'error') {
@@ -4888,7 +4906,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             return { ok: true, phase: ramp.phase || 'idle' };
           }
         }
-        if (Date.now() - t0 > timeoutMs) {
+        if (elapsed > timeoutMs) {
           return { ok: false, error: 'arrive timeout' };
         }
         await sleepMs(120);
@@ -4898,6 +4916,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
     function syncPi05LoopButton() {
       if (!infPi05Loop) return;
       infPi05Loop.textContent = pi05LoopRunning ? t('infer.loop_stop') : t('infer.loop');
+    }
+    function syncPi05LoopPauseUi() {
+      const active = !!pi05LoopRunning;
+      if (infPi05LoopPause) infPi05LoopPause.disabled = !active || !!pi05LoopPaused;
+      if (infPi05LoopResume) infPi05LoopResume.disabled = !active || !pi05LoopPaused;
+    }
+    async function waitWhileLoopPaused(gen) {
+      while (pi05LoopRunning && gen === pi05LoopGen && pi05LoopPaused) {
+        await sleepMs(100);
+      }
+      return !!(pi05LoopRunning && gen === pi05LoopGen);
     }
     /** Match gello_arm_sync.sync_done_eps_rad default (rad). */
     const HOME_ARRIVE_EPS_RAD = 0.03;
@@ -4915,12 +4944,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (String(infLoopRounds.value) !== String(n)) infLoopRounds.value = String(n);
     }
     function setLoopRoundIdx(r, R) {
-      if (!infLoopRoundIdx) return;
       if (r == null || R == null) {
-        infLoopRoundIdx.textContent = '—';
+        pi05LoopRoundIdx = null;
+        pi05LoopRoundTotal = null;
+        if (infLoopRoundIdx) infLoopRoundIdx.textContent = '—';
         return;
       }
-      infLoopRoundIdx.textContent = t('infer.loop_round_idx', { r: r, R: R });
+      pi05LoopRoundIdx = r;
+      pi05LoopRoundTotal = R;
+      if (infLoopRoundIdx) infLoopRoundIdx.textContent = t('infer.loop_round_idx', { r: r, R: R });
     }
     function homeArriveEpsRad() {
       const sync = window.__gelloArmSync || {};
@@ -4949,11 +4981,21 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     async function waitJointsNearHome(gen, timeoutMs) {
       const t0 = Date.now();
+      let elapsed = 0;
+      let lastTick = t0;
       let last = checkJointsNearHome();
       while (pi05LoopRunning && gen === pi05LoopGen) {
+        if (pi05LoopPaused) {
+          lastTick = Date.now();
+          await sleepMs(100);
+          continue;
+        }
+        const now = Date.now();
+        elapsed += Math.max(0, now - lastTick);
+        lastTick = now;
         last = checkJointsNearHome();
         if (last.ok) return last;
-        if (Date.now() - t0 > timeoutMs) return last;
+        if (elapsed > timeoutMs) return last;
         await sleepMs(150);
       }
       return Object.assign({}, last, { stopped: true, ok: false });
@@ -4961,8 +5003,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
     async function stopPi05Loop(reasonHint) {
       if (!pi05LoopRunning) return;
       pi05LoopRunning = false;
+      pi05LoopPaused = false;
       pi05LoopGen += 1;
       syncPi05LoopButton();
+      syncPi05LoopPauseUi();
       setLoopRoundIdx(null, null);
       if (typeof syncAutoHomeRoundsUi === 'function') syncAutoHomeRoundsUi();
       else if (infLoopRounds) infLoopRounds.disabled = false;
@@ -4996,6 +5040,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       pi05LoopStepN = 0;
       try {
         while (pi05LoopRunning && gen === pi05LoopGen) {
+          if (!(await waitWhileLoopPaused(gen))) {
+            return { ok: false, reason: 'stopped', steps: pi05LoopStepN || 0 };
+          }
           pi05LoopStepN += 1;
           const n = pi05LoopStepN;
           const skipN = getChunkSkip();
@@ -5010,10 +5057,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
           let stepRes = null;
           try {
             for (let si = 0; si < skipN; si++) {
+              if (!(await waitWhileLoopPaused(gen))) {
+                return { ok: false, reason: 'stopped', steps: n };
+              }
               if (!pi05LoopRunning || gen !== pi05LoopGen) {
                 return { ok: false, reason: 'stopped', steps: n };
               }
               stepRes = await runInfPi05StepOnce();
+              if (!(await waitWhileLoopPaused(gen))) {
+                return { ok: false, reason: 'stopped', steps: n };
+              }
               if (!pi05LoopRunning || gen !== pi05LoopGen) {
                 return { ok: false, reason: 'stopped', steps: n };
               }
@@ -5041,6 +5094,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
           } finally {
             pi05StepBusy = false;
           }
+          if (!(await waitWhileLoopPaused(gen))) {
+            return { ok: false, reason: 'stopped', steps: n };
+          }
           if (!pi05LoopRunning || gen !== pi05LoopGen) {
             return { ok: false, reason: 'stopped', steps: n };
           }
@@ -5052,10 +5108,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
           }
           let sendRes;
           try {
+            if (!(await waitWhileLoopPaused(gen))) {
+              return { ok: false, reason: 'stopped', steps: n };
+            }
             sendRes = await sendInfArmJointsOnce();
           } catch (e) {
             await stopPi05LoopForError(n, String(e));
             return { ok: false, reason: 'error', steps: n, error: String(e) };
+          }
+          if (!(await waitWhileLoopPaused(gen))) {
+            return { ok: false, reason: 'stopped', steps: n };
           }
           if (!pi05LoopRunning || gen !== pi05LoopGen) {
             return { ok: false, reason: 'stopped', steps: n };
@@ -5093,6 +5155,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (infLoopRounds) infLoopRounds.disabled = true;
       try {
         for (let r = 1; r <= roundTotal; r++) {
+          if (!(await waitWhileLoopPaused(gen))) break;
           if (!pi05LoopRunning || gen !== pi05LoopGen) break;
           setLoopRoundIdx(r, roundTotal);
           // Gate: each big round starts only when live joints are near configured Home.
@@ -5100,6 +5163,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             infPi05Hint.textContent = t('infer.hint_home_check', { r: r, R: roundTotal });
           }
           const near = await waitJointsNearHome(gen, 2500);
+          if (!(await waitWhileLoopPaused(gen))) break;
           if (!pi05LoopRunning || gen !== pi05LoopGen) break;
           if (near.stopped) break;
           if (!near.ok) {
@@ -5117,6 +5181,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             infPi05Hint.textContent = t('infer.hint_round', { r: r, R: roundTotal });
           }
           const once = await runPi05LoopOnce(gen, r, roundTotal);
+          if (!(await waitWhileLoopPaused(gen))) break;
           if (!pi05LoopRunning || gen !== pi05LoopGen) break;
           if (once.reason !== 'term') {
             if (once.reason === 'stopped' && pi05LoopRunning && gen === pi05LoopGen) {
@@ -5136,7 +5201,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
             continue;
           }
           if (infPi05Hint) infPi05Hint.textContent = t('infer.hint_auto_home');
+          if (!(await waitWhileLoopPaused(gen))) break;
           const homeGo = await goArmHome(infArmProg, null);
+          if (!(await waitWhileLoopPaused(gen))) break;
           if (!pi05LoopRunning || gen !== pi05LoopGen) break;
           if (!homeGo || !homeGo.ok) {
             const err = (homeGo && homeGo.error) || 'home failed';
@@ -5238,12 +5305,44 @@ PREVIEW_HTML = """<!DOCTYPE html>
         syncLoopRoundsInput();
         syncChunkSkipInput();
         pi05LoopRunning = true;
+        pi05LoopPaused = false;
         pi05LoopGen += 1;
         syncPi05LoopButton();
+        syncPi05LoopPauseUi();
         if (infPi05Step) infPi05Step.disabled = true;
         if (infLoopRounds) infLoopRounds.disabled = true;
         if (infChunkSkip) infChunkSkip.disabled = true;
         await runPi05LoopRounds();
+      });
+    }
+    if (infPi05LoopPause) {
+      infPi05LoopPause.addEventListener('click', () => {
+        if (!pi05LoopRunning || pi05LoopPaused) return;
+        pi05LoopPaused = true;
+        syncPi05LoopPauseUi();
+        if (infPi05Hint) {
+          infPi05Hint.textContent = t('infer.hint_loop_paused', {
+            n: pi05LoopStepN || 0,
+            r: pi05LoopRoundIdx != null ? pi05LoopRoundIdx : '—',
+            R: pi05LoopRoundTotal != null ? pi05LoopRoundTotal : '—',
+          });
+          infPi05Hint.title = infPi05Hint.textContent || '';
+        }
+      });
+    }
+    if (infPi05LoopResume) {
+      infPi05LoopResume.addEventListener('click', () => {
+        if (!pi05LoopRunning || !pi05LoopPaused) return;
+        pi05LoopPaused = false;
+        syncPi05LoopPauseUi();
+        if (infPi05Hint) {
+          infPi05Hint.textContent = t('infer.hint_loop_resumed', {
+            n: pi05LoopStepN || 0,
+            r: pi05LoopRoundIdx != null ? pi05LoopRoundIdx : '—',
+            R: pi05LoopRoundTotal != null ? pi05LoopRoundTotal : '—',
+          });
+          infPi05Hint.title = infPi05Hint.textContent || '';
+        }
       });
     }
     if (infPi05PromptApply) {
