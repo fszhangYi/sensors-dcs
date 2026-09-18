@@ -40,6 +40,7 @@ arm_abs_ramp:
   jerk_seg_frac: 0.10
   accel_seg_frac: 0.15
   ramp_hz: 20
+  # gripper_ramp_hz ignored: grip is one-shot at ramp start (not in joint loop)
   gripper_ramp_hz: 5
 
 record:

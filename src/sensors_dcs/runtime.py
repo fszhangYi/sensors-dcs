@@ -490,7 +490,7 @@ class Orchestrator:
                 out["grip_error"] = None
                 print(
                     f"[sensors-dcs] pi05 grip deferred  position_norm={grip} "
-                    f"(abs-ramp S-curve with joints)",
+                    f"(one-shot at abs-ramp start)",
                     flush=True,
                 )
         else:
@@ -2306,8 +2306,10 @@ class Orchestrator:
         - ``timing=fixed``: use ``duration_s`` as total T + same profile
           (legacy; gello sync / callers that pass only duration_s).
         Path is linear in q with shared α(t). Not Cartesian+IK.
-        Optional ``gripper_position_norm`` is S-curve interpolated with joints
-        (same α as ``profile``; small Δ at ends, larger mid-path).
+        Optional ``gripper_position_norm`` is written **once** at ramp start
+        (AG95 native speed). It is intentionally not interpolated inside the
+        joint waypoint loop — Modbus on that hot path stretches the period and
+        contends with gripper_read.
         """
         from sensors_dcs.agents.arm_agent import ArmAgent
         from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
@@ -2409,10 +2411,6 @@ class Orchestrator:
             hz = float(getattr(self.cfg.gello_arm_sync, "ramp_hz", 5.0) or 5.0)
         hz = max(0.1, hz)
         n = max(1, int(round(dur * hz)))
-        grip_hz = float(
-            getattr(cfg, "gripper_ramp_hz", 5.0) if cfg is not None else 5.0
-        )
-        grip_hz = max(0.1, min(hz, grip_hz))
 
         path = self._interp_path(
             qa0,
@@ -2458,11 +2456,6 @@ class Orchestrator:
             # AG95 useful range is ~0..0.637; keep a soft ceiling at 1.0 for API compat.
             grip_end = max(0.0, min(1.0, gv))
 
-        grip_start = self._live_gripper_norm()
-        if grip_end is not None and grip_start is None:
-            # No live read — hold target constant across the path (still per-waypoint writes).
-            grip_start = grip_end
-
         # Replace any in-flight abs ramp.
         self._abs_ramp_stop.set()
         th_old = self._abs_ramp_thread
@@ -2480,11 +2473,8 @@ class Orchestrator:
             self._abs_ramp_writer_id = writer.agent_id
             self._abs_ramp_last_ok = None
             self._abs_ramp_last_error = None
-            if grip_end is not None and grip_start is not None:
-                grip_msg = (
-                    f"；夹爪 S 插值 {float(grip_start):g}→{float(grip_end):g}"
-                    f" @{grip_hz:g}Hz"
-                )
+            if grip_end is not None:
+                grip_msg = f"；夹爪一次下发 {float(grip_end):g}（与关节斜坡解耦）"
             else:
                 grip_msg = ""
             self._abs_ramp_last_message = (
@@ -2512,9 +2502,7 @@ class Orchestrator:
                 profile,
                 jerk_frac,
                 accel_frac,
-                grip_start,
                 grip_end,
-                grip_hz,
             ),
             daemon=True,
         )
@@ -2532,12 +2520,6 @@ class Orchestrator:
             **self.arm_abs_ramp_status(),
         }
 
-    @staticmethod
-    def _gripper_norm_to_raw(norm: float) -> int:
-        """AG95 position_norm → Modbus raw (same as sensors.drivers.gripper.dh_ag95)."""
-        n = float(norm)
-        return int(min(1.0, max(1.0 - n / 0.637, 0.0)) * 1000)
-
     def _arm_abs_ramp_loop(
         self,
         arm_id: str,
@@ -2549,15 +2531,12 @@ class Orchestrator:
         profile: str = "seven_segment",
         jerk_seg_frac: float = 0.10,
         accel_seg_frac: float = 0.15,
-        gripper_start: float | None = None,
-        gripper_end: float | None = None,
-        gripper_ramp_hz: float = 5.0,
+        gripper_position_norm: float | None = None,
     ) -> None:
         from sensors_dcs.agents.arm_agent import ArmAgent
         from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
 
         period = 1.0 / max(0.1, float(hz))
-        grip_period = 1.0 / max(0.1, float(gripper_ramp_hz))
         path = self._interp_path(
             qa0,
             q_star,
@@ -2570,9 +2549,7 @@ class Orchestrator:
         final_message: str | None = None
         completed = False
         grip_soft_error: str | None = None
-        grip_writes = 0
-        last_grip_raw: int | None = None
-        last_grip_t: float | None = None
+        grip_ok: bool | None = None
 
         try:
             reader = self.agents.get(arm_id)
@@ -2580,9 +2557,27 @@ class Orchestrator:
             if not isinstance(reader, ArmAgent) or not isinstance(writer, ArmWriteAgent):
                 final_error = "abs ramp agents missing"
             else:
-                g0 = float(gripper_start) if gripper_start is not None else None
-                g1 = float(gripper_end) if gripper_end is not None else None
-                do_grip = g0 is not None and g1 is not None
+                # One Modbus write before the joint loop — never inside the period.
+                if gripper_position_norm is not None:
+                    gcmd = self.gripper_command(
+                        position_norm=float(gripper_position_norm),
+                        allow_during_sync=True,
+                    )
+                    grip_ok = bool(gcmd.get("ok"))
+                    if grip_ok:
+                        with self._abs_ramp_lock:
+                            self._abs_ramp_last_message = (
+                                f"夹爪已下发 {float(gripper_position_norm):g}；开始关节斜坡"
+                            )
+                    else:
+                        grip_soft_error = str(
+                            gcmd.get("error") or "gripper write failed"
+                        )
+                        with self._abs_ramp_lock:
+                            self._abs_ramp_last_message = (
+                                f"夹爪软失败: {grip_soft_error}；继续关节斜坡"
+                            )
+
                 for k, qk in enumerate(path, start=1):
                     if self._abs_ramp_stop.is_set() or self._stop.is_set():
                         final_message = "绝对下发已取消"
@@ -2608,56 +2603,17 @@ class Orchestrator:
                     if not result.get("ok"):
                         final_error = str(result.get("error") or "ramp write failed")
                         break
-
-                    # Gripper: same S-curve α, but Modbus is rate-limited / skip-dup /
-                    # soft-fail so a single bus glitch does not abort the joint path.
-                    if do_grip and result.get("ok"):
-                        a = Orchestrator._path_alpha(
-                            k / n,
-                            profile=profile,
-                            jerk_seg_frac=jerk_seg_frac,
-                            accel_seg_frac=accel_seg_frac,
-                        )
-                        gk = float(g0) + a * (float(g1) - float(g0))
-                        raw_k = self._gripper_norm_to_raw(gk)
-                        now = time.perf_counter()
-                        due = (
-                            last_grip_t is None
-                            or (now - last_grip_t) >= grip_period - 1e-9
-                            or k == n
-                        )
-                        changed = last_grip_raw is None or raw_k != last_grip_raw
-                        if due and changed:
-                            gcmd = self.gripper_command(
-                                position_norm=gk,
-                                allow_during_sync=True,
-                            )
-                            last_grip_t = time.perf_counter()
-                            with self._abs_ramp_lock:
-                                if gcmd.get("ok"):
-                                    grip_writes += 1
-                                    last_grip_raw = raw_k
-                                    self._abs_ramp_last_message = (
-                                        f"关节斜坡 {k}/{n} · 夹爪={gk:g}"
-                                    )
-                                else:
-                                    # Soft-fail: keep ramping joints; surface warning.
-                                    err = str(
-                                        gcmd.get("error")
-                                        or "gripper ramp write failed"
-                                    )
-                                    grip_soft_error = err
-                                    self._abs_ramp_last_message = (
-                                        f"关节斜坡 {k}/{n} · 夹爪软失败: {err}"
-                                    )
                     self._abs_ramp_stop.wait(period)
                 else:
                     completed = True
                     final_message = f"绝对下发完成：{n} 点已写入（关节空间/{profile}）"
-                    if do_grip:
-                        final_message += f"；夹爪写 {grip_writes} 次"
-                        if grip_soft_error:
-                            final_message += f"（末次软失败: {grip_soft_error}）"
+                    if gripper_position_norm is not None:
+                        if grip_ok:
+                            final_message += (
+                                f"；夹爪一次下发 {float(gripper_position_norm):g}"
+                            )
+                        elif grip_soft_error:
+                            final_message += f"（夹爪软失败: {grip_soft_error}）"
         except Exception as e:  # noqa: BLE001 — surface to status
             final_error = f"abs ramp exception: {e}"
 
@@ -2667,7 +2623,6 @@ class Orchestrator:
             if completed:
                 self._abs_ramp_phase = "completed"
                 self._abs_ramp_last_ok = True
-                # Soft grip failures must not flip the joint ramp to error.
                 self._abs_ramp_last_error = None
                 self._abs_ramp_last_message = final_message
             elif final_error:

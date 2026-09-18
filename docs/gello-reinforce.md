@@ -79,7 +79,7 @@ serve next_state[7]
         │
         ▼
   IK(pose') → joints → abs-ramp / 下发
-  grip'     → abs-ramp 夹爪 S-curve（与现有 deferred grip 一致）
+  grip'     → abs-ramp 开始时一次下发（与关节斜坡解耦，避免 Modbus 拖慢点位）
 ```
 
 ```mermaid

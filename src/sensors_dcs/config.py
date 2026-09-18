@@ -92,8 +92,7 @@ class ArmAbsRampConfig(BaseModel):
     accel_seg_frac: float = 0.15
     # Abs command rate; None → fall back to gello_arm_sync.ramp_hz.
     ramp_hz: float | None = 20.0
-    # Gripper Modbus writes during abs-ramp (joint path may be faster).
-    # Cap below bus contention with gripper_read; final waypoint always written.
+    # Deprecated / ignored: grip is one-shot at abs-ramp start (not in joint loop).
     gripper_ramp_hz: float = 5.0
 
     @field_validator("t_min_s", "t_max_s", mode="before")
