@@ -67,4 +67,9 @@ agents:
     sensor_id: arm-elite
     hz: 5
     buffer_frames: 8
+  - id: gello-reinforce
+    type: gello_reinforce
+    hz: 20
+    buffer_frames: 8
+    gello_agent_id: gello
 

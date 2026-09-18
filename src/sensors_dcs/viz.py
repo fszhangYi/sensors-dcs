@@ -33,6 +33,11 @@ class GripperGelloSyncBody(BaseModel):
     hz: float | None = None
 
 
+class DeltaPoseOffsetBody(BaseModel):
+    enabled: bool | None = None
+    offset: list[float] | None = None
+
+
 class ArmCommandBody(BaseModel):
     agent_id: str | None = None
     arm: bool = False
@@ -2352,6 +2357,21 @@ PREVIEW_HTML = """<!DOCTYPE html>
         </div>
         <span class="hint" id="infArmProg" data-i18n="arm.abs_idle">绝对下发：空闲</span>
       </section>
+      <section class="inf-pi05-sec" aria-labelledby="infSecDeltaOff">
+        <h3 class="inf-pi05-sec-title" id="infSecDeltaOff" data-i18n="infer.delta_pose_offset_sec">Gello 强制干预</h3>
+        <div class="inf-pi05-row">
+          <label class="quick-collect" data-i18n-title="infer.delta_pose_offset_enable_tip" title="启用后，挪动 Gello 产生的帧间 delta 会瞬时叠到 serve 解码目标上">
+            <input type="checkbox" id="infDeltaPoseOffsetEnable" disabled />
+            <span data-i18n="infer.delta_pose_offset_enable">启用瞬时 offset</span>
+          </label>
+        </div>
+        <div class="inf-pi05-row">
+          <label for="infDeltaPoseOffset" class="arm-abs-label" data-i18n="infer.delta_pose_offset_label" data-i18n-title="infer.delta_pose_offset_tip" title="dx,dy,dz,drx,dry,drz,dgrip — 帧间瞬时值；停手后应接近 0">offset</label>
+          <input type="text" id="infDeltaPoseOffset" class="inf-arm-joints" data-i18n-placeholder="infer.delta_pose_offset_ph" placeholder="0,0,0,0,0,0,0" autocomplete="off" spellcheck="false" disabled />
+          <button type="button" id="infDeltaPoseOffsetApply" data-i18n="infer.delta_pose_offset_apply" disabled>应用</button>
+        </div>
+        <span class="hint" id="infDeltaPoseOffsetHint" data-i18n="infer.delta_pose_offset_unconfigured">未配置 gello_reinforce</span>
+      </section>
       <section class="inf-pi05-sec inf-pi05-sec-rec" aria-labelledby="infSecRec">
         <h3 class="inf-pi05-sec-title" id="infSecRec" data-i18n="infer.sec_rec">录制</h3>
         <div class="actions inf-rec-actions">
@@ -3348,6 +3368,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const infArmJerkFrac = document.getElementById('infArmJerkFrac');
     const infArmAccelFrac = document.getElementById('infArmAccelFrac');
     const infArmProg = document.getElementById('infArmProg');
+    const infDeltaPoseOffsetEnable = document.getElementById('infDeltaPoseOffsetEnable');
+    const infDeltaPoseOffset = document.getElementById('infDeltaPoseOffset');
+    const infDeltaPoseOffsetApply = document.getElementById('infDeltaPoseOffsetApply');
+    const infDeltaPoseOffsetHint = document.getElementById('infDeltaPoseOffsetHint');
+    let deltaPoseOffsetEditing = false;
     window.__armAbsTiming = window.__armAbsTiming || {
       t_min_s: 0.1, t_max_s: 30.0, v_norm_rad_s: 0.02,
       jerk_seg_frac: 0.10, accel_seg_frac: 0.15,
@@ -5838,6 +5863,88 @@ PREVIEW_HTML = """<!DOCTYPE html>
         await goArmHome(infArmProg, null);
       });
     }
+    function fmtDeltaPoseOffsetCsv(off) {
+      if (!Array.isArray(off) || off.length < 7) return '0,0,0,0,0,0,0';
+      return off.slice(0, 7).map((x) => {
+        const n = Number(x);
+        return Number.isFinite(n) ? String(n) : '0';
+      }).join(',');
+    }
+    function parseDeltaPoseOffsetCsv(raw) {
+      const parts = String(raw || '').split(/[,\\s]+/).filter((s) => s.length);
+      if (parts.length < 7) return null;
+      const vals = parts.slice(0, 7).map((s) => Number(s));
+      if (vals.some((v) => !Number.isFinite(v))) return null;
+      return vals;
+    }
+    function applyDeltaPoseOffsetUi(st) {
+      const configured = !!(st && st.configured);
+      const enabled = !!(st && st.enabled);
+      if (infDeltaPoseOffsetEnable) {
+        infDeltaPoseOffsetEnable.disabled = !configured;
+        if (infDeltaPoseOffsetEnable.checked !== enabled) {
+          infDeltaPoseOffsetEnable.checked = enabled;
+        }
+      }
+      if (infDeltaPoseOffset) {
+        infDeltaPoseOffset.disabled = !configured;
+        if (!deltaPoseOffsetEditing) {
+          infDeltaPoseOffset.value = fmtDeltaPoseOffsetCsv(st && st.offset);
+        }
+      }
+      if (infDeltaPoseOffsetApply) infDeltaPoseOffsetApply.disabled = !configured;
+      if (infDeltaPoseOffsetHint) {
+        if (!configured) {
+          infDeltaPoseOffsetHint.textContent = t('infer.delta_pose_offset_unconfigured');
+        } else if (enabled) {
+          infDeltaPoseOffsetHint.textContent = t('infer.delta_pose_offset_enabled_hint');
+        } else {
+          infDeltaPoseOffsetHint.textContent = t('infer.delta_pose_offset_disabled_hint');
+        }
+      }
+    }
+    async function postDeltaPoseOffset(body) {
+      const r = await fetch('/api/pi05/delta-pose-offset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {}),
+      }).then((x) => x.json()).catch((e) => ({ ok: false, error: String(e) }));
+      if (r && r.ok !== false) {
+        window.__deltaPoseOffset = r;
+        applyDeltaPoseOffsetUi(r);
+      } else if (infDeltaPoseOffsetHint) {
+        infDeltaPoseOffsetHint.textContent = t('infer.delta_pose_offset_fail', {
+          error: (r && (r.error || r.message)) || 'failed',
+        });
+      }
+      return r;
+    }
+    if (infDeltaPoseOffset) {
+      infDeltaPoseOffset.addEventListener('focus', () => { deltaPoseOffsetEditing = true; });
+      infDeltaPoseOffset.addEventListener('blur', () => { deltaPoseOffsetEditing = false; });
+    }
+    if (infDeltaPoseOffsetEnable) {
+      infDeltaPoseOffsetEnable.addEventListener('change', async () => {
+        await postDeltaPoseOffset({ enabled: !!infDeltaPoseOffsetEnable.checked });
+      });
+    }
+    if (infDeltaPoseOffsetApply) {
+      infDeltaPoseOffsetApply.addEventListener('click', async () => {
+        const vals = parseDeltaPoseOffsetCsv(infDeltaPoseOffset && infDeltaPoseOffset.value);
+        if (!vals) {
+          if (infDeltaPoseOffsetHint) {
+            infDeltaPoseOffsetHint.textContent = t('infer.delta_pose_offset_bad');
+          }
+          return;
+        }
+        deltaPoseOffsetEditing = false;
+        await postDeltaPoseOffset({ offset: vals });
+      });
+    }
+    fetch('/api/pi05/delta-pose-offset').then((r) => r.json()).then((st) => {
+      window.__deltaPoseOffset = st;
+      applyDeltaPoseOffsetUi(st);
+    }).catch(() => {});
     const infAutoHome = document.getElementById('infAutoHome');
     function syncAutoHomeRoundsUi() {
       const autoEl = document.getElementById('infAutoHome');
@@ -8656,6 +8763,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
           showAppModal(t('arm.teleop_modal_off'), curT.last_error);
         }
       }
+      if (msg.delta_pose_offset) {
+        window.__deltaPoseOffset = msg.delta_pose_offset;
+        if (typeof applyDeltaPoseOffsetUi === 'function') applyDeltaPoseOffsetUi(msg.delta_pose_offset);
+      }
       if (msg.arm_abs_ramp) {
         const prevAbs = window.__armAbsRamp || {};
         window.__armAbsRamp = msg.arm_abs_ramp;
@@ -8854,6 +8965,8 @@ def create_viz_app(
     pi05_status: Callable[..., dict[str, Any]] | None = None,
     pi05_set_prompt: Callable[..., dict[str, Any]] | None = None,
     pi05_step: Callable[..., dict[str, Any]] | None = None,
+    delta_pose_offset_status: Callable[[], dict[str, Any]] | None = None,
+    delta_pose_offset_set: Callable[..., dict[str, Any]] | None = None,
     arm_home_status: Callable[..., dict[str, Any]] | None = None,
     arm_home_set: Callable[..., dict[str, Any]] | None = None,
     arm_home_save: Callable[..., dict[str, Any]] | None = None,
@@ -9475,6 +9588,30 @@ def create_viz_app(
             prompt=body.prompt,
             robot_state_format=body.robot_state_format,
             next_state_format=body.next_state_format,
+        )
+
+    @app.get("/api/pi05/delta-pose-offset")
+    async def delta_pose_offset_get() -> dict[str, Any]:
+        if delta_pose_offset_status is None:
+            return {
+                "ok": True,
+                "configured": False,
+                "enabled": False,
+                "offset": [0.0] * 7,
+                "effective": [0.0] * 7,
+                "prev_set": False,
+            }
+        return {"ok": True, **(await asyncio.to_thread(delta_pose_offset_status))}
+
+    @app.post("/api/pi05/delta-pose-offset")
+    async def delta_pose_offset_post(req: DeltaPoseOffsetBody | None = None) -> dict[str, Any]:
+        if delta_pose_offset_set is None:
+            return {"ok": False, "error": "delta_pose_offset unavailable", "configured": False}
+        body = req or DeltaPoseOffsetBody()
+        return await asyncio.to_thread(
+            delta_pose_offset_set,
+            enabled=body.enabled,
+            offset=body.offset,
         )
 
     @app.get("/api/arm/home")

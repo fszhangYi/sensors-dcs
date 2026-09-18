@@ -6,6 +6,7 @@ from sensors_dcs.agents.arm_agent import ArmAgent
 from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
 from sensors_dcs.agents.base import BaseAgent
 from sensors_dcs.agents.gello_agent import GelloAgent
+from sensors_dcs.agents.gello_reinforce_agent import GelloReinforceAgent
 from sensors_dcs.agents.gripper_read_agent import GripperReadAgent
 from sensors_dcs.agents.gripper_write_agent import GripperWriteAgent
 from sensors_dcs.agents.pi05_agent import Pi05ClientAgent
@@ -37,6 +38,13 @@ def build_agent(
             camera_map=dict(cfg.camera_map or _DEFAULT_CAMERA_MAP),
             arm_agent_id=cfg.arm_agent_id,
             gripper_agent_id=cfg.gripper_agent_id,
+        )
+    if cfg.type == "gello_reinforce":
+        return GelloReinforceAgent(
+            agent_id=cfg.id,
+            hz=cfg.hz,
+            buffer_frames=cfg.buffer_frames,
+            gello_agent_id=cfg.gello_agent_id,
         )
     if sensor is None:
         raise ValueError(f"agent {cfg.id!r} type={cfg.type!r} requires a sensor")

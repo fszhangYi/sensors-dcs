@@ -100,6 +100,16 @@ def compose_delta_xyzrpy(
     return _pose_to_xyzrpy(T_cur @ T_delta)
 
 
+def relative_xyzrpy(
+    from_xyzrpy: Sequence[float],
+    to_xyzrpy: Sequence[float],
+) -> list[float]:
+    """Relative TCP delta: ``T_delta = inv(T_from) @ T_to`` → xyzrpy."""
+    T_from = _xyzrpy_to_matrix(from_xyzrpy)
+    T_to = _xyzrpy_to_matrix(to_xyzrpy)
+    return _pose_to_xyzrpy(np.linalg.inv(T_from) @ T_to)
+
+
 # Wire formats for serve robot_state / next_state (7-d: 6 + grip).
 SEND_STATE_FORMATS = ("joints", "pose")  # option A: no delta on send
 RECV_STATE_FORMATS = ("joints", "pose", "delta_pose")

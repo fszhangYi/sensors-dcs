@@ -103,4 +103,9 @@ agents:
       wrist2: cam-right
     arm_agent_id: arm
     gripper_agent_id: gripper-read
+  - id: gello-reinforce
+    type: gello_reinforce
+    hz: 20
+    buffer_frames: 8
+    gello_agent_id: gello
 

@@ -19,6 +19,7 @@ class AgentConfig(BaseModel):
         "gripper_write",
         "realsense",
         "pi05",
+        "gello_reinforce",
     ] = "gello"
     sensor_id: str | None = None
     hz: float = 50.0
@@ -30,6 +31,8 @@ class AgentConfig(BaseModel):
     camera_map: dict[str, str] | None = None
     arm_agent_id: str | None = None
     gripper_agent_id: str | None = None
+    # gello_reinforce: peer gello agent id (optional; default = sole gello)
+    gello_agent_id: str | None = None
 
     @field_validator("hz")
     @classmethod
@@ -40,8 +43,8 @@ class AgentConfig(BaseModel):
 
     @model_validator(mode="after")
     def _sensor_id_unless_pi05(self) -> AgentConfig:
-        if self.type != "pi05" and not (self.sensor_id or "").strip():
-            raise ValueError("sensor_id is required unless type is pi05")
+        if self.type not in ("pi05", "gello_reinforce") and not (self.sensor_id or "").strip():
+            raise ValueError("sensor_id is required unless type is pi05 or gello_reinforce")
         return self
 
 

@@ -14,6 +14,7 @@ from sensors import SensorManager  # noqa: E402
 
 from sensors_dcs.agents import build_agent
 from sensors_dcs.agents.base import BaseAgent
+from sensors_dcs.agents.gello_reinforce_agent import GelloReinforceAgent
 from sensors_dcs.agents.pi05_agent import Pi05ClientAgent
 from sensors_dcs.config import (
     DcsConfig,
@@ -37,7 +38,7 @@ class Orchestrator:
         self.agents: dict[str, BaseAgent] = {}
         known = self.manager.ids()
         for acfg in cfg.agents:
-            if acfg.type == "pi05":
+            if acfg.type in ("pi05", "gello_reinforce"):
                 self.agents[acfg.id] = build_agent(acfg)
                 continue
             try:
@@ -54,6 +55,9 @@ class Orchestrator:
         for agent in self.agents.values():
             if isinstance(agent, Pi05ClientAgent):
                 agent.bind_peers(self.agents)
+            if isinstance(agent, GelloReinforceAgent):
+                agent.bind_peers(self.agents)
+                agent.bind_orchestrator(note_sample=self.note_gello_reinforce_sample)
         self.hub = VizHub()
         self.recorder = RecordController(
             cfg.record,
@@ -78,6 +82,14 @@ class Orchestrator:
         self._sync_last_error: str | None = None
         self._sync_last_t_wall: float | None = None
         self._sync_write_count = 0
+        # Instantaneous Gello reinforce offset (docs/gello-reinforce.md).
+        self._delta_pose_offset_lock = threading.Lock()
+        self._delta_pose_offset_configured = any(
+            isinstance(a, GelloReinforceAgent) for a in self.agents.values()
+        )
+        self._delta_pose_offset_enabled = False
+        self._delta_pose_offset: list[float] = [0.0] * 7
+        self._delta_pose_offset_prev_gello: list[float] | None = None
         # One-shot gello→arm alignment (docs/gello-arm-sync.md); not teleop.
         self._arm_sync_lock = threading.Lock()
         self._arm_sync_stop = threading.Event()
@@ -184,6 +196,7 @@ class Orchestrator:
             "arm_abs_ramp": self.arm_abs_ramp_status(),
             "arm_home": self.arm_home_status(),
             "pi05": self.pi05_status(),
+            "delta_pose_offset": self.delta_pose_offset_status(),
         }
 
     def arm_home_status(self) -> dict[str, Any]:
@@ -464,6 +477,8 @@ class Orchestrator:
             # Dim 7 = gripper position_norm. Deferred to abs-ramp: same S-curve α
             # as joints (interpolated every waypoint, not on step).
             grip = self._next_state_grip(ns)
+            if grip is not None:
+                grip = float(grip) + float(self.effective_delta_pose_offset()[6])
             out["next_grip"] = grip
             if grip is None:
                 out["grip_ok"] = False
@@ -549,12 +564,13 @@ class Orchestrator:
                     "goal_xyzrpy": None,
                 }
             goal = joints_rad_to_xyzrpy(joints)
-            return {
+            decoded = {
                 "ok": True,
                 "error": None,
                 "joints_rad": joints,
                 "goal_xyzrpy": goal,
             }
+            return self._apply_delta_pose_offset(decoded, recv_fmt=fmt)
 
         if fmt == "delta_pose":
             cur = self._current_tcp_xyzrpy()
@@ -576,7 +592,7 @@ class Orchestrator:
                 }
             ik = self._xyzrpy_to_joints(abs_pose)
             ik["goal_xyzrpy"] = abs_pose
-            return ik
+            return self._apply_delta_pose_offset(ik, recv_fmt=fmt)
 
         # pose (absolute TCP)
         ik = self._xyzrpy_to_joints(list(next_state)[:6])
@@ -584,7 +600,229 @@ class Orchestrator:
             ik["goal_xyzrpy"] = [float(next_state[i]) for i in range(6)]
         else:
             ik["goal_xyzrpy"] = None
+        return self._apply_delta_pose_offset(ik, recv_fmt=fmt)
+
+    @staticmethod
+    def _offset6_active(off6: list[float], *, eps: float = 1e-9) -> bool:
+        return any(abs(float(x)) > eps for x in off6[:6])
+
+    def _apply_delta_pose_offset(
+        self,
+        decoded: dict[str, Any],
+        *,
+        recv_fmt: str,
+    ) -> dict[str, Any]:
+        """Compose effective reinforce offset onto a decoded abs goal (or joints)."""
+        from sensors_dcs.arm_pose import compose_delta_xyzrpy, joints_rad_to_xyzrpy
+
+        if not decoded.get("ok"):
+            return decoded
+        off = self.effective_delta_pose_offset()
+        off6 = [float(off[i]) for i in range(6)]
+        if not self._offset6_active(off6):
+            return decoded
+
+        goal = decoded.get("goal_xyzrpy")
+        if goal is None and recv_fmt == "joints":
+            joints = decoded.get("joints_rad")
+            if isinstance(joints, (list, tuple)) and len(joints) >= 6:
+                goal = joints_rad_to_xyzrpy(list(joints)[:6])
+        if goal is None:
+            return {
+                **decoded,
+                "ok": False,
+                "error": decoded.get("error")
+                or "cannot apply delta_pose_offset without abs TCP goal",
+                "joints_rad": None,
+            }
+        try:
+            composed = compose_delta_xyzrpy(list(goal)[:6], off6)
+        except Exception as e:  # noqa: BLE001
+            return {
+                **decoded,
+                "ok": False,
+                "error": f"delta_pose_offset compose failed: {e}",
+                "joints_rad": None,
+                "goal_xyzrpy": None,
+            }
+        ik = self._xyzrpy_to_joints(composed)
+        ik["goal_xyzrpy"] = composed
+        ik["delta_pose_offset_applied"] = list(off)
         return ik
+
+    def delta_pose_offset_status(self) -> dict[str, Any]:
+        with getattr(self, "_delta_pose_offset_lock", threading.Lock()):
+            configured = bool(getattr(self, "_delta_pose_offset_configured", False))
+            enabled = bool(getattr(self, "_delta_pose_offset_enabled", False)) and configured
+            offset = list(getattr(self, "_delta_pose_offset", [0.0] * 7))
+            if len(offset) < 7:
+                offset = (offset + [0.0] * 7)[:7]
+            prev = getattr(self, "_delta_pose_offset_prev_gello", None)
+            effective = list(offset) if enabled else [0.0] * 7
+            return {
+                "configured": configured,
+                "enabled": enabled,
+                "offset": [float(x) for x in offset[:7]],
+                "effective": [float(x) for x in effective[:7]],
+                "prev_set": prev is not None,
+            }
+
+    def effective_delta_pose_offset(self) -> list[float]:
+        with getattr(self, "_delta_pose_offset_lock", threading.Lock()):
+            configured = bool(getattr(self, "_delta_pose_offset_configured", False))
+            enabled = bool(getattr(self, "_delta_pose_offset_enabled", False))
+            if not configured or not enabled:
+                return [0.0] * 7
+            off = list(getattr(self, "_delta_pose_offset", [0.0] * 7))
+            if len(off) < 7:
+                off = (off + [0.0] * 7)[:7]
+            return [float(x) for x in off[:7]]
+
+    def set_delta_pose_offset(self, offset: list[float] | None) -> dict[str, Any]:
+        if not getattr(self, "_delta_pose_offset_configured", False):
+            return {
+                "ok": False,
+                "error": "gello_reinforce not configured",
+                **self.delta_pose_offset_status(),
+            }
+        if offset is None:
+            return {"ok": False, "error": "offset required", **self.delta_pose_offset_status()}
+        try:
+            vals = [float(x) for x in list(offset)[:7]]
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "offset must be 7 floats", **self.delta_pose_offset_status()}
+        if len(vals) < 7 or any(not (v == v) or abs(v) == float("inf") for v in vals):
+            return {
+                "ok": False,
+                "error": "offset must be 7 finite floats",
+                **self.delta_pose_offset_status(),
+            }
+        with self._delta_pose_offset_lock:
+            self._delta_pose_offset = vals
+        return {"ok": True, **self.delta_pose_offset_status()}
+
+    def set_delta_pose_offset_enabled(self, enabled: bool) -> dict[str, Any]:
+        if not getattr(self, "_delta_pose_offset_configured", False):
+            return {
+                "ok": False,
+                "error": "gello_reinforce not configured",
+                **self.delta_pose_offset_status(),
+            }
+        want = bool(enabled)
+        with self._delta_pose_offset_lock:
+            self._delta_pose_offset_enabled = want
+            if want:
+                # Re-arm frame-delta integrator: zero offset, refresh prev.
+                self._delta_pose_offset = [0.0] * 7
+                self._delta_pose_offset_prev_gello = self._live_gello_joints7()
+            else:
+                # Keep stored offset for UI, but effective path is zeros.
+                pass
+        return {"ok": True, **self.delta_pose_offset_status()}
+
+    def _api_set_delta_pose_offset(
+        self,
+        *,
+        enabled: bool | None = None,
+        offset: list[float] | None = None,
+    ) -> dict[str, Any]:
+        """Combined POST handler for Infer UI / HTTP API."""
+        if enabled is not None:
+            out = self.set_delta_pose_offset_enabled(bool(enabled))
+            if not out.get("ok"):
+                return out
+        if offset is not None:
+            out = self.set_delta_pose_offset(offset)
+            if not out.get("ok"):
+                return out
+        if enabled is None and offset is None:
+            return {
+                "ok": False,
+                "error": "enabled and/or offset required",
+                **self.delta_pose_offset_status(),
+            }
+        return {"ok": True, **self.delta_pose_offset_status()}
+
+    def _live_gello_joints7(self) -> list[float] | None:
+        from sensors_dcs.agents.gello_agent import GelloAgent
+
+        for agent in self.agents.values():
+            if not isinstance(agent, GelloAgent):
+                continue
+            fr = agent.ring.latest.get()
+            if fr is None:
+                continue
+            joints = (fr.payload or {}).get("joints_rad")
+            if not isinstance(joints, (list, tuple)) or len(joints) < 7:
+                continue
+            try:
+                out = [float(joints[i]) for i in range(7)]
+            except (TypeError, ValueError):
+                continue
+            if any(not (x == x) or abs(x) == float("inf") for x in out):
+                continue
+            return out
+        return None
+
+    def note_gello_reinforce_sample(self, joints7: list[float]) -> dict[str, Any]:
+        """Frame-to-frame SET of delta_pose_offset from Gello joints (cal space)."""
+        from sensors_dcs.arm_pose import joints_rad_to_xyzrpy, relative_xyzrpy
+
+        try:
+            cur = [float(joints7[i]) for i in range(7)]
+        except (TypeError, ValueError, IndexError):
+            return {"ok": False, "error": "joints7 must be 7 floats", "skipped": True}
+        if any(not (x == x) or abs(x) == float("inf") for x in cur):
+            return {"ok": False, "error": "joints7 non-finite", "skipped": True}
+
+        with self._delta_pose_offset_lock:
+            if not self._delta_pose_offset_configured:
+                return {
+                    "ok": False,
+                    "error": "gello_reinforce not configured",
+                    "skipped": True,
+                }
+            if not self._delta_pose_offset_enabled:
+                return {
+                    "ok": True,
+                    "skipped": True,
+                    "offset": list(self._delta_pose_offset),
+                }
+            prev = self._delta_pose_offset_prev_gello
+            if prev is None:
+                self._delta_pose_offset_prev_gello = list(cur)
+                self._delta_pose_offset = [0.0] * 7
+                return {
+                    "ok": True,
+                    "skipped": False,
+                    "armed_prev": True,
+                    "offset": [0.0] * 7,
+                }
+
+            pose_prev = joints_rad_to_xyzrpy(prev[:6])
+            pose_cur = joints_rad_to_xyzrpy(cur[:6])
+            if pose_prev is None or pose_cur is None:
+                self._delta_pose_offset_prev_gello = list(cur)
+                return {
+                    "ok": False,
+                    "error": "FK failed for gello reinforce delta",
+                    "skipped": False,
+                    "offset": list(self._delta_pose_offset),
+                }
+            try:
+                dpose = relative_xyzrpy(pose_prev, pose_cur)
+            except Exception as e:  # noqa: BLE001
+                self._delta_pose_offset_prev_gello = list(cur)
+                return {
+                    "ok": False,
+                    "error": f"relative_xyzrpy failed: {e}",
+                    "skipped": False,
+                }
+            dgrip = float(cur[6]) - float(prev[6])
+            offset = [float(x) for x in dpose[:6]] + [dgrip]
+            self._delta_pose_offset = offset
+            self._delta_pose_offset_prev_gello = list(cur)
+            return {"ok": True, "skipped": False, "offset": list(offset)}
 
     def _next_state_to_joints(self, next_state: Any) -> dict[str, Any]:
         """IK TCP pose from pi05 ``next_state`` → arm ``joints_rad`` (pose recv)."""
@@ -811,6 +1049,7 @@ class Orchestrator:
             "gello_arm_teleop": self.gello_arm_teleop_status(),
             "arm_abs_ramp": self.arm_abs_ramp_status(),
             "arm_home": self.arm_home_status(),
+            "delta_pose_offset": self.delta_pose_offset_status(),
         }
 
     @staticmethod
@@ -2680,6 +2919,8 @@ class Orchestrator:
             pi05_status=self.pi05_status,
             pi05_set_prompt=self.pi05_set_prompt,
             pi05_step=self.pi05_step,
+            delta_pose_offset_status=self.delta_pose_offset_status,
+            delta_pose_offset_set=self._api_set_delta_pose_offset,
             arm_home_status=self.arm_home_status,
             arm_home_set=self.set_arm_home,
             arm_home_save=self.save_arm_home_to_yaml,
