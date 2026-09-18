@@ -26,6 +26,12 @@ def test_path_alpha_s_curve_small_ends() -> None:
     assert d_end < d_mid
 
 
+def test_gripper_norm_to_raw_matches_ag95() -> None:
+    assert Orchestrator._gripper_norm_to_raw(0.0) == 1000
+    assert Orchestrator._gripper_norm_to_raw(0.637) == 0
+    assert Orchestrator._gripper_norm_to_raw(0.3185) == 500
+
+
 def test_pi05_step_defers_gripper(monkeypatch) -> None:
     """Successful step with 7-d next_state must NOT dispatch gripper_write yet."""
     from sensors_dcs.agents.pi05_agent import Pi05ClientAgent
@@ -89,8 +95,7 @@ def test_pi05_step_defers_gripper(monkeypatch) -> None:
     assert calls == []
 
 
-def test_abs_ramp_interpolates_gripper_s_curve(monkeypatch) -> None:
-    """Gripper is written every waypoint with the same S-curve α as joints."""
+def _make_ramp_rt(monkeypatch, *, grip_fn):
     import threading
 
     from sensors_dcs.agents.arm_agent import ArmAgent
@@ -121,7 +126,6 @@ def test_abs_ramp_interpolates_gripper_s_curve(monkeypatch) -> None:
     rt._abs_ramp_gripper = None
 
     joint_writes: list[list[float]] = []
-    grip_calls: list[dict] = []
 
     class _Latest:
         def get(self):
@@ -146,10 +150,16 @@ def test_abs_ramp_interpolates_gripper_s_curve(monkeypatch) -> None:
     writer.command = _cmd  # type: ignore[method-assign]
     rt.agents = {"arm-r": reader, "arm-w": writer}
     monkeypatch.setattr(rt, "_joints6_from_ring", lambda ag: [0.0] * 6)
-    monkeypatch.setattr(
-        rt,
-        "gripper_command",
-        lambda **kw: (grip_calls.append(kw) or {"ok": True}),
+    monkeypatch.setattr(rt, "gripper_command", grip_fn)
+    return rt, joint_writes
+
+
+def test_abs_ramp_interpolates_gripper_s_curve(monkeypatch) -> None:
+    """With grip_hz >= joint hz, gripper follows S-curve (skip-dup may thin writes)."""
+    grip_calls: list[dict] = []
+    rt, joint_writes = _make_ramp_rt(
+        monkeypatch,
+        grip_fn=lambda **kw: (grip_calls.append(kw) or {"ok": True}),
     )
 
     n = 10
@@ -167,13 +177,111 @@ def test_abs_ramp_interpolates_gripper_s_curve(monkeypatch) -> None:
         0.15,
         g0,
         g1,
+        100.0,  # gripper_ramp_hz: do not rate-limit in this test
     )
     assert len(joint_writes) == n
-    assert len(grip_calls) == n
+    assert len(grip_calls) >= 2
     norms = [c["position_norm"] for c in grip_calls]
     assert abs(norms[-1] - g1) < 1e-9
-    # Mid Δ larger than first Δ (S-curve property on grip).
-    d0 = norms[0] - g0
-    d_mid = norms[n // 2] - norms[n // 2 - 1]
-    assert d0 < d_mid
+    # Mid Δ larger than first Δ among successive writes (S-curve property).
+    if len(norms) >= 3:
+        d0 = norms[0] - g0
+        mid_i = len(norms) // 2
+        d_mid = norms[mid_i] - norms[mid_i - 1]
+        assert d0 <= d_mid + 1e-12
     assert all(c.get("allow_during_sync") is True for c in grip_calls)
+    assert rt._abs_ramp_phase == "completed"
+    assert rt._abs_ramp_last_ok is True
+
+
+def test_abs_ramp_skips_unchanged_gripper_raw(monkeypatch) -> None:
+    """Constant grip target → one Modbus write (raw unchanged thereafter)."""
+    grip_calls: list[dict] = []
+    rt, joint_writes = _make_ramp_rt(
+        monkeypatch,
+        grip_fn=lambda **kw: (grip_calls.append(kw) or {"ok": True}),
+    )
+    n = 12
+    g = 0.32
+    Orchestrator._arm_abs_ramp_loop(
+        rt,
+        "arm-r",
+        "arm-w",
+        [0.0] * 6,
+        [0.1, 0, 0, 0, 0, 0],
+        n,
+        100.0,
+        "linear",
+        0.10,
+        0.15,
+        g,
+        g,
+        100.0,
+    )
+    assert len(joint_writes) == n
+    assert len(grip_calls) == 1
+    assert abs(grip_calls[0]["position_norm"] - g) < 1e-9
+    assert rt._abs_ramp_phase == "completed"
+
+
+def test_abs_ramp_gripper_soft_fail_does_not_abort_joints(monkeypatch) -> None:
+    """Gripper Modbus failure must not stop joint waypoints."""
+    n = 8
+    calls = {"i": 0}
+
+    def _grip(**kw):
+        calls["i"] += 1
+        if calls["i"] == 1:
+            return {"ok": False, "error": "modbus write REG_POSITION failed"}
+        return {"ok": True}
+
+    rt, joint_writes = _make_ramp_rt(monkeypatch, grip_fn=_grip)
+    Orchestrator._arm_abs_ramp_loop(
+        rt,
+        "arm-r",
+        "arm-w",
+        [0.0] * 6,
+        [0.2, 0, 0, 0, 0, 0],
+        n,
+        100.0,
+        "seven_segment",
+        0.10,
+        0.15,
+        0.10,
+        0.50,
+        100.0,
+    )
+    assert len(joint_writes) == n
+    assert rt._abs_ramp_phase == "completed"
+    assert rt._abs_ramp_last_ok is True
+    assert rt._abs_ramp_last_error is None
+    assert "软失败" in str(rt._abs_ramp_last_message)
+
+
+def test_abs_ramp_rate_limits_gripper_writes(monkeypatch) -> None:
+    """gripper_ramp_hz << joint hz → far fewer grip writes than waypoints."""
+    grip_calls: list[dict] = []
+    rt, joint_writes = _make_ramp_rt(
+        monkeypatch,
+        grip_fn=lambda **kw: (grip_calls.append(kw) or {"ok": True}),
+    )
+    n = 20
+    # Joint path: 20 pts @ 100 Hz → ~10 ms period; grip @ 20 Hz → ~50 ms → ~4–6 writes.
+    Orchestrator._arm_abs_ramp_loop(
+        rt,
+        "arm-r",
+        "arm-w",
+        [0.0] * 6,
+        [0.3, 0, 0, 0, 0, 0],
+        n,
+        100.0,
+        "linear",
+        0.10,
+        0.15,
+        0.0,
+        0.637,
+        20.0,
+    )
+    assert len(joint_writes) == n
+    assert 2 <= len(grip_calls) < n
+    assert abs(grip_calls[-1]["position_norm"] - 0.637) < 1e-9

@@ -89,6 +89,9 @@ class ArmAbsRampConfig(BaseModel):
     accel_seg_frac: float = 0.15
     # Abs command rate; None → fall back to gello_arm_sync.ramp_hz.
     ramp_hz: float | None = 20.0
+    # Gripper Modbus writes during abs-ramp (joint path may be faster).
+    # Cap below bus contention with gripper_read; final waypoint always written.
+    gripper_ramp_hz: float = 5.0
 
     @field_validator("t_min_s", "t_max_s", mode="before")
     @classmethod
@@ -151,6 +154,16 @@ class ArmAbsRampConfig(BaseModel):
         if f != f or f in (float("inf"), float("-inf")) or f <= 0:
             raise ValueError("arm_abs_ramp.ramp_hz must be a positive finite float")
         return max(0.1, min(200.0, f))
+
+    @field_validator("gripper_ramp_hz", mode="before")
+    @classmethod
+    def _gripper_ramp_hz(cls, v: Any) -> float:
+        if v is None or v == "":
+            return 5.0
+        f = float(v)
+        if f != f or f in (float("inf"), float("-inf")) or f <= 0:
+            raise ValueError("arm_abs_ramp.gripper_ramp_hz must be a positive finite float")
+        return max(0.1, min(50.0, f))
 
     @model_validator(mode="after")
     def _t_min_le_t_max(self) -> ArmAbsRampConfig:

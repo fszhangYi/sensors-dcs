@@ -40,6 +40,7 @@ arm_abs_ramp:
   jerk_seg_frac: 0.10
   accel_seg_frac: 0.15
   ramp_hz: 20
+  gripper_ramp_hz: 5
 
 record:
   save_dir: D:\data_new
