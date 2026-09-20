@@ -820,6 +820,8 @@ class Orchestrator:
                 }
             dgrip = float(cur[6]) - float(prev[6])
             offset = [float(x) for x in dpose[:6]] + [dgrip]
+            # Compact finite values for UI / wire (avoid huge float noise).
+            offset = [round(float(x), 6) for x in offset]
             self._delta_pose_offset = offset
             self._delta_pose_offset_prev_gello = list(cur)
             return {"ok": True, "skipped": False, "offset": list(offset)}
@@ -2557,27 +2559,29 @@ class Orchestrator:
             if not isinstance(reader, ArmAgent) or not isinstance(writer, ArmWriteAgent):
                 final_error = "abs ramp agents missing"
             else:
-                # One Modbus write before the joint loop — never inside the period.
+                # Fire grip off the joint timing path (Modbus must not stretch periods).
                 if gripper_position_norm is not None:
-                    gcmd = self.gripper_command(
-                        position_norm=float(gripper_position_norm),
-                        allow_during_sync=True,
-                    )
-                    grip_ok = bool(gcmd.get("ok"))
-                    if grip_ok:
-                        with self._abs_ramp_lock:
-                            self._abs_ramp_last_message = (
-                                f"夹爪已下发 {float(gripper_position_norm):g}；开始关节斜坡"
-                            )
-                    else:
-                        grip_soft_error = str(
-                            gcmd.get("error") or "gripper write failed"
+                    g_target = float(gripper_position_norm)
+
+                    def _grip_once() -> None:
+                        nonlocal grip_ok, grip_soft_error
+                        gcmd = self.gripper_command(
+                            position_norm=g_target,
+                            allow_during_sync=True,
                         )
-                        with self._abs_ramp_lock:
-                            self._abs_ramp_last_message = (
-                                f"夹爪软失败: {grip_soft_error}；继续关节斜坡"
+                        grip_ok = bool(gcmd.get("ok"))
+                        if not grip_ok:
+                            grip_soft_error = str(
+                                gcmd.get("error") or "gripper write failed"
                             )
 
+                    threading.Thread(
+                        target=_grip_once,
+                        name="abs-ramp-grip",
+                        daemon=True,
+                    ).start()
+
+                next_t = time.perf_counter()
                 for k, qk in enumerate(path, start=1):
                     if self._abs_ramp_stop.is_set() or self._stop.is_set():
                         final_message = "绝对下发已取消"
@@ -2603,17 +2607,33 @@ class Orchestrator:
                     if not result.get("ok"):
                         final_error = str(result.get("error") or "ramp write failed")
                         break
-                    self._abs_ramp_stop.wait(period)
+                    # Deadline schedule: arm write time must not add onto period.
+                    next_t += period
+                    delay = next_t - time.perf_counter()
+                    if delay > 0:
+                        self._abs_ramp_stop.wait(delay)
+                    else:
+                        # Behind schedule — catch up without sleeping; reset base.
+                        next_t = time.perf_counter()
                 else:
                     completed = True
                     final_message = f"绝对下发完成：{n} 点已写入（关节空间/{profile}）"
                     if gripper_position_norm is not None:
+                        # Brief wait so async grip result can land in the summary.
+                        for _ in range(20):
+                            if grip_ok is not None or grip_soft_error:
+                                break
+                            time.sleep(0.01)
                         if grip_ok:
                             final_message += (
                                 f"；夹爪一次下发 {float(gripper_position_norm):g}"
                             )
                         elif grip_soft_error:
                             final_message += f"（夹爪软失败: {grip_soft_error}）"
+                        else:
+                            final_message += (
+                                f"；夹爪已异步下发 {float(gripper_position_norm):g}"
+                            )
         except Exception as e:  # noqa: BLE001 — surface to status
             final_error = f"abs ramp exception: {e}"
 

@@ -1493,6 +1493,34 @@ PREVIEW_HTML = """<!DOCTYPE html>
       color: var(--muted);
       font-size: 0.72rem;
     }
+    .inf-delta-grid {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 0.35rem 0.4rem;
+      margin: 0.35rem 0 0.15rem;
+      max-width: 42rem;
+    }
+    .inf-delta-grid label {
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+      min-width: 0;
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .inf-delta-grid input[type="number"] {
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+      height: var(--inf-ctrl-h, 2rem);
+      padding: 0 0.3rem;
+      text-align: right;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.78rem;
+    }
+    @media (max-width: 720px) {
+      .inf-delta-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    }
     /* Record chrome folded into left Infer panel */
     .inf-pi05-sec-rec { gap: 0.4rem; }
     .inf-pi05-panel .inf-rec-actions {
@@ -2364,11 +2392,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <input type="checkbox" id="infDeltaPoseOffsetEnable" disabled />
             <span data-i18n="infer.delta_pose_offset_enable">启用瞬时 offset</span>
           </label>
-        </div>
-        <div class="inf-pi05-row">
-          <label for="infDeltaPoseOffset" class="arm-abs-label" data-i18n="infer.delta_pose_offset_label" data-i18n-title="infer.delta_pose_offset_tip" title="dx,dy,dz,drx,dry,drz,dgrip — 帧间瞬时值；停手后应接近 0">offset</label>
-          <input type="text" id="infDeltaPoseOffset" class="inf-arm-joints" data-i18n-placeholder="infer.delta_pose_offset_ph" placeholder="0,0,0,0,0,0,0" autocomplete="off" spellcheck="false" disabled />
           <button type="button" id="infDeltaPoseOffsetApply" data-i18n="infer.delta_pose_offset_apply" disabled>应用</button>
+          <button type="button" id="infDeltaPoseOffsetZero" data-i18n="infer.delta_pose_offset_zero" disabled>清零</button>
+        </div>
+        <div class="inf-delta-grid" id="infDeltaPoseOffsetGrid" aria-label="delta pose offset">
+          <label><span>dx</span><input type="number" class="inf-delta-cell" data-di="0" step="0.0001" value="0" disabled /></label>
+          <label><span>dy</span><input type="number" class="inf-delta-cell" data-di="1" step="0.0001" value="0" disabled /></label>
+          <label><span>dz</span><input type="number" class="inf-delta-cell" data-di="2" step="0.0001" value="0" disabled /></label>
+          <label><span>rx</span><input type="number" class="inf-delta-cell" data-di="3" step="0.001" value="0" disabled /></label>
+          <label><span>ry</span><input type="number" class="inf-delta-cell" data-di="4" step="0.001" value="0" disabled /></label>
+          <label><span>rz</span><input type="number" class="inf-delta-cell" data-di="5" step="0.001" value="0" disabled /></label>
+          <label><span>g</span><input type="number" class="inf-delta-cell" data-di="6" step="0.001" value="0" disabled /></label>
         </div>
         <span class="hint" id="infDeltaPoseOffsetHint" data-i18n="infer.delta_pose_offset_unconfigured">未配置 gello_reinforce</span>
       </section>
@@ -3369,10 +3403,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const infArmAccelFrac = document.getElementById('infArmAccelFrac');
     const infArmProg = document.getElementById('infArmProg');
     const infDeltaPoseOffsetEnable = document.getElementById('infDeltaPoseOffsetEnable');
-    const infDeltaPoseOffset = document.getElementById('infDeltaPoseOffset');
     const infDeltaPoseOffsetApply = document.getElementById('infDeltaPoseOffsetApply');
+    const infDeltaPoseOffsetZero = document.getElementById('infDeltaPoseOffsetZero');
     const infDeltaPoseOffsetHint = document.getElementById('infDeltaPoseOffsetHint');
+    const infDeltaPoseOffsetCells = Array.from(
+      document.querySelectorAll('#infDeltaPoseOffsetGrid input.inf-delta-cell')
+    );
     let deltaPoseOffsetEditing = false;
+    let deltaPosePollTimer = null;
     window.__armAbsTiming = window.__armAbsTiming || {
       t_min_s: 0.1, t_max_s: 30.0, v_norm_rad_s: 0.02,
       jerk_seg_frac: 0.10, accel_seg_frac: 0.15,
@@ -5863,19 +5901,23 @@ PREVIEW_HTML = """<!DOCTYPE html>
         await goArmHome(infArmProg, null);
       });
     }
-    function fmtDeltaPoseOffsetCsv(off) {
-      if (!Array.isArray(off) || off.length < 7) return '0,0,0,0,0,0,0';
-      return off.slice(0, 7).map((x) => {
-        const n = Number(x);
-        return Number.isFinite(n) ? String(n) : '0';
-      }).join(',');
+    function fmtDeltaCell(v, i) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return '0';
+      // xyz m → 4dp; rpy/grip → 3dp (compact, readable)
+      return n.toFixed(i < 3 ? 4 : 3);
     }
-    function parseDeltaPoseOffsetCsv(raw) {
-      const parts = String(raw || '').split(/[,\\s]+/).filter((s) => s.length);
-      if (parts.length < 7) return null;
-      const vals = parts.slice(0, 7).map((s) => Number(s));
-      if (vals.some((v) => !Number.isFinite(v))) return null;
-      return vals;
+    function readDeltaPoseOffsetCells() {
+      if (!infDeltaPoseOffsetCells.length) return null;
+      const vals = infDeltaPoseOffsetCells.map((el) => Number(el.value));
+      if (vals.length < 7 || vals.some((v) => !Number.isFinite(v))) return null;
+      return vals.slice(0, 7);
+    }
+    function writeDeltaPoseOffsetCells(off) {
+      const src = Array.isArray(off) ? off : [0, 0, 0, 0, 0, 0, 0];
+      infDeltaPoseOffsetCells.forEach((el, i) => {
+        el.value = fmtDeltaCell(src[i], i);
+      });
     }
     function applyDeltaPoseOffsetUi(st) {
       const configured = !!(st && st.configured);
@@ -5886,13 +5928,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
           infDeltaPoseOffsetEnable.checked = enabled;
         }
       }
-      if (infDeltaPoseOffset) {
-        infDeltaPoseOffset.disabled = !configured;
-        if (!deltaPoseOffsetEditing) {
-          infDeltaPoseOffset.value = fmtDeltaPoseOffsetCsv(st && st.offset);
-        }
+      infDeltaPoseOffsetCells.forEach((el) => { el.disabled = !configured; });
+      if (!deltaPoseOffsetEditing) {
+        writeDeltaPoseOffsetCells(st && st.offset);
       }
       if (infDeltaPoseOffsetApply) infDeltaPoseOffsetApply.disabled = !configured;
+      if (infDeltaPoseOffsetZero) infDeltaPoseOffsetZero.disabled = !configured;
       if (infDeltaPoseOffsetHint) {
         if (!configured) {
           infDeltaPoseOffsetHint.textContent = t('infer.delta_pose_offset_unconfigured');
@@ -5901,6 +5942,24 @@ PREVIEW_HTML = """<!DOCTYPE html>
         } else {
           infDeltaPoseOffsetHint.textContent = t('infer.delta_pose_offset_disabled_hint');
         }
+      }
+      // Agent may run @20Hz but WS viz is often 5Hz — poll when enabled for snappy UI.
+      if (configured && enabled) {
+        if (!deltaPosePollTimer) {
+          deltaPosePollTimer = setInterval(() => {
+            if (deltaPoseOffsetEditing) return;
+            fetch('/api/pi05/delta-pose-offset')
+              .then((r) => r.json())
+              .then((s) => {
+                window.__deltaPoseOffset = s;
+                if (!deltaPoseOffsetEditing) writeDeltaPoseOffsetCells(s && s.offset);
+              })
+              .catch(() => {});
+          }, 50);
+        }
+      } else if (deltaPosePollTimer) {
+        clearInterval(deltaPosePollTimer);
+        deltaPosePollTimer = null;
       }
     }
     async function postDeltaPoseOffset(body) {
@@ -5919,10 +5978,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
       return r;
     }
-    if (infDeltaPoseOffset) {
-      infDeltaPoseOffset.addEventListener('focus', () => { deltaPoseOffsetEditing = true; });
-      infDeltaPoseOffset.addEventListener('blur', () => { deltaPoseOffsetEditing = false; });
-    }
+    infDeltaPoseOffsetCells.forEach((el) => {
+      el.addEventListener('focus', () => { deltaPoseOffsetEditing = true; });
+      el.addEventListener('blur', () => { deltaPoseOffsetEditing = false; });
+    });
     if (infDeltaPoseOffsetEnable) {
       infDeltaPoseOffsetEnable.addEventListener('change', async () => {
         await postDeltaPoseOffset({ enabled: !!infDeltaPoseOffsetEnable.checked });
@@ -5930,7 +5989,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     if (infDeltaPoseOffsetApply) {
       infDeltaPoseOffsetApply.addEventListener('click', async () => {
-        const vals = parseDeltaPoseOffsetCsv(infDeltaPoseOffset && infDeltaPoseOffset.value);
+        const vals = readDeltaPoseOffsetCells();
         if (!vals) {
           if (infDeltaPoseOffsetHint) {
             infDeltaPoseOffsetHint.textContent = t('infer.delta_pose_offset_bad');
@@ -5939,6 +5998,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
         }
         deltaPoseOffsetEditing = false;
         await postDeltaPoseOffset({ offset: vals });
+      });
+    }
+    if (infDeltaPoseOffsetZero) {
+      infDeltaPoseOffsetZero.addEventListener('click', async () => {
+        deltaPoseOffsetEditing = false;
+        writeDeltaPoseOffsetCells([0, 0, 0, 0, 0, 0, 0]);
+        await postDeltaPoseOffset({ offset: [0, 0, 0, 0, 0, 0, 0] });
       });
     }
     fetch('/api/pi05/delta-pose-offset').then((r) => r.json()).then((st) => {

@@ -149,7 +149,9 @@ def _make_ramp_rt(monkeypatch, *, grip_fn):
 
 
 def test_abs_ramp_writes_gripper_once_at_start(monkeypatch) -> None:
-    """Grip is one Modbus write before the joint loop — not per waypoint."""
+    """Grip is one async Modbus write; joint loop must not block on it."""
+    import time
+
     grip_calls: list[dict] = []
     rt, joint_writes = _make_ramp_rt(
         monkeypatch,
@@ -171,17 +173,23 @@ def test_abs_ramp_writes_gripper_once_at_start(monkeypatch) -> None:
         0.15,
         g1,
     )
+    # Allow async grip thread to finish.
+    for _ in range(50):
+        if grip_calls:
+            break
+        time.sleep(0.01)
     assert len(joint_writes) == n
     assert len(grip_calls) == 1
     assert abs(grip_calls[0]["position_norm"] - g1) < 1e-9
     assert grip_calls[0].get("allow_during_sync") is True
     assert rt._abs_ramp_phase == "completed"
     assert rt._abs_ramp_last_ok is True
-    assert "夹爪一次下发" in str(rt._abs_ramp_last_message)
 
 
 def test_abs_ramp_gripper_soft_fail_does_not_abort_joints(monkeypatch) -> None:
     """Gripper Modbus failure must not stop joint waypoints."""
+    import time
+
     n = 8
 
     def _grip(**kw):
@@ -201,11 +209,16 @@ def test_abs_ramp_gripper_soft_fail_does_not_abort_joints(monkeypatch) -> None:
         0.15,
         0.50,
     )
+    for _ in range(50):
+        if "夹爪软失败" in str(rt._abs_ramp_last_message) or "异步" in str(
+            rt._abs_ramp_last_message
+        ):
+            break
+        time.sleep(0.01)
     assert len(joint_writes) == n
     assert rt._abs_ramp_phase == "completed"
     assert rt._abs_ramp_last_ok is True
     assert rt._abs_ramp_last_error is None
-    assert "夹爪软失败" in str(rt._abs_ramp_last_message)
 
 
 def test_abs_ramp_without_gripper_skips_grip(monkeypatch) -> None:
