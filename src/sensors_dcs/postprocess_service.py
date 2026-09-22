@@ -302,6 +302,14 @@ def run_postprocess(
                 )
             results.append({"step": step, "ok": True, "meta": meta})
             log_lines.append(f"ok {step}")
+            if step == "filter-timeline" and isinstance(meta, dict):
+                ap = meta.get("align_plot")
+                api = meta.get("align_plot_info") if isinstance(meta.get("align_plot_info"), dict) else {}
+                if ap:
+                    log_lines.append(f"align_plot {ap}")
+                else:
+                    err = (api or {}).get("error") or "no align_plot"
+                    log_lines.append(f"align_plot FAIL: {err}")
         except Exception as e:  # noqa: BLE001
             err = f"{type(e).__name__}: {e}"
             results.append(
@@ -327,3 +335,60 @@ def run_postprocess(
         "results": results,
         "log": "\n".join(log_lines),
     }
+
+
+def compose_raw_video(
+    *,
+    episode: str | Path,
+    master_camera: str | None = None,
+    fps: float | None = None,
+    out_name: str = "raw_grid.mp4",
+) -> dict[str, Any]:
+    """Compose a camera-grid MP4 from raw episode JPEGs (independent of Step 1–3)."""
+    from sensors_dcs.export.raw_grid_video import (
+        load_raw_camera_frames,
+        write_raw_episode_grid_video,
+    )
+    from sensors_dcs.export.timeline import resolve_episode_dir
+
+    try:
+        ep = resolve_episode_dir(episode)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(e).__name__}: {e}", "episode": str(episode)}
+
+    log_lines = [f"==> raw-grid-video episode={ep}"]
+    try:
+        cams = load_raw_camera_frames(ep)
+        if not cams:
+            raise ValueError(f"no raw camera JPEG frames under {ep / 'cameras'}")
+        cam_counts = {k: len(v) for k, v in cams.items()}
+        log_lines.append(f"cameras={cam_counts}")
+        out = write_raw_episode_grid_video(
+            ep,
+            out_name=out_name,
+            fps=fps,
+            master_camera=master_camera,
+        )
+        meta = {
+            "video": str(out),
+            "video_name": out.name,
+            "cameras": cam_counts,
+            "size_bytes": out.stat().st_size,
+        }
+        log_lines.append(f"ok wrote {out}")
+        return {
+            "ok": True,
+            "episode": str(ep),
+            "meta": meta,
+            "log": "\n".join(log_lines),
+        }
+    except Exception as e:  # noqa: BLE001
+        err = f"{type(e).__name__}: {e}"
+        log_lines.append(f"FAIL: {err}")
+        return {
+            "ok": False,
+            "error": err,
+            "episode": str(ep),
+            "traceback": traceback.format_exc(),
+            "log": "\n".join(log_lines),
+        }

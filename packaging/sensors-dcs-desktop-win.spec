@@ -75,6 +75,10 @@ hiddenimports = [
     "sensors_dcs.export",
     "sensors_dcs.export.timeline",
     "sensors_dcs.export.filter",
+    "sensors_dcs.export.parquet_io",
+    "sensors_dcs.export.hik_grid_video",
+    "sensors_dcs.export.raw_grid_video",
+    "sensors_dcs.export.align_plot",
     "sensors_dcs.frame",
     "sensors_dcs.buffer",
     "sensors_dcs.paths",
@@ -87,7 +91,6 @@ hiddenimports = [
     "sensors_dcs.agents.gripper_read_agent",
     "sensors_dcs.agents.realsense_agent",
     "sensors_dcs.agents.arm_agent",
-    "sensors_dcs.export.parquet_io",
     "sensors",
     "sensors.core",
     "sensors.core.base",
@@ -105,11 +108,8 @@ hiddenimports = [
 hiddenimports += collect_submodules("sensors.drivers")
 hiddenimports += collect_submodules("sensors.kinematics")
 hiddenimports += collect_submodules("sensors_dcs")
-# scipy/pandas/pyarrow collected in extend_analysis (with *.tests filtered).
-# Skip duplicate collect_submodules("scipy") — it balloons Wine Analysis memory/time.
-_no_tests = lambda name: ".tests" not in name and not name.endswith(".tests")  # noqa: E731
-hiddenimports += collect_submodules("pyarrow", filter=_no_tests)
-hiddenimports += collect_submodules("pandas", filter=_no_tests)
+# pandas/pyarrow/scipy: only via extend_analysis. Extra collect_submodules here
+# double-walks those trees and peaks over AutoDL's ~2GiB Wine cgroup.
 datas, binaries, hiddenimports = extend_analysis(datas, binaries, hiddenimports)
 
 pathex = [str(SRC)]

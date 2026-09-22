@@ -92,15 +92,12 @@ def _collect_package(
     datas += d
     binaries += b
     hiddenimports += h
+    # collect_all already returns hiddenimports. Extra collect_submodules on
+    # pandas/pyarrow/numpy walks huge trees and OOMs Wine ~2GiB Analysis.
+    if pkg in EXPORT_PACKAGES or pkg in CORE_PACKAGES or pkg in KINEMATICS_PACKAGES:
+        return
     try:
-        # Skip *.tests under Wine Analysis (pytest missing; also huge / slow).
-        if pkg in EXPORT_PACKAGES or pkg in KINEMATICS_PACKAGES or pkg in CORE_PACKAGES:
-            hiddenimports += collect_submodules(
-                pkg,
-                filter=lambda name: ".tests" not in name and not name.endswith(".tests"),
-            )
-        else:
-            hiddenimports += collect_submodules(pkg)
+        hiddenimports += collect_submodules(pkg)
     except Exception:  # noqa: BLE001
         pass
 
@@ -196,6 +193,9 @@ def extend_analysis(
         "sensors_dcs.export.timeline",
         "sensors_dcs.export.filter",
         "sensors_dcs.export.parquet_io",
+        "sensors_dcs.export.hik_grid_video",
+        "sensors_dcs.export.raw_grid_video",
+        "sensors_dcs.export.align_plot",
         "sensors.kinematics",
         "sensors.kinematics.ik",
         "sensors.kinematics.fk",

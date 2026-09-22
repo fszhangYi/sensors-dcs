@@ -13,10 +13,10 @@
 | 1 | 推理 Tab 子导航增加第三项：**编排**（`data-inf-page="flow"`），与「控制」「预览」并列。 |
 | 2 | 画布为 **canvas 流程图**：左侧 toolbox 拖入「模块」；模块间 **有向连线** = 执行顺序。 |
 | 3 | 首版只做一种模块：**基础模块（Basic）**。后续模块类型另开计划。 |
-| 4 | 基础模块字段：`start`（6D pose + gripper）、`motion_mode`、`goal`（6D pose + gripper）、jerk 参数、起始误差阈值。 |
+| 4 | 基础模块字段：`start`（6D pose + gripper）、`motion_mode`、`goal`（6D pose + gripper）、jerk 参数、起始误差阈值；`infer` 另需 `prompt`（覆盖控制页 Prompt）。 |
 | 5 | `motion_mode` 仅两种：`program`（程序下发）\| `infer`（模型推理）。 |
 | 6 | `program`：起点校验通过后，关节空间 **jerk 七段** 从起点姿态对应 joints 运动到终点（复用现有 abs ramp / `scale_by_d`）。 |
-| 7 | `infer`：须 pi05 serve **已连接**；执行逻辑对齐 **LOOP 启动 / LOOP 继续**（step → 填 joints → abs 下发 → `waitInfArmArrive`，尊重 pause）；除终止点外还须配置 **终止条件**；仅当终止条件触发时，才将终止点**假装**为当前 LOOP 的最后一个点，并进入与 **LOOP 暂停** 等价的挂起态。 |
+| 7 | `infer`：须 pi05 serve **已连接**；须填写模块 **Prompt**（逐步覆盖控制页 Prompt，不改控制页输入框）；执行逻辑对齐 **LOOP 启动 / LOOP 继续**（step → 填 joints → abs 下发 → `waitInfArmArrive`，尊重 pause）；除终止点外还须配置 **终止条件**；仅当终止条件触发时结束本模块。 |
 | 7a | `infer` 终止条件（首版）：由 **z 增大到某阈值** 或 **z 减小到某阈值** 两个要素构成（OR）；未触发前即使接近终止点也不结束本模块推理循环。 |
 | 8 | 起点校验失败 → 模块 **显式失败**（UI 状态 + 中止本次编排 run），不得静默跳过。 |
 | 9 | 每个模块自带 `t_min / t_max / v_norm / Tj / Ta`，下发时覆盖全局臂控制区同名参数（仅本模块本次运动有效）。 |
@@ -99,6 +99,8 @@ type BasicModule = {
   start: Pose7;
   goal: Pose7;
   motion_mode: 'program' | 'infer';
+  /** 仅 motion_mode==='infer' 有效；覆盖控制页 Prompt，必填 */
+  prompt?: string;
   /** 仅 motion_mode==='infer' 有效；未触发前不算「到达终止」 */
   term_cond?: InferTermCond;
   start_tol: {
@@ -207,6 +209,7 @@ infPageFlow (data-inf-page="flow")
 ### 3.4 画布交互（MVP）
 
 - 平移：中键 / Space+拖；缩放：滚轮。
+- 快捷键（编排子页激活、非输入框）：**R** = Run；运行中再按 **R** = 停止（与控制页 LOOP 的 L 同理）。
 - 模块拖拽移动；框选可二期。
 - 连线：端口 mousedown → mousemove 橡皮筋 → 合法 in 上 mouseup。
 - 与 pose 3D 画布事件隔离（编排页独立，不共享 `infPoseCanvas`）。

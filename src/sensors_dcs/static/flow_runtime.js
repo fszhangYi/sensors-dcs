@@ -332,6 +332,12 @@
       setMod(mod.id, 'failed', err);
       return { ok: false, error: err };
     }
+    const stepPrompt = String(mod.prompt || '').trim();
+    if (!stepPrompt) {
+      const err = 'missing_prompt';
+      setMod(mod.id, 'failed', err);
+      return { ok: false, error: err };
+    }
     if (typeof window.__flowPi05Step !== 'function' || typeof window.__flowSendAbs !== 'function') {
       const err = 'missing_flow_adapters';
       setMod(mod.id, 'failed', err);
@@ -347,7 +353,8 @@
       for (let i = 0; i < chunk; i++) {
         if (!(state.running && gen === state.gen)) return { ok: false, stopped: true };
         if (!(await waitWhileFlowPaused(gen))) return { ok: false, stopped: true };
-        last = await window.__flowPi05Step();
+        // Module prompt overrides control-page #infPi05Prompt for every infer step.
+        last = await window.__flowPi05Step({ prompt: stepPrompt });
         stepN += 1;
         if (!last || last.ok === false) {
           const err = 'step_fail:' + ((last && last.error) || 'step');

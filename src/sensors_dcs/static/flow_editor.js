@@ -71,6 +71,7 @@
       start: defaultPose7(),
       goal: defaultPose7(),
       motion_mode: 'program',
+      prompt: '',
       term_cond: defaultTermCond(),
       start_tol: defaultTol(),
       timing: defaultTiming(),
@@ -124,6 +125,7 @@
       start: m.start || defaultPose7(),
       goal: m.goal || defaultPose7(),
       motion_mode: m.motion_mode === 'infer' ? 'infer' : 'program',
+      prompt: m.prompt != null ? String(m.prompt) : '',
       term_cond: normalizeTermCond(m.term_cond),
       start_tol: m.start_tol || defaultTol(),
       timing: m.timing || defaultTiming(),
@@ -210,6 +212,13 @@
     }
     const entries = findEntryIds(modules, edges);
     if (entries.length !== 1) return { ok: false, entry: null, error: 'need_single_entry' };
+    for (const m of modules) {
+      if (!m || m.type === 'pose_check') continue;
+      if (m.motion_mode !== 'infer') continue;
+      if (!String(m.prompt || '').trim()) {
+        return { ok: false, entry: m.id, error: 'missing_prompt' };
+      }
+    }
     return { ok: true, entry: entries[0], error: null };
   }
 
@@ -886,6 +895,7 @@
   function syncInspectorModeVisibility(box, mode) {
     const isInfer = mode === 'infer';
     setElHidden(box.querySelector('.flow-term-block'), !isInfer);
+    setElHidden(box.querySelector('.flow-prompt-block'), !isInfer);
     setElHidden(box.querySelector('.flow-goal-block'), isInfer);
   }
 
@@ -1002,6 +1012,12 @@
       '<div class="flow-goal-block"' + (isInfer ? ' hidden' : '') + '>' +
         poseCsvFieldHtml('flowInsGoal', m.goal, t('infer.flow_goal'), 'flowInsFillGoal') +
       '</div>' +
+      '<div class="flow-field flow-prompt-block"' + (isInfer ? '' : ' hidden') + '>' +
+        '<label>' + t('infer.prompt') + '</label>' +
+        '<input type="text" id="flowInsPrompt" data-i18n-placeholder="infer.prompt_ph" ' +
+          'placeholder="' + escapeAttr(t('infer.prompt_ph')) + '" ' +
+          'value="' + escapeAttr(m.prompt || '') + '" autocomplete="off" />' +
+      '</div>' +
       '<div class="flow-field flow-term-block"' + (isInfer ? '' : ' hidden') + '>' +
         '<label>' + t('infer.flow_term_cond') + '</label>' +
         '<div class="flow-term-row">' +
@@ -1073,8 +1089,15 @@
         setHint(t('infer.flow_warn_missing_term'));
         return;
       }
+      const promptEl = box.querySelector('#flowInsPrompt');
+      const prompt = promptEl ? String(promptEl.value || '').trim() : String(m.prompt || '').trim();
+      if (mode === 'infer' && !prompt) {
+        setHint(t('infer.flow_warn_missing_prompt'));
+        return;
+      }
       m.title = String(box.querySelector('#flowInsTitle').value || '');
       m.motion_mode = mode;
+      m.prompt = prompt;
       m.start = start;
       m.goal = goal;
       m.term_cond = term;

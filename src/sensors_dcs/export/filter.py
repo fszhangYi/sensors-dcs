@@ -762,8 +762,50 @@ def filter_episode_timeline(
 
     _write_frame(filtered, out_path, fmt)
 
+    # Alignment overview PNG (aligned table + keep mask; soft-fail).
+    align_plot_info: dict[str, Any] | None = None
+    try:
+        from sensors_dcs.export.align_plot import plot_filter_alignment
+
+        plot_path = out_dir / "filter_align.png"
+        # Effective keep inside the trim window only (matches rows that can survive).
+        plot_mask = list(mask)
+        if end >= start:
+            for i in range(0, start):
+                plot_mask[i] = False
+            for i in range(end + 1, len(plot_mask)):
+                plot_mask[i] = False
+        else:
+            plot_mask = [False] * len(plot_mask)
+        align_plot_info = plot_filter_alignment(
+            df,
+            mask=plot_mask,
+            out_path=plot_path,
+            master=master_id,
+            require=require_agents,
+            default_max_dt=default_dt,
+            per_agent_max_dt=per_agent_dt,
+            trim_start_idx=start if end >= start else None,
+            trim_end_idx=end if end >= start else None,
+            title=(
+                f"{root.name} · filter align "
+                f"(keep {sum(1 for x in plot_mask if x)}/{rows_in}, trim={trim})"
+            ),
+        )
+    except Exception as e:  # noqa: BLE001
+        align_plot_info = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
     last_t = float(filtered["t_wall"].max()) if len(filtered) else float("nan")
     tail = tail_after_master(root, last_t) if len(filtered) else {}
+
+    align_plot_rel = None
+    if isinstance(align_plot_info, dict) and align_plot_info.get("ok"):
+        p = Path(str(align_plot_info.get("path") or ""))
+        if p.is_file():
+            try:
+                align_plot_rel = str(p.relative_to(root))
+            except ValueError:
+                align_plot_rel = str(p)
 
     meta = {
         "source_episode": root.name,
@@ -787,6 +829,8 @@ def filter_episode_timeline(
         "materialize": materialize,
         "materialize_info": materialize_info,
         "gello_calib": (export_meta.get("gello_calib") if isinstance(export_meta, dict) else None),
+        "align_plot": align_plot_rel,
+        "align_plot_info": align_plot_info,
     }
     meta_path = out_dir / "filter_meta.json"
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

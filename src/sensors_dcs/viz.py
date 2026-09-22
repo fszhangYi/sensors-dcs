@@ -78,6 +78,14 @@ class PostprocessBody(BaseModel):
     allow_invalid: bool = False
 
 
+class RawVideoBody(BaseModel):
+    """Compose a grid MP4 from raw episode camera JPEGs (not Step 1–3)."""
+
+    episode: str
+    master_camera: str | None = None
+    fps: float | None = None
+
+
 class AuthLoginBody(BaseModel):
     username: str = ""
     password: str = ""
@@ -1363,6 +1371,31 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .pp-row input.wide { flex: 1 1 16rem; min-width: 12rem; font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem; }
     .pp-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+    .pp-align-fig {
+      margin: 0.35rem 0 0;
+      padding: 0.55rem 0.65rem;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--input-bg);
+      display: grid;
+      gap: 0.4rem;
+      min-width: 0;
+    }
+    .pp-align-fig[hidden] { display: none !important; }
+    .pp-align-fig figcaption {
+      margin: 0;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .pp-align-fig img {
+      display: block;
+      width: 100%;
+      max-width: 100%;
+      height: auto;
+      border-radius: 8px;
+      background: #0d1117;
+    }
     pre#ppLog {
       margin: 0;
       padding: 0.65rem 0.85rem;
@@ -1880,6 +1913,30 @@ PREVIEW_HTML = """<!DOCTYPE html>
       -webkit-backdrop-filter: blur(6px);
     }
     .modal-backdrop.show { display: flex; }
+    .app-toast {
+      display: none;
+      position: fixed;
+      left: 50%;
+      bottom: 1.35rem;
+      transform: translateX(-50%);
+      z-index: 80;
+      max-width: min(36rem, calc(100vw - 2rem));
+      padding: 0.65rem 1rem;
+      border-radius: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+      font-size: 0.88rem;
+      line-height: 1.4;
+      pointer-events: none;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .app-toast.show { display: block; }
+    .app-toast.is-error {
+      border-color: color-mix(in srgb, var(--danger, #e35) 55%, var(--border));
+    }
     .modal-card {
       max-width: 28rem; margin: 1rem; padding: 1rem 1.15rem; border-radius: 14px;
       background: var(--surface); border: 1px solid var(--border); color: var(--text);
@@ -2314,7 +2371,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <span data-i18n="infer.chunk_skip">跳点</span>
             <input type="number" id="infChunkSkip" min="1" max="15" step="1" value="1" />
           </label>
-          <button type="button" id="infPi05Loop" data-i18n="infer.loop" data-i18n-title="infer.kbd_loop_tip" title="快捷键 L" disabled>LOOP (L)</button>
+          <button type="button" id="infPi05Loop" data-i18n="infer.loop" data-i18n-title="infer.kbd_loop_tip" title="快捷键 L（运行中再按可停止）" disabled>LOOP (L)</button>
           <button type="button" id="infPi05LoopPause" data-i18n="infer.loop_pause" disabled>LOOP 暂停</button>
           <button type="button" id="infPi05LoopResume" data-i18n="infer.loop_resume" disabled>LOOP 继续</button>
           <span class="inf-elapsed" id="infLoopElapsed" data-i18n-title="infer.elapsed_hint" title="LOOP 执行计时（暂停不计）">—</span>
@@ -2350,7 +2407,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <section class="inf-pi05-sec" aria-labelledby="infSecArm">
         <h3 class="inf-pi05-sec-title" id="infSecArm" data-i18n="infer.sec_arm">臂控制</h3>
         <div class="inf-pi05-row">
-          <button type="button" id="infArmHome" data-i18n="arm.home">Home</button>
+          <button type="button" id="infArmHome" data-i18n="infer.kbd_home" data-i18n-title="infer.kbd_home_tip" title="快捷键 H">Home (H)</button>
           <div class="arm-abs-timing" data-i18n-title="arm.abs_timing_hint" title="T=clamp(d/v_norm, t_min, t_max)；七段 jerk：Tj / Ta">
             <label>
               <span data-i18n="arm.abs_t_min">t_min</span>
@@ -2407,9 +2464,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <section class="inf-pi05-sec inf-pi05-sec-rec" aria-labelledby="infSecRec">
         <h3 class="inf-pi05-sec-title" id="infSecRec" data-i18n="infer.sec_rec">录制</h3>
         <div class="actions inf-rec-actions">
-          <button type="button" class="primary" id="infBtnStart" data-i18n="btn.start">开始</button>
-          <button type="button" id="infBtnStop" disabled data-i18n="btn.stop">结束</button>
-          <button type="button" class="discard" id="infBtnDiscard" disabled data-i18n="btn.discard">作废</button>
+          <button type="button" class="primary" id="infBtnStart" data-i18n="infer.kbd_start" data-i18n-title="infer.kbd_start_tip" title="快捷键 S（编排页同样生效）">开始 (S)</button>
+          <button type="button" id="infBtnStop" disabled data-i18n="infer.kbd_stop" data-i18n-title="infer.kbd_stop_tip" title="快捷键 E（编排页同样生效）">结束 (E)</button>
+          <button type="button" class="discard" id="infBtnDiscard" disabled data-i18n="infer.kbd_discard" data-i18n-title="infer.kbd_discard_tip" title="快捷键 X（编排页同样生效）">作废 (X)</button>
           <label class="quick-collect" data-i18n-title="quick.title" title="结束或作废后自动执行后处理三步（参数见「数据后处理」Tab）">
             <input type="checkbox" id="infChkQuickCollect" />
             <span data-i18n="quick.label">快速采集</span>
@@ -2501,7 +2558,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     <div class="inf-page" id="infPageFlow" data-inf-page="flow" role="tabpanel">
       <div class="flow-shell">
         <div class="flow-toolbar">
-          <button type="button" class="primary" id="infFlowRun" data-i18n="infer.flow_run">Run</button>
+          <button type="button" class="primary" id="infFlowRun" data-i18n="infer.flow_run" data-i18n-title="infer.flow_run_tip" title="快捷键 R（运行中再按可停止）">Run (R)</button>
           <button type="button" id="infFlowPause" data-i18n="infer.flow_pause" disabled>暂停</button>
           <button type="button" id="infFlowResume" data-i18n="infer.flow_resume" disabled>继续</button>
           <button type="button" id="infFlowStop" data-i18n="infer.flow_stop" disabled>停止</button>
@@ -2512,8 +2569,44 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <button type="button" id="infFlowImport" data-i18n="infer.flow_import">加载 JSON</button>
           <input type="file" id="infFlowImportFile" accept="application/json,.json" hidden />
           <button type="button" id="infFlowClear" data-i18n="infer.flow_clear">清空</button>
-          <span class="hint" id="infFlowHint" data-i18n="infer.flow_hint_ready">拖入模块并连线后点 Run</span>
+          <span class="hint" id="infFlowHint" data-i18n="infer.flow_hint_ready">拖入模块并连线后点 Run（R）</span>
         </div>
+        <section class="flow-rec-panel" id="flowRecPanel" aria-labelledby="flowRecToggle">
+          <button type="button" class="flow-rec-toggle" id="flowRecToggle" aria-expanded="false" aria-controls="flowRecBody">
+            <span class="flow-rec-toggle-label" data-i18n="infer.flow_rec_title">录制</span>
+            <strong class="flow-rec-badge" id="flowRecBadge">idle</strong>
+            <span class="flow-rec-toggle-hint" data-i18n="infer.flow_rec_toggle_hint">展开 / 收起</span>
+            <span class="flow-rec-chevron" aria-hidden="true">▸</span>
+          </button>
+          <div class="flow-rec-body" id="flowRecBody" hidden>
+            <div class="actions inf-rec-actions flow-rec-actions">
+              <button type="button" class="primary" id="flowBtnStart" data-i18n="infer.kbd_start" data-i18n-title="infer.kbd_start_tip" title="快捷键 S">开始 (S)</button>
+              <button type="button" id="flowBtnStop" disabled data-i18n="infer.kbd_stop" data-i18n-title="infer.kbd_stop_tip" title="快捷键 E">结束 (E)</button>
+              <button type="button" class="discard" id="flowBtnDiscard" disabled data-i18n="infer.kbd_discard" data-i18n-title="infer.kbd_discard_tip" title="快捷键 X">作废 (X)</button>
+              <label class="quick-collect" data-i18n-title="quick.title" title="结束或作废后自动执行后处理三步（参数见「数据后处理」Tab）">
+                <input type="checkbox" id="flowChkQuickCollect" />
+                <span data-i18n="quick.label">快速采集</span>
+              </label>
+              <label class="quick-collect" data-i18n-title="async.title" title="结束/作废后后台落盘；未写完也可开始下一集">
+                <input type="checkbox" id="flowChkAsyncFlush" />
+                <span data-i18n="async.label">异步落盘</span>
+              </label>
+            </div>
+            <span class="hint" id="flowRunHint" data-i18n="hint.idle">空闲 — 点「开始」录制当前 episode</span>
+            <div class="save-path inf-rec-save flow-rec-save">
+              <label for="flowSaveDirInput" data-i18n="save.label">保存路径</label>
+              <input type="text" id="flowSaveDirInput" data-i18n-placeholder="save.placeholder" placeholder="留空则沿用当前路径" />
+              <button type="button" id="flowBtnSaveDir" data-i18n="btn.apply">应用</button>
+            </div>
+            <div class="meta inf-rec-meta flow-rec-meta">
+              <div><span data-i18n="meta.rec">录制：</span><strong id="flowRecState">idle</strong></div>
+              <div><span data-i18n="meta.save">保存路径：</span><strong id="flowSaveDir">—</strong></div>
+              <div><span data-i18n="meta.episode">episode：</span><strong id="flowEpisode">—</strong></div>
+              <div><span data-i18n="meta.written">已写帧：</span><strong id="flowWritten">0</strong></div>
+              <div><span data-i18n="meta.hz">前端 hz：</span><strong id="flowHzFront">—</strong></div>
+            </div>
+          </div>
+        </section>
         <aside class="flow-toolbox" aria-label="Flow toolbox">
           <h3 class="flow-toolbox-title" data-i18n="infer.flow_toolbox">模块</h3>
           <button type="button" class="flow-tool-item" id="infFlowToolBasic" draggable="true" data-i18n="infer.flow_basic">基础模块</button>
@@ -2605,6 +2698,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
         </section>
 
         <section class="pp-card">
+          <h2 data-i18n="pp.raw_video_title">原始数据视频</h2>
+          <p class="pp-hint" data-i18n="pp.raw_video_hint">与 Step 1–3 无关：直接读取 episode/cameras 下原始 JPG，按主相机时间轴近邻对齐后合成网格预览 MP4（写出到 episode/raw_grid.mp4）。</p>
+          <div class="pp-actions">
+            <button type="button" id="btnPpRawVideo" data-i18n="pp.raw_video_run">合成原始视频</button>
+          </div>
+        </section>
+
+        <section class="pp-card">
           <h2 data-i18n="pp.step1">1 · export-timeline</h2>
           <p class="pp-hint" data-i18n="pp.step1_hint">sensors-dcs export-timeline -e … --align / --align-clock / --primary-camera / --master / --master-hz（见上方对齐参数）</p>
           <div class="pp-actions">
@@ -2634,6 +2735,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <div class="pp-actions">
             <button type="button" id="btnPpFilter" data-i18n="pp.run2">运行 Step 2</button>
           </div>
+          <figure class="pp-align-fig" id="ppAlignFig" hidden>
+            <figcaption data-i18n="pp.align_fig_caption">对齐效果（filter）</figcaption>
+            <img id="ppAlignImg" alt="filter alignment overview" />
+            <p class="pp-hint" id="ppAlignHint" hidden></p>
+          </figure>
         </section>
 
         <section class="pp-card">
@@ -2660,6 +2766,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <button type="button" class="primary" id="appModalOk" data-i18n="modal.ok">知道了</button>
     </div>
   </div>
+  <div id="appToast" class="app-toast" role="status" aria-live="polite" hidden></div>
   <div class="settings-overlay" id="settingsModal" role="presentation">
     <div class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" id="settingsDialog">
       <header class="settings-head">
@@ -3014,6 +3121,22 @@ PREVIEW_HTML = """<!DOCTYPE html>
       appModalBody.textContent = body || '';
       appModal.classList.add('show');
     }
+    const appToast = document.getElementById('appToast');
+    let appToastTimer = null;
+    function showAppToast(message, opts) {
+      if (!appToast) return;
+      const isErr = !!(opts && opts.error);
+      appToast.textContent = message || '';
+      appToast.classList.toggle('is-error', isErr);
+      appToast.hidden = false;
+      appToast.classList.add('show');
+      if (appToastTimer) clearTimeout(appToastTimer);
+      const ms = (opts && opts.ms != null) ? Number(opts.ms) : 4500;
+      appToastTimer = setTimeout(() => {
+        appToast.classList.remove('show');
+        appToast.hidden = true;
+      }, Number.isFinite(ms) && ms > 0 ? ms : 4500);
+    }
     window.__armHome = window.__armHome || { configured: false, home_joints_rad: null };
     function formatHomeJointsCsv(joints) {
       if (!Array.isArray(joints) || joints.length < 6) return '';
@@ -3103,8 +3226,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
         saveDirEl: document.getElementById(ids.saveDir),
         episodeEl: document.getElementById(ids.episode),
         writtenEl: document.getElementById(ids.written),
-        hzFrontEl: document.getElementById(ids.hzFront),
-        rawEl: document.getElementById(ids.raw),
+        hzFrontEl: ids.hzFront ? document.getElementById(ids.hzFront) : null,
+        rawEl: ids.raw ? document.getElementById(ids.raw) : null,
         btnStart: document.getElementById(ids.btnStart),
         btnStop: document.getElementById(ids.btnStop),
         btnDiscard: document.getElementById(ids.btnDiscard),
@@ -3132,7 +3255,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
       btnSaveDir: 'infBtnSaveDir', saveDirInput: 'infSaveDirInput', runHint: 'infRunHint',
       chkQuickCollect: 'infChkQuickCollect', chkAsyncFlush: 'infChkAsyncFlush',
     }, 'dcs.inf.quickCollect', 'dcs.inf.asyncFlush', 'infer');
-    const recordPanels = [collectRec, inferRec].filter((p) => p && p.btnStart);
+    const flowRec = bindRecordPanel({
+      recState: 'flowRecState', saveDir: 'flowSaveDir', episode: 'flowEpisode', written: 'flowWritten',
+      hzFront: 'flowHzFront', raw: null,
+      btnStart: 'flowBtnStart', btnStop: 'flowBtnStop', btnDiscard: 'flowBtnDiscard',
+      btnSaveDir: 'flowBtnSaveDir', saveDirInput: 'flowSaveDirInput', runHint: 'flowRunHint',
+      chkQuickCollect: 'flowChkQuickCollect', chkAsyncFlush: 'flowChkAsyncFlush',
+    }, 'dcs.inf.quickCollect', 'dcs.inf.asyncFlush', 'infer');
+    const recordPanels = [collectRec, inferRec, flowRec].filter((p) => p && p.btnStart);
     // Legacy aliases (collect) used by exit / arm hints elsewhere.
     const recStateEl = collectRec.recStateEl;
     const saveDirEl = collectRec.saveDirEl;
@@ -3158,12 +3288,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
           panel.chkQuickCollect.checked = localStorage.getItem(panel.lsQuick) === '1';
           panel.chkQuickCollect.addEventListener('change', () => {
             try { localStorage.setItem(panel.lsQuick, panel.chkQuickCollect.checked ? '1' : '0'); } catch (e) {}
+            recordPanels.forEach((p) => {
+              if (p === panel || !p.chkQuickCollect || p.lsQuick !== panel.lsQuick) return;
+              p.chkQuickCollect.checked = panel.chkQuickCollect.checked;
+            });
           });
         }
         if (panel.chkAsyncFlush) {
           if (localStorage.getItem(panel.lsAsync) === '1') panel.chkAsyncFlush.checked = true;
           panel.chkAsyncFlush.addEventListener('change', () => {
             try { localStorage.setItem(panel.lsAsync, panel.chkAsyncFlush.checked ? '1' : '0'); } catch (e) {}
+            recordPanels.forEach((p) => {
+              if (p === panel || !p.chkAsyncFlush || p.lsAsync !== panel.lsAsync) return;
+              p.chkAsyncFlush.checked = panel.chkAsyncFlush.checked;
+            });
           });
         }
       } catch (e) {}
@@ -3257,10 +3395,22 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
     }
 
+    function syncFlowRecBadge(rec) {
+      const badge = document.getElementById('flowRecBadge');
+      if (!badge || !rec) return;
+      const st = rec.state || 'idle';
+      const flushN = rec.flushing_count || 0;
+      badge.textContent = flushN > 0 && st === 'idle'
+        ? (st + ' · flush×' + flushN)
+        : st;
+      badge.classList.toggle('is-recording', st === 'recording');
+    }
+
     function applyRecordUi(rec) {
       if (!rec) return;
       window.__lastRecordStatus = rec;
       recordPanels.forEach((p) => applyRecordUiToPanel(p, rec));
+      syncFlowRecBadge(rec);
     }
 
     async function postRecord(path, body, panel) {
@@ -3313,10 +3463,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
             }, epPath);
             if (pp && pp.ok) {
               if (ui.runHint) ui.runHint.textContent = t('hint.qc_ok', { path: epPath });
-              showAppModal(t('modal.qc_ok'), epPath);
+              showAppToast(t('hint.qc_ok', { path: epPath }));
             } else if (pp) {
               if (ui.runHint) ui.runHint.textContent = t('hint.qc_fail', { error: pp.error || 'unknown' });
-              showAppModal(t('modal.qc_fail'), pp.error || JSON.stringify(pp));
+              showAppToast(t('hint.qc_fail', { error: pp.error || 'unknown' }), { error: true, ms: 7000 });
               try { switchTab('post'); } catch (e) {}
             }
           };
@@ -5015,13 +5165,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (joints.some((v) => !Number.isFinite(v))) return { ok: false, error: t('arm.abs_bad') };
       return { ok: true, joints: joints };
     }
-    async function runInfPi05StepOnce() {
+    async function runInfPi05StepOnce(stepOpts) {
       if (infPi05Hint) infPi05Hint.textContent = t('infer.hint_stepping');
-      // Always push the input box text with the step so serve never sees a stale "".
+      // Optional override (orchestration infer modules) wins over control-page box.
+      const hasOverride = !!(stepOpts && Object.prototype.hasOwnProperty.call(stepOpts, 'prompt'));
+      const prompt = hasOverride ? String(stepOpts.prompt ?? '') : currentPi05Prompt();
+      // Always push a prompt with the step so serve never sees a stale "".
       const r = await postPi05('/api/pi05/step', Object.assign({
-        prompt: currentPi05Prompt(),
+        prompt: prompt,
       }, currentWireFormats()));
-      if (r && r.ok !== false && infPi05Prompt) {
+      // Do not rewrite the control-page prompt when a module override was used.
+      if (r && r.ok !== false && infPi05Prompt && !hasOverride) {
         delete infPi05Prompt.dataset.dirty;
         if (r.prompt != null) infPi05Prompt.value = r.prompt;
       }
@@ -5335,8 +5489,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
       return { ok: false, error: 'stopped', stopped: true };
     };
-    window.__flowPi05Step = async function () {
-      const r = await runInfPi05StepOnce();
+    window.__flowPi05Step = async function (stepOpts) {
+      const r = await runInfPi05StepOnce(stepOpts);
       if (r && r.ok && Array.isArray(r.next_joints_rad) && r.next_joints_rad.length >= 6) {
         window.__flowLastStepJointsCache = r.next_joints_rad.slice(0, 6).map(Number);
       } else if (r && r.ok) {
@@ -5899,6 +6053,68 @@ PREVIEW_HTML = """<!DOCTYPE html>
         await goArmHome(infArmProg, null);
       });
     }
+    function isTypingKeyTarget(el) {
+      if (!el) return false;
+      const tag = (el.tagName || '').toUpperCase();
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+      if (el.isContentEditable) return true;
+      return false;
+    }
+    function isInferTabActive() {
+      const tab = document.getElementById('tab-infer');
+      return !!(tab && tab.classList.contains('active'));
+    }
+    function isUiOverlayBlockingKeys() {
+      if (appModal && appModal.classList.contains('show')) return true;
+      const settingsEl = document.getElementById('settingsModal');
+      if (settingsEl && settingsEl.classList.contains('show')) return true;
+      const pathPicker = document.getElementById('pathPickerOverlay');
+      if (pathPicker && pathPicker.classList.contains('show')) return true;
+      const rawModal = document.getElementById('infPi05RawModal');
+      if (rawModal && rawModal.classList.contains('show')) return true;
+      return false;
+    }
+    function clickIfEnabled(btn) {
+      if (!btn || btn.disabled) return false;
+      btn.click();
+      return true;
+    }
+    document.addEventListener('keydown', (ev) => {
+      if (!isInferTabActive()) return;
+      if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+      if (ev.repeat) return;
+      if (isTypingKeyTarget(ev.target)) return;
+      if (isUiOverlayBlockingKeys()) return;
+      const k = (ev.key || '').toLowerCase();
+      let handled = false;
+      if (k === 's') {
+        handled = clickIfEnabled(inferRec && inferRec.btnStart)
+          || clickIfEnabled(flowRec && flowRec.btnStart);
+      } else if (k === 'e') {
+        handled = clickIfEnabled(inferRec && inferRec.btnStop)
+          || clickIfEnabled(flowRec && flowRec.btnStop);
+      } else if (k === 'x') {
+        handled = clickIfEnabled(inferRec && inferRec.btnDiscard)
+          || clickIfEnabled(flowRec && flowRec.btnDiscard);
+      } else if (k === 'h') {
+        handled = clickIfEnabled(infArmHome);
+      } else if (k === 'l') {
+        handled = clickIfEnabled(infPi05Loop);
+      } else if (k === 'r') {
+        // Flow page: R = Run; while running, R = Stop (same idea as LOOP's L).
+        const flowPage = document.getElementById('infPageFlow');
+        if (flowPage && flowPage.classList.contains('active')) {
+          const flowRun = document.getElementById('infFlowRun');
+          const flowStop = document.getElementById('infFlowStop');
+          if (window.__flowIsRunning) {
+            handled = clickIfEnabled(flowStop);
+          } else {
+            handled = clickIfEnabled(flowRun);
+          }
+        }
+      }
+      if (handled) ev.preventDefault();
+    });
     function fmtDeltaCell(v, i) {
       const n = Number(v);
       if (!Number.isFinite(n)) return '0';
@@ -6382,6 +6598,25 @@ PREVIEW_HTML = """<!DOCTYPE html>
     if (infPageBtnControl) infPageBtnControl.addEventListener('click', () => switchInfPage('control'));
     if (infPageBtnSensors) infPageBtnSensors.addEventListener('click', () => switchInfPage('sensors'));
     if (infPageBtnFlow) infPageBtnFlow.addEventListener('click', () => switchInfPage('flow'));
+    (function wireFlowRecToggle() {
+      const panel = document.getElementById('flowRecPanel');
+      const btn = document.getElementById('flowRecToggle');
+      const body = document.getElementById('flowRecBody');
+      if (!panel || !btn || !body) return;
+      const LS = 'dcs.inf.flowRecOpen';
+      function setOpen(open) {
+        panel.classList.toggle('is-open', !!open);
+        body.hidden = !open;
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        try { localStorage.setItem(LS, open ? '1' : '0'); } catch (e) {}
+      }
+      try {
+        setOpen(localStorage.getItem(LS) === '1');
+      } catch (e) {
+        setOpen(false);
+      }
+      btn.addEventListener('click', () => setOpen(body.hidden));
+    })();
     try {
       const lsInfPage = localStorage.getItem('dcs.inf.page');
       if (lsInfPage === 'sensors' || lsInfPage === 'control' || lsInfPage === 'flow') switchInfPage(lsInfPage);
@@ -7675,11 +7910,71 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
     function setPpBusy(on, text) {
       ppBusy = !!on;
-      ['btnPpExport', 'btnPpFilter', 'btnPpHik', 'btnPpRunAll', 'btnPpRefresh', 'btnPpBrowseEpisode', 'btnPpBrowseCameraMap'].forEach((id) => {
+      ['btnPpExport', 'btnPpFilter', 'btnPpHik', 'btnPpRunAll', 'btnPpRawVideo', 'btnPpRefresh', 'btnPpBrowseEpisode', 'btnPpBrowseCameraMap'].forEach((id) => {
         const b = document.getElementById(id);
         if (b) b.disabled = !!on;
       });
       if (text) ppHint.textContent = text;
+    }
+
+    function showPpAlignFigure(result) {
+      const fig = document.getElementById('ppAlignFig');
+      const img = document.getElementById('ppAlignImg');
+      const hint = document.getElementById('ppAlignHint');
+      if (!fig || !img) return;
+      const results = (result && result.results) || [];
+      let meta = null;
+      for (let i = results.length - 1; i >= 0; i--) {
+        const r = results[i];
+        if (r && r.step === 'filter-timeline' && r.ok && r.meta) {
+          meta = r.meta;
+          break;
+        }
+      }
+      if (!meta) return;
+      const ep = (result && result.episode) || (meta.source_path) || '';
+      const rel = meta.align_plot || '';
+      const info = meta.align_plot_info || {};
+      if (rel && ep) {
+        const url = '/api/postprocess/artifact?episode=' + encodeURIComponent(ep)
+          + '&rel=' + encodeURIComponent(rel)
+          + '&t=' + String(Date.now());
+        img.onload = () => {
+          fig.hidden = false;
+          if (hint) {
+            hint.hidden = false;
+            hint.textContent = t('pp.align_fig_ready', { path: rel });
+          }
+          try { fig.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (_) {}
+        };
+        img.onerror = () => {
+          fig.hidden = false;
+          if (hint) {
+            hint.hidden = false;
+            hint.textContent = t('pp.align_fig_missing', { error: 'load failed' });
+          }
+        };
+        img.src = url;
+        if (ppHint) {
+          const base = ppHint.textContent || '';
+          const note = t('pp.align_fig_ready', { path: rel });
+          ppHint.textContent = base ? (base + ' · ' + note) : note;
+        }
+      } else {
+        fig.hidden = false;
+        img.removeAttribute('src');
+        const err = (info && info.error) || 'no align_plot';
+        if (hint) {
+          hint.hidden = false;
+          hint.textContent = t('pp.align_fig_missing', { error: err });
+        }
+        if (ppHint) {
+          const base = ppHint.textContent || '';
+          const note = t('pp.align_fig_missing', { error: err });
+          ppHint.textContent = base ? (base + ' · ' + note) : note;
+        }
+        try { fig.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (_) {}
+      }
     }
 
     async function runPostprocess(extra, episodeOverride) {
@@ -7711,6 +8006,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const j = await r.json();
         ppLog.textContent = (j.log || '') + '\\n\\n' + JSON.stringify(j, null, 2);
         ppHint.textContent = j.ok ? t('pp.done') : t('pp.fail', { error: j.error || '' });
+        try { showPpAlignFigure(j); } catch (e) {}
         return j;
       } catch (e) {
         ppHint.textContent = String(e);
@@ -7722,6 +8018,39 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
     }
 
+    async function runRawVideo() {
+      const episode = ((ppEpisode && ppEpisode.value) || '').trim();
+      if (!episode) {
+        ppHint.textContent = t('pp.need_episode');
+        return { ok: false, error: 'missing episode' };
+      }
+      savePpForm();
+      setPpBusy(true, t('pp.raw_video_running'));
+      ppLog.textContent = 'running raw-grid-video…\\n' + JSON.stringify({ episode }, null, 2);
+      try {
+        const r = await fetch('/api/postprocess/raw-video', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ episode }),
+        });
+        const j = await r.json();
+        ppLog.textContent = (j.log || '') + '\\n\\n' + JSON.stringify(j, null, 2);
+        if (j.ok) {
+          const name = (j.meta && j.meta.video_name) || 'raw_grid.mp4';
+          ppHint.textContent = t('pp.raw_video_done', { name });
+        } else {
+          ppHint.textContent = t('pp.fail', { error: j.error || '' });
+        }
+        return j;
+      } catch (e) {
+        ppHint.textContent = String(e);
+        ppLog.textContent = String(e);
+        return { ok: false, error: String(e) };
+      } finally {
+        setPpBusy(false);
+      }
+    }
+
     document.getElementById('btnPpExport').addEventListener('click', () =>
       runPostprocess({ steps: ['export-timeline'] }));
     document.getElementById('btnPpFilter').addEventListener('click', () =>
@@ -7730,6 +8059,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       runPostprocess({ steps: ['export-hik-dataset'] }));
     document.getElementById('btnPpRunAll').addEventListener('click', () =>
       runPostprocess({ steps: ['export-timeline', 'filter-timeline', 'export-hik-dataset'] }));
+    const btnPpRawVideo = document.getElementById('btnPpRawVideo');
+    if (btnPpRawVideo) btnPpRawVideo.addEventListener('click', () => runRawVideo());
 
     fetch('/api/postprocess/defaults').then((r) => r.json()).then((j) => {
       if (!j.ok) return;
@@ -9435,6 +9766,34 @@ def create_viz_app(
 
         return inspect_episode(path)
 
+    @app.get("/api/postprocess/artifact")
+    async def postprocess_artifact(episode: str = "", rel: str = ""):
+        """Serve a file under ``<episode>/export/`` (e.g. filter_align.png)."""
+        from fastapi.responses import FileResponse
+
+        from sensors_dcs.export.timeline import resolve_episode_dir
+
+        ep_raw = (episode or "").strip()
+        rel_raw = (rel or "").strip().replace("\\", "/")
+        if not ep_raw or not rel_raw:
+            return {"ok": False, "error": "episode and rel are required"}
+        if rel_raw.startswith("/") or ".." in Path(rel_raw).parts:
+            return {"ok": False, "error": "invalid rel"}
+        try:
+            root = resolve_episode_dir(ep_raw)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": str(e)}
+        export_root = (root / "export").resolve()
+        target = (root / rel_raw).resolve()
+        try:
+            target.relative_to(export_root)
+        except ValueError:
+            return {"ok": False, "error": "artifact must be under episode/export"}
+        if not target.is_file():
+            return {"ok": False, "error": f"not found: {rel_raw}"}
+        media = "image/png" if target.suffix.lower() == ".png" else "application/octet-stream"
+        return FileResponse(target, media_type=media, filename=target.name)
+
     @app.post("/api/postprocess/run")
     async def postprocess_run(req: PostprocessBody) -> dict[str, Any]:
         from sensors_dcs.postprocess_service import run_postprocess
@@ -9457,6 +9816,22 @@ def create_viz_app(
                 materialize=req.materialize,
                 camera_map=req.camera_map,
                 allow_invalid=req.allow_invalid,
+            )
+        finally:
+            _pp_lock.release()
+
+    @app.post("/api/postprocess/raw-video")
+    async def postprocess_raw_video(req: RawVideoBody) -> dict[str, Any]:
+        from sensors_dcs.postprocess_service import compose_raw_video
+
+        if not _pp_lock.acquire(blocking=False):
+            return {"ok": False, "error": "another postprocess job is running"}
+        try:
+            return await asyncio.to_thread(
+                compose_raw_video,
+                episode=req.episode,
+                master_camera=req.master_camera,
+                fps=req.fps,
             )
         finally:
             _pp_lock.release()

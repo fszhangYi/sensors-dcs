@@ -85,7 +85,19 @@
 
 宽表里额外写入 `{agent}.filtered_file`（相对 episode 的路径，如 `filtered/cameras/cam-left/00000000.jpg`）。
 
-### 2.6 `export-hik-dataset`（filter 之后）
+### 2.6 对齐效果图（`filter_align.png`）
+
+`filter-timeline` 结束后在 `export/filter_align.png` 写出一张多传感器对齐总览（并写入 `filter_meta.align_plot`）：
+
+| 面板 | 内容 |
+|------|------|
+| 上 · swimlane | 各传感器样本时刻（`t_wall − match_dt`）沿相对时间排列；亮=保留，暗=丢弃，×=缺测；绿色虚线为 trim 窗口 |
+| 中 · match_dt | 各传感器 `match_dt(ms)` 随时间曲线，点线为 `--max-match-dt` 阈值 |
+| 下 · 直方图 | **保留行**上各传感器 `match_dt` 分布 |
+
+后处理 UI 的 Step 2 卡片会加载该图；一键三步的运行日志也会打印 `align_plot …` 或 `align_plot FAIL: …`。绘图失败不阻断 filter（`align_plot_info.ok=false`）。绘图使用 OpenCV（不依赖 matplotlib）。
+
+### 2.7 `export-hik-dataset`（filter 之后）
 
 将 `export/filtered/` 转成与 `hik_gello/data_postprocess.py` 一致的训练集目录：
 
@@ -137,6 +149,7 @@ sensors-dcs filter-timeline -e episode_00000 \
 
 默认输入：`<episode>/export/timeline_aligned.parquet`（或 `.csv`）  
 默认输出：`<episode>/export/timeline_filtered.parquet`  
+对齐图：`<episode>/export/filter_align.png`  
 元数据：`<episode>/export/filter_meta.json`  
 hik 导出默认：`<episode>/export/hik_dataset/`，旁路元数据 `export/hik_dataset_meta.json`
 
@@ -162,7 +175,8 @@ hik 导出默认：`<episode>/export/hik_dataset/`，旁路元数据 `export/hik
     "trim_end": 45
   },
   "require": ["gello", "cam-left"],
-  "max_match_dt": {"default": 0.033}
+  "max_match_dt": {"default": 0.033},
+  "align_plot": "export/filter_align.png"
 }
 ```
 

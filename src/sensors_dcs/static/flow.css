@@ -7,7 +7,7 @@
 .flow-shell {
   display: grid;
   grid-template-columns: 9.5rem minmax(0, 1fr) minmax(15rem, 18rem);
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 0.55rem;
   flex: 1 1 auto;
   min-height: 0;
@@ -26,6 +26,156 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--panel);
+}
+
+.flow-rec-panel {
+  grid-column: 1 / -1;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.flow-rec-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.4rem 0.65rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.flow-rec-toggle:hover {
+  background: color-mix(in srgb, var(--accent-dim, rgba(61, 214, 198, 0.12)) 55%, transparent);
+}
+
+.flow-rec-toggle-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.flow-rec-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--muted);
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-rec-badge.is-recording {
+  color: var(--danger, #e35);
+  border-color: color-mix(in srgb, var(--danger, #e35) 45%, var(--border));
+}
+
+.flow-rec-toggle-hint {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.flow-rec-chevron {
+  font-size: 0.75rem;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.flow-rec-panel.is-open .flow-rec-chevron {
+  transform: rotate(90deg);
+}
+
+.flow-rec-body {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0 0.65rem 0.55rem;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.flow-rec-body[hidden] {
+  display: none !important;
+}
+
+.flow-rec-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.flow-rec-actions .quick-collect {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.flow-rec-save {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  font-size: 0.8rem;
+}
+
+.flow-rec-save label {
+  color: var(--muted);
+}
+
+.flow-rec-save input {
+  flex: 1 1 12rem;
+  min-width: 8rem;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.78rem;
+}
+
+.flow-rec-meta {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.25rem 0.55rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.flow-rec-meta > div {
+  display: flex;
+  gap: 0.25rem;
+  min-width: 0;
+  align-items: baseline;
+}
+
+.flow-rec-meta strong {
+  color: var(--text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-rec-meta > div:nth-child(2) {
+  grid-column: span 3;
+}
+
+@media (max-width: 960px) {
+  .flow-rec-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .flow-rec-meta > div:nth-child(2) {
+    grid-column: 1 / -1;
+  }
 }
 
 .flow-toolbar .hint {
@@ -534,7 +684,7 @@ html[data-theme='light'] .flow-node {
 @media (max-width: 960px) {
   .flow-shell {
     grid-template-columns: 7.5rem minmax(0, 1fr);
-    grid-template-rows: auto auto minmax(12rem, 1fr);
+    grid-template-rows: auto auto auto minmax(12rem, 1fr);
   }
   .flow-inspector {
     grid-column: 1 / -1;
