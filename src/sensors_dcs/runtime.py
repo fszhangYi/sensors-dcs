@@ -27,6 +27,24 @@ from sensors_dcs.frame import Frame
 from sensors_dcs.record import RecordController
 from sensors_dcs.viz import VizHub, create_viz_app
 
+# Fold Gello joint deltas into the cumulative bias only after this much motion.
+# Smaller residuals stay in pending so encoder noise does not drift the arm.
+_OFFSET_FOLD_JOINT_RAD = 1e-3
+_OFFSET_FOLD_GRIP = 2e-3
+
+
+def _offset7(vals: list[float] | None) -> list[float]:
+    raw = list(vals or [])
+    if len(raw) < 7:
+        raw = raw + [0.0] * 7
+    return [float(raw[i]) for i in range(7)]
+
+
+def _pending_ready(pending: list[float]) -> bool:
+    if any(abs(pending[i]) >= _OFFSET_FOLD_JOINT_RAD for i in range(6)):
+        return True
+    return abs(pending[6]) >= _OFFSET_FOLD_GRIP
+
 
 class Orchestrator:
     """MVP runtime: start listed agents + viz publisher + record consumer."""
@@ -82,13 +100,14 @@ class Orchestrator:
         self._sync_last_error: str | None = None
         self._sync_last_t_wall: float | None = None
         self._sync_write_count = 0
-        # Instantaneous Gello reinforce offset (docs/gello-reinforce.md).
+        # Cumulative Gello reinforce offset (docs/gello-reinforce.md).
         self._delta_pose_offset_lock = threading.Lock()
         self._delta_pose_offset_configured = any(
             isinstance(a, GelloReinforceAgent) for a in self.agents.values()
         )
         self._delta_pose_offset_enabled = False
         self._delta_pose_offset: list[float] = [0.0] * 7
+        self._delta_pose_offset_pending: list[float] = [0.0] * 7
         self._delta_pose_offset_prev_gello: list[float] | None = None
         # One-shot gello→arm alignment (docs/gello-arm-sync.md); not teleop.
         self._arm_sync_lock = threading.Lock()
@@ -319,6 +338,8 @@ class Orchestrator:
                 "error": st.get("error") or "home_joints_rad 未配置或格式错误",
                 **st,
             }
+        if getattr(self, "_delta_pose_offset_configured", False):
+            self.clear_delta_pose_offset()
         out = self.arm_command(
             agent_id=agent_id,
             joints_rad=list(st["home_joints_rad"]),
@@ -328,6 +349,7 @@ class Orchestrator:
             v_norm_rad_s=v_norm_rad_s,
             jerk_seg_frac=jerk_seg_frac,
             accel_seg_frac=accel_seg_frac,
+            apply_gello_bias=False,
         )
         out = dict(out)
         out["home"] = self.arm_home_status()
@@ -474,11 +496,9 @@ class Orchestrator:
                     f"[sensors-dcs] pi05 decode failed ({recv_fmt}): {decoded.get('error')}",
                     flush=True,
                 )
-            # Dim 7 = gripper position_norm. Deferred to abs-ramp: same S-curve α
-            # as joints (interpolated every waypoint, not on step).
+            # Dim 7 = gripper position_norm. Not sent on step: the abs ramp
+            # writes it, and adds the live Gello grip bias whenever that bias moves.
             grip = self._next_state_grip(ns)
-            if grip is not None:
-                grip = float(grip) + float(self.effective_delta_pose_offset()[6])
             out["next_grip"] = grip
             if grip is None:
                 out["grip_ok"] = False
@@ -490,7 +510,7 @@ class Orchestrator:
                 out["grip_error"] = None
                 print(
                     f"[sensors-dcs] pi05 grip deferred  position_norm={grip} "
-                    f"(one-shot at abs-ramp start)",
+                    f"(abs-ramp, plus live gello grip bias)",
                     flush=True,
                 )
         else:
@@ -570,7 +590,7 @@ class Orchestrator:
                 "joints_rad": joints,
                 "goal_xyzrpy": goal,
             }
-            return self._apply_delta_pose_offset(decoded, recv_fmt=fmt)
+            return self._finish_decoded_goal(decoded, recv_fmt=fmt)
 
         if fmt == "delta_pose":
             cur = self._current_tcp_xyzrpy()
@@ -590,38 +610,57 @@ class Orchestrator:
                     "joints_rad": None,
                     "goal_xyzrpy": None,
                 }
-            ik = self._xyzrpy_to_joints(abs_pose)
-            ik["goal_xyzrpy"] = abs_pose
-            return self._apply_delta_pose_offset(ik, recv_fmt=fmt)
+            # IK once in _apply, after optional reinforce offset (zeros included).
+            return self._finish_decoded_goal(
+                {
+                    "ok": True,
+                    "error": None,
+                    "joints_rad": None,
+                    "goal_xyzrpy": [float(x) for x in abs_pose[:6]],
+                },
+                recv_fmt=fmt,
+            )
 
-        # pose (absolute TCP)
-        ik = self._xyzrpy_to_joints(list(next_state)[:6])
-        if ik.get("ok"):
-            ik["goal_xyzrpy"] = [float(next_state[i]) for i in range(6)]
-        else:
-            ik["goal_xyzrpy"] = None
-        return self._apply_delta_pose_offset(ik, recv_fmt=fmt)
+        # pose (absolute TCP): no IK until offset is composed (identity if zero).
+        try:
+            goal = [float(next_state[i]) for i in range(6)]
+        except (TypeError, ValueError):
+            return {
+                "ok": False,
+                "error": "next_state pose not numeric",
+                "joints_rad": None,
+                "goal_xyzrpy": None,
+            }
+        if any(x != x or abs(x) == float("inf") for x in goal):
+            return {
+                "ok": False,
+                "error": "next_state pose non-finite",
+                "joints_rad": None,
+                "goal_xyzrpy": None,
+            }
+        return self._finish_decoded_goal(
+            {
+                "ok": True,
+                "error": None,
+                "joints_rad": None,
+                "goal_xyzrpy": goal,
+            },
+            recv_fmt=fmt,
+        )
 
-    @staticmethod
-    def _offset6_active(off6: list[float], *, eps: float = 1e-9) -> bool:
-        return any(abs(float(x)) > eps for x in off6[:6])
-
-    def _apply_delta_pose_offset(
+    def _finish_decoded_goal(
         self,
         decoded: dict[str, Any],
         *,
         recv_fmt: str,
     ) -> dict[str, Any]:
-        """Compose effective reinforce offset onto a decoded abs goal (or joints)."""
-        from sensors_dcs.arm_pose import compose_delta_xyzrpy, joints_rad_to_xyzrpy
+        """IK a decoded absolute TCP goal. Gello bias is not applied here."""
+        from sensors_dcs.arm_pose import joints_rad_to_xyzrpy
 
         if not decoded.get("ok"):
             return decoded
-        off = self.effective_delta_pose_offset()
-        off6 = [float(off[i]) for i in range(6)]
-        if not self._offset6_active(off6):
+        if recv_fmt == "joints" and decoded.get("joints_rad") is not None:
             return decoded
-
         goal = decoded.get("goal_xyzrpy")
         if goal is None and recv_fmt == "joints":
             joints = decoded.get("joints_rad")
@@ -631,39 +670,33 @@ class Orchestrator:
             return {
                 **decoded,
                 "ok": False,
-                "error": decoded.get("error")
-                or "cannot apply delta_pose_offset without abs TCP goal",
+                "error": decoded.get("error") or "cannot IK without abs TCP goal",
                 "joints_rad": None,
             }
-        try:
-            composed = compose_delta_xyzrpy(list(goal)[:6], off6)
-        except Exception as e:  # noqa: BLE001
-            return {
-                **decoded,
-                "ok": False,
-                "error": f"delta_pose_offset compose failed: {e}",
-                "joints_rad": None,
-                "goal_xyzrpy": None,
-            }
-        ik = self._xyzrpy_to_joints(composed)
-        ik["goal_xyzrpy"] = composed
-        ik["delta_pose_offset_applied"] = list(off)
+        ik = self._xyzrpy_to_joints([float(x) for x in list(goal)[:6]])
+        if ik.get("ok"):
+            ik["goal_xyzrpy"] = [float(x) for x in list(goal)[:6]]
         return ik
+
+    def joints_plus_gello_bias(self, joints6: list[float]) -> list[float]:
+        """Add the live cumulative joint bias. Used at each absolute-ramp write."""
+        bias = self.effective_delta_pose_offset()
+        return [float(joints6[i]) + float(bias[i]) for i in range(6)]
 
     def delta_pose_offset_status(self) -> dict[str, Any]:
         with getattr(self, "_delta_pose_offset_lock", threading.Lock()):
             configured = bool(getattr(self, "_delta_pose_offset_configured", False))
             enabled = bool(getattr(self, "_delta_pose_offset_enabled", False)) and configured
-            offset = list(getattr(self, "_delta_pose_offset", [0.0] * 7))
-            if len(offset) < 7:
-                offset = (offset + [0.0] * 7)[:7]
+            offset = _offset7(getattr(self, "_delta_pose_offset", None))
+            pending = _offset7(getattr(self, "_delta_pose_offset_pending", None))
             prev = getattr(self, "_delta_pose_offset_prev_gello", None)
             effective = list(offset) if enabled else [0.0] * 7
             return {
                 "configured": configured,
                 "enabled": enabled,
-                "offset": [float(x) for x in offset[:7]],
-                "effective": [float(x) for x in effective[:7]],
+                "offset": offset,
+                "pending": pending,
+                "effective": effective,
                 "prev_set": prev is not None,
             }
 
@@ -673,10 +706,25 @@ class Orchestrator:
             enabled = bool(getattr(self, "_delta_pose_offset_enabled", False))
             if not configured or not enabled:
                 return [0.0] * 7
-            off = list(getattr(self, "_delta_pose_offset", [0.0] * 7))
-            if len(off) < 7:
-                off = (off + [0.0] * 7)[:7]
-            return [float(x) for x in off[:7]]
+            return _offset7(getattr(self, "_delta_pose_offset", None))
+
+    def _reset_delta_pose_offset_locked(self) -> None:
+        """Drop the cumulative offset and treat the current Gello pose as zero."""
+        self._delta_pose_offset = [0.0] * 7
+        self._delta_pose_offset_pending = [0.0] * 7
+        self._delta_pose_offset_prev_gello = self._live_gello_joints7()
+
+    def clear_delta_pose_offset(self) -> dict[str, Any]:
+        """Zero the cumulative offset. Next absolute targets no longer include it."""
+        if not getattr(self, "_delta_pose_offset_configured", False):
+            return {
+                "ok": False,
+                "error": "gello_reinforce not configured",
+                **self.delta_pose_offset_status(),
+            }
+        with self._delta_pose_offset_lock:
+            self._reset_delta_pose_offset_locked()
+        return {"ok": True, **self.delta_pose_offset_status()}
 
     def set_delta_pose_offset(self, offset: list[float] | None) -> dict[str, Any]:
         if not getattr(self, "_delta_pose_offset_configured", False):
@@ -699,6 +747,8 @@ class Orchestrator:
             }
         with self._delta_pose_offset_lock:
             self._delta_pose_offset = vals
+            self._delta_pose_offset_pending = [0.0] * 7
+            self._delta_pose_offset_prev_gello = self._live_gello_joints7()
         return {"ok": True, **self.delta_pose_offset_status()}
 
     def set_delta_pose_offset_enabled(self, enabled: bool) -> dict[str, Any]:
@@ -708,16 +758,11 @@ class Orchestrator:
                 "error": "gello_reinforce not configured",
                 **self.delta_pose_offset_status(),
             }
-        want = bool(enabled)
         with self._delta_pose_offset_lock:
-            self._delta_pose_offset_enabled = want
-            if want:
-                # Re-arm frame-delta integrator: zero offset, refresh prev.
-                self._delta_pose_offset = [0.0] * 7
-                self._delta_pose_offset_prev_gello = self._live_gello_joints7()
-            else:
-                # Keep stored offset for UI, but effective path is zeros.
-                pass
+            self._delta_pose_offset_enabled = bool(enabled)
+            # Both edges start from zero. Disable must not leave a stale offset
+            # to be reapplied the next time the box is checked.
+            self._reset_delta_pose_offset_locked()
         return {"ok": True, **self.delta_pose_offset_status()}
 
     def _api_set_delta_pose_offset(
@@ -725,20 +770,25 @@ class Orchestrator:
         *,
         enabled: bool | None = None,
         offset: list[float] | None = None,
+        clear: bool | None = None,
     ) -> dict[str, Any]:
         """Combined POST handler for Infer UI / HTTP API."""
         if enabled is not None:
             out = self.set_delta_pose_offset_enabled(bool(enabled))
             if not out.get("ok"):
                 return out
-        if offset is not None:
+        if clear:
+            out = self.clear_delta_pose_offset()
+            if not out.get("ok"):
+                return out
+        elif offset is not None:
             out = self.set_delta_pose_offset(offset)
             if not out.get("ok"):
                 return out
-        if enabled is None and offset is None:
+        if enabled is None and offset is None and not clear:
             return {
                 "ok": False,
-                "error": "enabled and/or offset required",
+                "error": "enabled, offset, or clear required",
                 **self.delta_pose_offset_status(),
             }
         return {"ok": True, **self.delta_pose_offset_status()}
@@ -765,9 +815,7 @@ class Orchestrator:
         return None
 
     def note_gello_reinforce_sample(self, joints7: list[float]) -> dict[str, Any]:
-        """Frame-to-frame SET of delta_pose_offset from Gello joints (cal space)."""
-        from sensors_dcs.arm_pose import joints_rad_to_xyzrpy, relative_xyzrpy
-
+        """Fold a Gello frame joint delta into the cumulative bias."""
         try:
             cur = [float(joints7[i]) for i in range(7)]
         except (TypeError, ValueError, IndexError):
@@ -791,40 +839,34 @@ class Orchestrator:
             prev = self._delta_pose_offset_prev_gello
             if prev is None:
                 self._delta_pose_offset_prev_gello = list(cur)
-                self._delta_pose_offset = [0.0] * 7
                 return {
                     "ok": True,
                     "skipped": False,
                     "armed_prev": True,
-                    "offset": [0.0] * 7,
-                }
-
-            pose_prev = joints_rad_to_xyzrpy(prev[:6])
-            pose_cur = joints_rad_to_xyzrpy(cur[:6])
-            if pose_prev is None or pose_cur is None:
-                self._delta_pose_offset_prev_gello = list(cur)
-                return {
-                    "ok": False,
-                    "error": "FK failed for gello reinforce delta",
-                    "skipped": False,
                     "offset": list(self._delta_pose_offset),
                 }
-            try:
-                dpose = relative_xyzrpy(pose_prev, pose_cur)
-            except Exception as e:  # noqa: BLE001
-                self._delta_pose_offset_prev_gello = list(cur)
-                return {
-                    "ok": False,
-                    "error": f"relative_xyzrpy failed: {e}",
-                    "skipped": False,
-                }
-            dgrip = float(cur[6]) - float(prev[6])
-            offset = [float(x) for x in dpose[:6]] + [dgrip]
-            # Compact finite values for UI / wire (avoid huge float noise).
-            offset = [round(float(x), 6) for x in offset]
-            self._delta_pose_offset = offset
+
+            pending = _offset7(self._delta_pose_offset_pending)
+            for i in range(7):
+                pending[i] += float(cur[i]) - float(prev[i])
+            folded = False
+            if _pending_ready(pending):
+                off = _offset7(self._delta_pose_offset)
+                self._delta_pose_offset = [
+                    round(float(off[i]) + float(pending[i]), 6) for i in range(7)
+                ]
+                self._delta_pose_offset_pending = [0.0] * 7
+                folded = True
+            else:
+                self._delta_pose_offset_pending = pending
             self._delta_pose_offset_prev_gello = list(cur)
-            return {"ok": True, "skipped": False, "offset": list(offset)}
+            return {
+                "ok": True,
+                "skipped": False,
+                "folded": folded,
+                "offset": list(self._delta_pose_offset),
+                "pending": list(self._delta_pose_offset_pending),
+            }
 
     def _next_state_to_joints(self, next_state: Any) -> dict[str, Any]:
         """IK TCP pose from pi05 ``next_state`` → arm ``joints_rad`` (pose recv)."""
@@ -2301,6 +2343,7 @@ class Orchestrator:
         jerk_seg_frac: float | None = None,
         accel_seg_frac: float | None = None,
         gripper_position_norm: float | None = None,
+        apply_gello_bias: bool = True,
     ) -> dict[str, Any]:
         """Timed **joint-space** ramp from live arm read → target joints.
 
@@ -2308,10 +2351,11 @@ class Orchestrator:
         - ``timing=fixed``: use ``duration_s`` as total T + same profile
           (legacy; gello sync / callers that pass only duration_s).
         Path is linear in q with shared α(t). Not Cartesian+IK.
-        Optional ``gripper_position_norm`` is written **once** at ramp start
-        (AG95 native speed). It is intentionally not interpolated inside the
-        joint waypoint loop — Modbus on that hot path stretches the period and
-        contends with gripper_read.
+        Optional ``gripper_position_norm`` is the policy grip. It is written
+        off the joint timing path (Modbus must not stretch periods). When
+        ``apply_gello_bias`` is set, later waypoints re-send
+        ``clamp(policy + bias[6])`` whenever that target moves, so a Gello
+        grip nudge during the ramp reaches the gripper before the ramp ends.
         """
         from sensors_dcs.agents.arm_agent import ArmAgent
         from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
@@ -2505,6 +2549,7 @@ class Orchestrator:
                 jerk_frac,
                 accel_frac,
                 grip_end,
+                bool(apply_gello_bias),
             ),
             daemon=True,
         )
@@ -2534,6 +2579,7 @@ class Orchestrator:
         jerk_seg_frac: float = 0.10,
         accel_seg_frac: float = 0.15,
         gripper_position_norm: float | None = None,
+        apply_gello_bias: bool = True,
     ) -> None:
         from sensors_dcs.agents.arm_agent import ArmAgent
         from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
@@ -2552,6 +2598,48 @@ class Orchestrator:
         completed = False
         grip_soft_error: str | None = None
         grip_ok: bool | None = None
+        last_g_sent: float | None = None
+        grip_threads: list[threading.Thread] = []
+        # Re-send only when the commanded norm actually moves. A still bias
+        # stays one Modbus write; a Gello nudge mid-ramp gets another.
+        grip_eps = 1e-3
+
+        def _biased_grip() -> float | None:
+            if gripper_position_norm is None:
+                return None
+            g = float(gripper_position_norm)
+            if apply_gello_bias:
+                g += float(self.effective_delta_pose_offset()[6])
+            return max(0.0, min(1.0, g))
+
+        def _kick_grip(g_target: float) -> None:
+            def _run() -> None:
+                nonlocal grip_ok, grip_soft_error
+                gcmd = self.gripper_command(
+                    position_norm=g_target,
+                    allow_during_sync=True,
+                )
+                grip_ok = bool(gcmd.get("ok"))
+                if not grip_ok:
+                    grip_soft_error = str(
+                        gcmd.get("error") or "gripper write failed"
+                    )
+                else:
+                    grip_soft_error = None
+
+            th = threading.Thread(target=_run, name="abs-ramp-grip", daemon=True)
+            th.start()
+            grip_threads.append(th)
+
+        def _maybe_kick_grip() -> None:
+            nonlocal last_g_sent
+            g_now = _biased_grip()
+            if g_now is None:
+                return
+            if last_g_sent is not None and abs(g_now - last_g_sent) < grip_eps:
+                return
+            last_g_sent = g_now
+            _kick_grip(g_now)
 
         try:
             reader = self.agents.get(arm_id)
@@ -2559,28 +2647,6 @@ class Orchestrator:
             if not isinstance(reader, ArmAgent) or not isinstance(writer, ArmWriteAgent):
                 final_error = "abs ramp agents missing"
             else:
-                # Fire grip off the joint timing path (Modbus must not stretch periods).
-                if gripper_position_norm is not None:
-                    g_target = float(gripper_position_norm)
-
-                    def _grip_once() -> None:
-                        nonlocal grip_ok, grip_soft_error
-                        gcmd = self.gripper_command(
-                            position_norm=g_target,
-                            allow_during_sync=True,
-                        )
-                        grip_ok = bool(gcmd.get("ok"))
-                        if not grip_ok:
-                            grip_soft_error = str(
-                                gcmd.get("error") or "gripper write failed"
-                            )
-
-                    threading.Thread(
-                        target=_grip_once,
-                        name="abs-ramp-grip",
-                        daemon=True,
-                    ).start()
-
                 next_t = time.perf_counter()
                 for k, qk in enumerate(path, start=1):
                     if self._abs_ramp_stop.is_set() or self._stop.is_set():
@@ -2589,8 +2655,14 @@ class Orchestrator:
                     ref = self._joints6_from_ring(reader) or (
                         path[k - 2] if k >= 2 else qa0
                     )
+                    q_cmd = list(qk)
+                    if apply_gello_bias:
+                        q_cmd = self.joints_plus_gello_bias(q_cmd)
+                    # Grip tracks bias on the same ticks as joints, but the
+                    # Modbus write itself stays off this deadline.
+                    _maybe_kick_grip()
                     result = writer.command(
-                        joints_rad=list(qk), reference_joints_rad=list(ref)
+                        joints_rad=q_cmd, reference_joints_rad=list(ref)
                     )
                     with self._abs_ramp_lock:
                         self._abs_ramp_index = k
@@ -2619,21 +2691,29 @@ class Orchestrator:
                     completed = True
                     final_message = f"绝对下发完成：{n} 点已写入（关节空间/{profile}）"
                     if gripper_position_norm is not None:
-                        # Brief wait so async grip result can land in the summary.
-                        for _ in range(20):
-                            if grip_ok is not None or grip_soft_error:
-                                break
-                            time.sleep(0.01)
+                        deadline = time.perf_counter() + 0.25
+                        for th in grip_threads:
+                            remain = deadline - time.perf_counter()
+                            if remain > 0:
+                                th.join(timeout=remain)
+                        shown = (
+                            last_g_sent
+                            if last_g_sent is not None
+                            else float(gripper_position_norm)
+                        )
                         if grip_ok:
-                            final_message += (
-                                f"；夹爪一次下发 {float(gripper_position_norm):g}"
-                            )
+                            final_message += f"；夹爪下发 {shown:g}"
                         elif grip_soft_error:
                             final_message += f"（夹爪软失败: {grip_soft_error}）"
                         else:
-                            final_message += (
-                                f"；夹爪已异步下发 {float(gripper_position_norm):g}"
-                            )
+                            final_message += f"；夹爪已异步下发 {shown:g}"
+                    # This interpolated command is done. Drop the bias so the
+                    # next absolute target is not shifted by the same delta again.
+                    if (
+                        apply_gello_bias
+                        and getattr(self, "_delta_pose_offset_configured", False)
+                    ):
+                        self.clear_delta_pose_offset()
         except Exception as e:  # noqa: BLE001 — surface to status
             final_error = f"abs ramp exception: {e}"
 
@@ -2677,6 +2757,7 @@ class Orchestrator:
         jerk_seg_frac: float | None = None,
         accel_seg_frac: float | None = None,
         gripper_position_norm: float | None = None,
+        apply_gello_bias: bool = True,
     ) -> dict[str, Any]:
         """Dispatch arm/disarm/jog to ``arm_write``; absolute joints use timed ramp."""
         import math
@@ -2739,6 +2820,8 @@ class Orchestrator:
             self.set_gello_arm_teleop(enabled=False)
             self.set_gello_arm_sync(enabled=False)
             self.cancel_arm_abs_ramp(message="因 Disarm/Estop 取消绝对下发")
+            if getattr(self, "_delta_pose_offset_configured", False):
+                self.clear_delta_pose_offset()
             return agent.command(disarm=bool(disarm or stop), stop=True)
 
         if self._arm_teleop_enabled:
@@ -2859,6 +2942,7 @@ class Orchestrator:
                 jerk_seg_frac=jerk_seg_frac,
                 accel_seg_frac=accel_seg_frac,
                 gripper_position_norm=gripper_position_norm,
+                apply_gello_bias=apply_gello_bias,
             )
 
         return {"ok": False, "error": "arm, disarm/stop, joints_rad, or jog_joint required"}

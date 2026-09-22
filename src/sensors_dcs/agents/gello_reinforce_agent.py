@@ -1,4 +1,4 @@
-"""Gello frame-delta → Orchestrator delta_pose_offset (short-lived reinforce)."""
+"""Gello frame joint-delta → cumulative bias added on each absolute-ramp write."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ class _ReinforceNullSensor:
 
 
 class GelloReinforceAgent(BaseAgent):
-    """Sample peer Gello joints; push frame-to-frame TCP delta into Orchestrator."""
+    """Sample peer Gello joints; fold frame-to-frame joint deltas into the cumulative bias."""
 
     kind = "gello_reinforce"
 

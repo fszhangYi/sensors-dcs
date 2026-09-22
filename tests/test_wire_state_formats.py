@@ -59,11 +59,13 @@ def test_decode_delta_composes(monkeypatch) -> None:
     monkeypatch.setattr(
         rt, "_current_tcp_xyzrpy", lambda: [0.4, 0.0, 0.3, 0.0, 0.0, 0.0]
     )
-    monkeypatch.setattr(
-        rt,
-        "_xyzrpy_to_joints",
-        lambda xyz: {"ok": True, "joints_rad": [1.0] * 6, "error": None},
-    )
+    calls = {"n": 0}
+
+    def _ik(xyz):
+        calls["n"] += 1
+        return {"ok": True, "joints_rad": [1.0] * 6, "error": None}
+
+    monkeypatch.setattr(rt, "_xyzrpy_to_joints", _ik)
     out = Orchestrator._decode_next_state(
         rt, [0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5], "delta_pose"
     )
@@ -71,3 +73,4 @@ def test_decode_delta_composes(monkeypatch) -> None:
     assert out["joints_rad"] == [1.0] * 6
     assert abs(out["goal_xyzrpy"][0] - 0.41) < 1e-9
     assert math.isfinite(out["goal_xyzrpy"][2])
+    assert calls["n"] == 1

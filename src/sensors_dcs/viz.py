@@ -36,6 +36,7 @@ class GripperGelloSyncBody(BaseModel):
 class DeltaPoseOffsetBody(BaseModel):
     enabled: bool | None = None
     offset: list[float] | None = None
+    clear: bool | None = None
 
 
 class ArmCommandBody(BaseModel):
@@ -1495,10 +1496,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .inf-delta-grid {
       display: grid;
-      grid-template-columns: repeat(7, minmax(0, 1fr));
-      gap: 0.35rem 0.4rem;
+      /* 3×3: dx dy dz / rx ry rz / g — 7 cols overflow the ≤26rem infer panel. */
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.35rem 0.45rem;
       margin: 0.35rem 0 0.15rem;
-      max-width: 42rem;
+      width: 100%;
     }
     .inf-delta-grid label {
       display: flex;
@@ -1517,9 +1519,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
       text-align: right;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 0.78rem;
-    }
-    @media (max-width: 720px) {
-      .inf-delta-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     }
     /* Record chrome folded into left Infer panel */
     .inf-pi05-sec-rec { gap: 0.4rem; }
@@ -2315,7 +2314,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <span data-i18n="infer.chunk_skip">跳点</span>
             <input type="number" id="infChunkSkip" min="1" max="15" step="1" value="1" />
           </label>
-          <button type="button" id="infPi05Loop" data-i18n="infer.loop" disabled>LOOP</button>
+          <button type="button" id="infPi05Loop" data-i18n="infer.loop" data-i18n-title="infer.kbd_loop_tip" title="快捷键 L" disabled>LOOP (L)</button>
           <button type="button" id="infPi05LoopPause" data-i18n="infer.loop_pause" disabled>LOOP 暂停</button>
           <button type="button" id="infPi05LoopResume" data-i18n="infer.loop_resume" disabled>LOOP 继续</button>
           <span class="inf-elapsed" id="infLoopElapsed" data-i18n-title="infer.elapsed_hint" title="LOOP 执行计时（暂停不计）">—</span>
@@ -2388,20 +2387,19 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <section class="inf-pi05-sec" aria-labelledby="infSecDeltaOff">
         <h3 class="inf-pi05-sec-title" id="infSecDeltaOff" data-i18n="infer.delta_pose_offset_sec">Gello 强制干预</h3>
         <div class="inf-pi05-row">
-          <label class="quick-collect" data-i18n-title="infer.delta_pose_offset_enable_tip" title="启用后，挪动 Gello 产生的帧间 delta 会瞬时叠到 serve 解码目标上">
+          <label class="quick-collect" data-i18n-title="infer.delta_pose_offset_enable_tip" title="启用后，Gello 帧间关节差累成一份偏移，绝对下发的每个路点写出去之前加上它">
             <input type="checkbox" id="infDeltaPoseOffsetEnable" disabled />
-            <span data-i18n="infer.delta_pose_offset_enable">启用瞬时 offset</span>
+            <span data-i18n="infer.delta_pose_offset_enable">启用累计关节差</span>
           </label>
-          <button type="button" id="infDeltaPoseOffsetApply" data-i18n="infer.delta_pose_offset_apply" disabled>应用</button>
-          <button type="button" id="infDeltaPoseOffsetZero" data-i18n="infer.delta_pose_offset_zero" disabled>清零</button>
+          <button type="button" id="infDeltaPoseOffsetZero" data-i18n="infer.delta_pose_offset_zero" data-i18n-title="infer.delta_pose_offset_zero_tip" title="把当前 Gello 关节当作新零点。之后的绝对下发不再带这段关节差" disabled>清零</button>
         </div>
-        <div class="inf-delta-grid" id="infDeltaPoseOffsetGrid" aria-label="delta pose offset">
-          <label><span>dx</span><input type="number" class="inf-delta-cell" data-di="0" step="0.0001" value="0" disabled /></label>
-          <label><span>dy</span><input type="number" class="inf-delta-cell" data-di="1" step="0.0001" value="0" disabled /></label>
-          <label><span>dz</span><input type="number" class="inf-delta-cell" data-di="2" step="0.0001" value="0" disabled /></label>
-          <label><span>rx</span><input type="number" class="inf-delta-cell" data-di="3" step="0.001" value="0" disabled /></label>
-          <label><span>ry</span><input type="number" class="inf-delta-cell" data-di="4" step="0.001" value="0" disabled /></label>
-          <label><span>rz</span><input type="number" class="inf-delta-cell" data-di="5" step="0.001" value="0" disabled /></label>
+        <div class="inf-delta-grid" id="infDeltaPoseOffsetGrid" aria-label="delta joints">
+          <label><span>j1</span><input type="number" class="inf-delta-cell" data-di="0" step="0.001" value="0" disabled /></label>
+          <label><span>j2</span><input type="number" class="inf-delta-cell" data-di="1" step="0.001" value="0" disabled /></label>
+          <label><span>j3</span><input type="number" class="inf-delta-cell" data-di="2" step="0.001" value="0" disabled /></label>
+          <label><span>j4</span><input type="number" class="inf-delta-cell" data-di="3" step="0.001" value="0" disabled /></label>
+          <label><span>j5</span><input type="number" class="inf-delta-cell" data-di="4" step="0.001" value="0" disabled /></label>
+          <label><span>j6</span><input type="number" class="inf-delta-cell" data-di="5" step="0.001" value="0" disabled /></label>
           <label><span>g</span><input type="number" class="inf-delta-cell" data-di="6" step="0.001" value="0" disabled /></label>
         </div>
         <span class="hint" id="infDeltaPoseOffsetHint" data-i18n="infer.delta_pose_offset_unconfigured">未配置 gello_reinforce</span>
@@ -3403,7 +3401,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const infArmAccelFrac = document.getElementById('infArmAccelFrac');
     const infArmProg = document.getElementById('infArmProg');
     const infDeltaPoseOffsetEnable = document.getElementById('infDeltaPoseOffsetEnable');
-    const infDeltaPoseOffsetApply = document.getElementById('infDeltaPoseOffsetApply');
     const infDeltaPoseOffsetZero = document.getElementById('infDeltaPoseOffsetZero');
     const infDeltaPoseOffsetHint = document.getElementById('infDeltaPoseOffsetHint');
     const infDeltaPoseOffsetCells = Array.from(
@@ -3687,8 +3684,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
     async function fillInfArmJointsFromGoalFallback(r) {
       if (!r || r.ok === false) return false;
       if (fillInfArmJointsFromStep(r)) return true;
-      // joints recv: next_state already is joints — fill directly
-      if (r.next_state_format === 'joints' && Array.isArray(r.next_state) && r.next_state.length >= 6) {
+      let xyz = null;
+      if (Array.isArray(r.goal_xyzrpy) && r.goal_xyzrpy.length >= 6) {
+        xyz = r.goal_xyzrpy;
+      } else if (r.next_state_format === 'joints' && Array.isArray(r.next_state) && r.next_state.length >= 6) {
         const ok = fillInfArmJointsFromStep({
           next_joints_rad: r.next_state.slice(0, 6),
           ik_ok: true,
@@ -3699,10 +3698,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
           r.ik_error = null;
         }
         return ok;
-      }
-      let xyz = null;
-      if (Array.isArray(r.goal_xyzrpy) && r.goal_xyzrpy.length >= 6) {
-        xyz = r.goal_xyzrpy;
       } else if (Array.isArray(r.next_state) && r.next_state.length >= 6
         && r.next_state_format !== 'joints') {
         xyz = r.next_state;
@@ -5518,6 +5513,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
     /** One controlled LOOP until term/reject/error/stop. Does not clear pi05LoopRunning on term. */
     async function runPi05LoopOnce(gen, roundIdx, roundTotal) {
       pi05LoopStepN = 0;
+      if (window.__deltaPoseOffset && window.__deltaPoseOffset.configured) {
+        try { await postDeltaPoseOffset({ clear: true }); } catch (e) {}
+      }
       try {
         while (pi05LoopRunning && gen === pi05LoopGen) {
           if (!(await waitWhileLoopPaused(gen))) {
@@ -5932,7 +5930,6 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (!deltaPoseOffsetEditing) {
         writeDeltaPoseOffsetCells(st && st.offset);
       }
-      if (infDeltaPoseOffsetApply) infDeltaPoseOffsetApply.disabled = !configured;
       if (infDeltaPoseOffsetZero) infDeltaPoseOffsetZero.disabled = !configured;
       if (infDeltaPoseOffsetHint) {
         if (!configured) {
@@ -5987,24 +5984,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
         await postDeltaPoseOffset({ enabled: !!infDeltaPoseOffsetEnable.checked });
       });
     }
-    if (infDeltaPoseOffsetApply) {
-      infDeltaPoseOffsetApply.addEventListener('click', async () => {
-        const vals = readDeltaPoseOffsetCells();
-        if (!vals) {
-          if (infDeltaPoseOffsetHint) {
-            infDeltaPoseOffsetHint.textContent = t('infer.delta_pose_offset_bad');
-          }
-          return;
-        }
-        deltaPoseOffsetEditing = false;
-        await postDeltaPoseOffset({ offset: vals });
-      });
-    }
     if (infDeltaPoseOffsetZero) {
       infDeltaPoseOffsetZero.addEventListener('click', async () => {
         deltaPoseOffsetEditing = false;
         writeDeltaPoseOffsetCells([0, 0, 0, 0, 0, 0, 0]);
-        await postDeltaPoseOffset({ offset: [0, 0, 0, 0, 0, 0, 0] });
+        await postDeltaPoseOffset({ clear: true });
       });
     }
     fetch('/api/pi05/delta-pose-offset').then((r) => r.json()).then((st) => {
@@ -9664,6 +9648,7 @@ def create_viz_app(
                 "configured": False,
                 "enabled": False,
                 "offset": [0.0] * 7,
+                "pending": [0.0] * 7,
                 "effective": [0.0] * 7,
                 "prev_set": False,
             }
@@ -9678,6 +9663,7 @@ def create_viz_app(
             delta_pose_offset_set,
             enabled=body.enabled,
             offset=body.offset,
+            clear=body.clear,
         )
 
     @app.get("/api/arm/home")

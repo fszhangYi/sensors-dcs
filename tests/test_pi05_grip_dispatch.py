@@ -1,4 +1,4 @@
-"""pi05 next_state grip is deferred to a one-shot write at abs-ramp start."""
+"""pi05 next_state grip is written during the abs ramp, not on step."""
 
 from __future__ import annotations
 
@@ -243,3 +243,107 @@ def test_abs_ramp_without_gripper_skips_grip(monkeypatch) -> None:
     assert len(joint_writes) == 5
     assert grip_calls == []
     assert rt._abs_ramp_phase == "completed"
+
+
+def test_abs_ramp_gripper_tracks_bias_mid_ramp(monkeypatch) -> None:
+    """A Gello grip nudge after the ramp has started must be written again."""
+    grip_calls: list[dict] = []
+    rt, joint_writes = _make_ramp_rt(
+        monkeypatch,
+        grip_fn=lambda **kw: (grip_calls.append(kw) or {"ok": True}),
+    )
+
+    def _eff() -> list[float]:
+        bias = [0.0] * 7
+        if int(getattr(rt, "_abs_ramp_index", 0)) >= 4:
+            bias[6] = 0.12
+        return bias
+
+    monkeypatch.setattr(rt, "effective_delta_pose_offset", _eff)
+    n = 10
+    Orchestrator._arm_abs_ramp_loop(
+        rt,
+        "arm-r",
+        "arm-w",
+        [0.0] * 6,
+        [0.2, 0, 0, 0, 0, 0],
+        n,
+        100.0,
+        "seven_segment",
+        0.10,
+        0.15,
+        0.50,
+    )
+    norms = [float(c["position_norm"]) for c in grip_calls]
+    assert len(joint_writes) == n
+    assert len(norms) == 2
+    assert norms[0] == 0.50
+    assert abs(norms[1] - 0.62) < 1e-9
+    assert rt._abs_ramp_phase == "completed"
+
+
+def test_abs_ramp_complete_clears_gello_bias(monkeypatch) -> None:
+    import threading
+
+    rt, _joint_writes = _make_ramp_rt(
+        monkeypatch,
+        grip_fn=lambda **kw: {"ok": True},
+    )
+    rt._delta_pose_offset_lock = threading.Lock()
+    rt._delta_pose_offset_configured = True
+    rt._delta_pose_offset_enabled = True
+    rt._delta_pose_offset = [0.2] * 7
+    rt._delta_pose_offset_pending = [0.01] * 7
+    rt._delta_pose_offset_prev_gello = [0.0] * 7
+    monkeypatch.setattr(rt, "_live_gello_joints7", lambda: [0.4] * 7)
+    Orchestrator._arm_abs_ramp_loop(
+        rt,
+        "arm-r",
+        "arm-w",
+        [0.0] * 6,
+        [0.2, 0, 0, 0, 0, 0],
+        4,
+        100.0,
+        "linear",
+        0.10,
+        0.15,
+        0.20,
+        True,
+    )
+    assert rt._abs_ramp_phase == "completed"
+    assert rt._delta_pose_offset == [0.0] * 7
+    assert rt._delta_pose_offset_pending == [0.0] * 7
+    assert rt._delta_pose_offset_prev_gello == [0.4] * 7
+
+
+def test_abs_ramp_without_bias_does_not_clear(monkeypatch) -> None:
+    """Home passes apply_gello_bias=False and must not wipe a fresh delta."""
+    import threading
+
+    rt, _joint_writes = _make_ramp_rt(
+        monkeypatch,
+        grip_fn=lambda **kw: {"ok": True},
+    )
+    rt._delta_pose_offset_lock = threading.Lock()
+    rt._delta_pose_offset_configured = True
+    rt._delta_pose_offset_enabled = True
+    rt._delta_pose_offset = [0.2] * 7
+    rt._delta_pose_offset_pending = [0.01] * 7
+    rt._delta_pose_offset_prev_gello = [0.0] * 7
+    Orchestrator._arm_abs_ramp_loop(
+        rt,
+        "arm-r",
+        "arm-w",
+        [0.0] * 6,
+        [0.1, 0, 0, 0, 0, 0],
+        3,
+        100.0,
+        "linear",
+        0.10,
+        0.15,
+        None,
+        False,
+    )
+    assert rt._abs_ramp_phase == "completed"
+    assert rt._delta_pose_offset == [0.2] * 7
+    assert rt._delta_pose_offset_pending == [0.01] * 7
