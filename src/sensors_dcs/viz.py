@@ -1430,6 +1430,138 @@ PREVIEW_HTML = """<!DOCTYPE html>
       border-radius: 8px;
       background: #0d1117;
     }
+    .pp-align-metrics {
+      display: grid;
+      gap: 0.55rem;
+      min-width: 0;
+    }
+    .pp-align-metrics[hidden] { display: none !important; }
+    .pp-align-score-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.65rem 1rem;
+      align-items: stretch;
+    }
+    .pp-align-score {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 0.15rem;
+      min-width: 7.5rem;
+      padding: 0.45rem 0.7rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--accent-dim) 45%, var(--input-bg));
+    }
+    .pp-align-score-label {
+      font-size: 0.72rem;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+    }
+    .pp-align-score-value {
+      font-size: 1.55rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.1;
+      color: var(--accent);
+    }
+    .pp-align-grade {
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+    .pp-align-grade[data-grade="excellent"] { color: var(--ok); }
+    .pp-align-grade[data-grade="good"] { color: var(--accent); }
+    .pp-align-grade[data-grade="fair"] { color: var(--warn); }
+    .pp-align-grade[data-grade="poor"] { color: #f87171; }
+    .pp-align-kpis {
+      flex: 1 1 14rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+      gap: 0.4rem;
+      min-width: 0;
+    }
+    .pp-align-kpi {
+      padding: 0.4rem 0.55rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--chrome, var(--input-bg));
+      min-width: 0;
+    }
+    .pp-align-kpi .k {
+      display: block;
+      font-size: 0.68rem;
+      color: var(--muted);
+      margin-bottom: 0.12rem;
+    }
+    .pp-align-kpi .v {
+      font-size: 0.92rem;
+      font-weight: 650;
+      font-variant-numeric: tabular-nums;
+      color: var(--text);
+      word-break: break-word;
+    }
+    .pp-align-agent-wrap { overflow-x: auto; min-width: 0; }
+    .pp-align-agent-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.74rem;
+      font-variant-numeric: tabular-nums;
+    }
+    .pp-align-agent-table[hidden] { display: none !important; }
+    .pp-align-agent-table th,
+    .pp-align-agent-table td {
+      padding: 0.28rem 0.4rem;
+      border-bottom: 1px solid var(--border);
+      text-align: right;
+      white-space: nowrap;
+    }
+    .pp-align-agent-table th:first-child,
+    .pp-align-agent-table td:first-child {
+      text-align: left;
+    }
+    .pp-align-agent-table th {
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .pp-align-agent-table td.master-tag { color: var(--accent); }
+    .pp-align-principle {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.35rem 0.55rem 0.45rem;
+      background: color-mix(in srgb, var(--input-bg) 88%, transparent);
+    }
+    .pp-align-principle summary {
+      cursor: pointer;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--text);
+      list-style: none;
+    }
+    .pp-align-principle summary::-webkit-details-marker { display: none; }
+    .pp-align-principle summary::before {
+      content: "▸ ";
+      color: var(--muted);
+      font-weight: 400;
+    }
+    .pp-align-principle[open] summary::before { content: "▾ "; }
+    .pp-align-principle-body {
+      margin-top: 0.35rem;
+      font-size: 0.74rem;
+      line-height: 1.45;
+      color: var(--muted);
+    }
+    .pp-align-principle-body p { margin: 0 0 0.35rem; color: var(--text); }
+    .pp-align-principle-body ul {
+      margin: 0;
+      padding-left: 1.1rem;
+    }
+    .pp-align-principle-body li { margin: 0.15rem 0; }
+    .pp-align-principle-body b { color: var(--text); font-weight: 600; }
+    .pp-align-principle-body code {
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 0.9em;
+      color: var(--accent);
+    }
     pre#ppLog {
       margin: 0;
       padding: 0.65rem 0.85rem;
@@ -2799,6 +2931,44 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <figcaption data-i18n="pp.align_fig_caption">对齐效果（filter）</figcaption>
             <img id="ppAlignImg" alt="filter alignment overview" />
             <p class="pp-hint" id="ppAlignHint" hidden></p>
+            <div class="pp-align-metrics" id="ppAlignMetrics" hidden>
+              <div class="pp-align-score-row">
+                <div class="pp-align-score" id="ppAlignScore">
+                  <span class="pp-align-score-label" data-i18n="pp.align_score_label">对齐评分</span>
+                  <strong class="pp-align-score-value" id="ppAlignScoreValue">—</strong>
+                  <span class="pp-align-grade" id="ppAlignGrade"></span>
+                </div>
+                <div class="pp-align-kpis" id="ppAlignKpis"></div>
+              </div>
+              <div class="pp-align-agent-wrap">
+                <table class="pp-align-agent-table" id="ppAlignAgentTable" hidden>
+                  <thead>
+                    <tr>
+                      <th data-i18n="pp.align_th_agent">传感器</th>
+                      <th data-i18n="pp.align_th_mean">mean</th>
+                      <th data-i18n="pp.align_th_p50">p50</th>
+                      <th data-i18n="pp.align_th_p95">p95</th>
+                      <th data-i18n="pp.align_th_max_dt">阈值</th>
+                      <th data-i18n="pp.align_th_sync">sync</th>
+                      <th data-i18n="pp.align_th_budget">budget</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ppAlignAgentBody"></tbody>
+                </table>
+              </div>
+              <details class="pp-align-principle" id="ppAlignPrinciple">
+                <summary data-i18n="pp.align_principle_title">计算原理</summary>
+                <div class="pp-align-principle-body" data-i18n="pp.align_principle_body" data-i18n-html>
+                  <p>评分 = 100 × (0.35×保留率 + 0.45×同步紧度 + 0.20×阈值余量)。</p>
+                  <ul>
+                    <li><b>保留率</b>：filter 后行数 / 对齐宽表行数。</li>
+                    <li><b>同步紧度 sync</b>：保留行上 mean(|match_dt|) / max_match_dt 的余量，多传感器取平均（master=1）。</li>
+                    <li><b>阈值余量 budget</b>：同上，用 p95(|match_dt|)；越接近阈值扣分越多。</li>
+                    <li><b>match_dt</b>：as-of backward 匹配时，master 时刻 − 该传感器采样时刻（秒）。</li>
+                  </ul>
+                </div>
+              </details>
+            </div>
           </figure>
         </section>
 
@@ -8061,6 +8231,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const ep = (result && result.episode) || (meta.source_path) || '';
       const rel = meta.align_plot || '';
       const info = meta.align_plot_info || {};
+      const revealMetrics = () => {
+        try { renderPpAlignMetrics(meta); } catch (_) {}
+      };
       if (rel && ep) {
         const url = '/api/postprocess/artifact?episode=' + encodeURIComponent(ep)
           + '&rel=' + encodeURIComponent(rel)
@@ -8071,6 +8244,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             hint.hidden = false;
             hint.textContent = t('pp.align_fig_ready', { path: rel });
           }
+          revealMetrics();
           try { fig.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (_) {}
         };
         img.onerror = () => {
@@ -8079,6 +8253,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             hint.hidden = false;
             hint.textContent = t('pp.align_fig_missing', { error: 'load failed' });
           }
+          revealMetrics();
         };
         img.src = url;
         if (ppHint) {
@@ -8094,6 +8269,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           hint.hidden = false;
           hint.textContent = t('pp.align_fig_missing', { error: err });
         }
+        revealMetrics();
         if (ppHint) {
           const base = ppHint.textContent || '';
           const note = t('pp.align_fig_missing', { error: err });
@@ -8101,6 +8277,112 @@ PREVIEW_HTML = """<!DOCTYPE html>
         }
         try { fig.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (_) {}
       }
+    }
+
+    function _ppFmtPct(x) {
+      const n = Number(x);
+      if (!Number.isFinite(n)) return '—';
+      return (n * 100).toFixed(1) + '%';
+    }
+    function _ppFmtMs(x) {
+      const n = Number(x);
+      if (!Number.isFinite(n)) return '—';
+      return (Math.abs(n) < 10 ? n.toFixed(2) : n.toFixed(1)) + ' ms';
+    }
+    function _ppFmtNum(x, digits) {
+      const n = Number(x);
+      if (!Number.isFinite(n)) return '—';
+      return n.toFixed(digits == null ? 2 : digits);
+    }
+    function renderPpAlignMetrics(meta) {
+      const box = document.getElementById('ppAlignMetrics');
+      const scoreEl = document.getElementById('ppAlignScoreValue');
+      const gradeEl = document.getElementById('ppAlignGrade');
+      const kpis = document.getElementById('ppAlignKpis');
+      const table = document.getElementById('ppAlignAgentTable');
+      const tbody = document.getElementById('ppAlignAgentBody');
+      if (!box) return;
+      const q = (meta && meta.align_quality) || null;
+      if (!q || q.error || (q.score == null && !q.components)) {
+        box.hidden = true;
+        if (scoreEl) scoreEl.textContent = '—';
+        if (gradeEl) {
+          gradeEl.textContent = '';
+          gradeEl.removeAttribute('data-grade');
+        }
+        if (kpis) kpis.innerHTML = '';
+        if (tbody) tbody.innerHTML = '';
+        if (table) table.hidden = true;
+        return;
+      }
+      box.hidden = false;
+      const score = Number(q.score);
+      if (scoreEl) scoreEl.textContent = Number.isFinite(score) ? score.toFixed(1) : '—';
+      const grade = String(q.grade || '');
+      if (gradeEl) {
+        gradeEl.setAttribute('data-grade', grade);
+        const gKey = 'pp.align_grade_' + grade;
+        const gText = t(gKey);
+        gradeEl.textContent = (gText && gText !== gKey) ? gText : grade;
+      }
+      const comp = q.components || {};
+      const rowsIn = q.rows_in != null ? q.rows_in : meta.rows_in;
+      const rowsOut = q.rows_out != null ? q.rows_out : meta.rows_out;
+      const drops = q.drop_reasons || meta.drop_reasons || {};
+      const dropParts = Object.keys(drops).map((k) => k + '=' + drops[k]).slice(0, 4);
+      const kpiItems = [
+        { k: t('pp.align_kpi_keep'), v: _ppFmtPct(comp.keep_rate) + (rowsIn != null ? (' (' + rowsOut + '/' + rowsIn + ')') : '') },
+        { k: t('pp.align_kpi_sync'), v: _ppFmtPct(comp.sync) },
+        { k: t('pp.align_kpi_budget'), v: _ppFmtPct(comp.budget) },
+        { k: t('pp.align_kpi_trim'), v: String((q.trimmed_start || 0) + (q.trimmed_end || 0))
+          + ' (↑' + String(q.trimmed_start || 0) + ' ↓' + String(q.trimmed_end || 0) + ')' },
+      ];
+      if (dropParts.length) {
+        kpiItems.push({ k: t('pp.align_kpi_drops'), v: dropParts.join(', ') });
+      }
+      if (kpis) {
+        kpis.innerHTML = kpiItems.map((it) => (
+          '<div class="pp-align-kpi"><span class="k"></span><span class="v"></span></div>'
+        )).join('');
+        Array.from(kpis.children).forEach((el, i) => {
+          const kk = el.querySelector('.k');
+          const vv = el.querySelector('.v');
+          if (kk) kk.textContent = kpiItems[i].k;
+          if (vv) vv.textContent = kpiItems[i].v;
+        });
+      }
+      const agents = Array.isArray(q.agents) ? q.agents : [];
+      if (tbody && table) {
+        if (!agents.length) {
+          tbody.innerHTML = '';
+          table.hidden = true;
+        } else {
+          tbody.innerHTML = '';
+          agents.forEach((a) => {
+            const tr = document.createElement('tr');
+            const name = String(a.agent || '');
+            const masterMark = a.is_master ? (' · ' + t('pp.align_master_tag')) : '';
+            const cells = [
+              name + masterMark,
+              _ppFmtMs(a.mean_ms),
+              _ppFmtMs(a.p50_ms),
+              _ppFmtMs(a.p95_ms),
+              _ppFmtMs(a.max_match_dt_ms),
+              _ppFmtPct(a.sync),
+              _ppFmtPct(a.budget),
+            ];
+            cells.forEach((txt, idx) => {
+              const td = document.createElement('td');
+              td.textContent = txt;
+              if (idx === 0 && a.is_master) td.className = 'master-tag';
+              tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+          });
+          table.hidden = false;
+        }
+      }
+      try { applyDomI18n(box); } catch (_) {}
     }
 
     async function runPostprocess(extra, episodeOverride) {

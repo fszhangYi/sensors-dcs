@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sensors_dcs.export.align_plot import plot_filter_alignment
+from sensors_dcs.export.align_plot import compute_align_quality, plot_filter_alignment
 from sensors_dcs.export.filter import filter_episode_timeline
 from sensors_dcs.export.timeline import export_episode_timeline
 
@@ -36,6 +36,58 @@ def episode_with_aligned(tmp_path: Path) -> Path:
     (ep / "states" / "gello.jsonl").write_text(json.dumps(gello) + "\n", encoding="utf-8")
     export_episode_timeline(ep, align="asof", master="gello", fmt="parquet")
     return ep
+
+
+def test_compute_align_quality_score() -> None:
+    n = 100
+    t = np.linspace(0.0, 1.0, n)
+    # cam mean |match_dt| ≈ 0.01 → sync ≈ 1 - 0.01/0.033 ≈ 0.697
+    df = pd.DataFrame(
+        {
+            "t_wall": 1000.0 + t,
+            "cam-middle.match_dt": np.zeros(n),
+            "cam-left.match_dt": np.full(n, 0.01),
+            "gello.match_dt": np.full(n, 0.005),
+        }
+    )
+    mask = np.ones(n, dtype=bool)
+    mask[:10] = False  # 90 kept in mask; rows_out overrides keep_rate
+    q = compute_align_quality(
+        df,
+        mask=mask,
+        master="cam-middle",
+        require=["cam-middle", "cam-left", "gello"],
+        default_max_dt=0.033,
+        rows_out=90,
+        trimmed_start=5,
+        trimmed_end=5,
+        drop_reasons={"match_dt_exceeded": 10},
+    )
+    assert q["rows_in"] == 100
+    assert q["rows_out"] == 90
+    assert abs(q["components"]["keep_rate"] - 0.9) < 1e-6
+    assert 0.0 < q["components"]["sync"] < 1.0
+    assert 0.0 < q["components"]["budget"] < 1.0
+    assert 0.0 <= q["score"] <= 100.0
+    assert q["grade"] in {"excellent", "good", "fair", "poor"}
+    agents = {a["agent"]: a for a in q["agents"]}
+    assert agents["cam-middle"]["is_master"] is True
+    assert agents["cam-middle"]["sync"] == 1.0
+    assert abs(agents["cam-left"]["mean_ms"] - 10.0) < 1e-6
+    # Perfect sync + keep → high score
+    q2 = compute_align_quality(
+        df.assign(**{
+            "cam-left.match_dt": np.zeros(n),
+            "gello.match_dt": np.zeros(n),
+        }),
+        mask=np.ones(n, dtype=bool),
+        master="cam-middle",
+        require=["cam-middle", "cam-left", "gello"],
+        default_max_dt=0.033,
+        rows_out=100,
+    )
+    assert q2["score"] >= 99.0
+    assert q2["grade"] == "excellent"
 
 
 def test_plot_filter_alignment_writes_png(tmp_path: Path) -> None:
@@ -81,3 +133,11 @@ def test_filter_writes_align_plot(episode_with_aligned: Path) -> None:
     png = episode_with_aligned / "export" / "filter_align.png"
     assert png.is_file()
     assert meta.get("align_plot_info", {}).get("ok") is True
+    aq = meta.get("align_quality") or {}
+    assert "score" in aq
+    assert aq.get("grade") in {"excellent", "good", "fair", "poor"}
+    assert "keep_rate" in (aq.get("components") or {})
+    meta_path = episode_with_aligned / "export" / "filter_meta.json"
+    written = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert "align_quality" in written
+    assert written["align_quality"]["score"] == aq["score"]

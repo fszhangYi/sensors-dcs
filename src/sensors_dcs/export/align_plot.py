@@ -44,6 +44,147 @@ def list_match_dt_agents(columns: Sequence[str]) -> list[str]:
     return out
 
 
+def _percentile(arr: np.ndarray, q: float) -> float:
+    if arr.size == 0:
+        return float("nan")
+    return float(np.percentile(arr, q))
+
+
+def _grade_for_score(score: float) -> str:
+    if score >= 85.0:
+        return "excellent"
+    if score >= 70.0:
+        return "good"
+    if score >= 55.0:
+        return "fair"
+    return "poor"
+
+
+def compute_align_quality(
+    df,
+    *,
+    mask: Sequence[bool] | np.ndarray,
+    master: str | None = None,
+    require: Sequence[str] | None = None,
+    default_max_dt: float = 0.033,
+    per_agent_max_dt: dict[str, float] | None = None,
+    rows_out: int | None = None,
+    trimmed_start: int = 0,
+    trimmed_end: int = 0,
+    drop_reasons: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    """Compute alignment quality metrics and a 0–100 composite score.
+
+    Score (weights fixed for UI/docs consistency)::
+
+        score = 100 * (0.35 * keep_rate + 0.45 * sync + 0.20 * budget)
+
+    - **keep_rate**: ``rows_out / rows_in`` (fallback: kept-mask fraction)
+    - **sync**: mean over require agents of ``clamp(1 − mean(|match_dt|)/max_dt)``
+      on kept rows (master contributes 1.0)
+    - **budget**: same with p95 instead of mean (headroom before the threshold)
+    """
+    per_agent_max_dt = dict(per_agent_max_dt or {})
+    keep = np.asarray(mask, dtype=bool)
+    rows_in = int(len(df)) if df is not None else 0
+    kept_n = int(keep.sum()) if keep.size else 0
+    if rows_out is None:
+        rows_out = kept_n
+    keep_rate = (float(rows_out) / float(rows_in)) if rows_in > 0 else 0.0
+
+    agents = list(require) if require else list_match_dt_agents(list(df.columns) if df is not None else [])
+    if df is not None:
+        agents = [a for a in agents if f"{a}.match_dt" in df.columns] or list_match_dt_agents(list(df.columns))
+    else:
+        agents = []
+
+    per_agent: list[dict[str, Any]] = []
+    sync_parts: list[float] = []
+    budget_parts: list[float] = []
+
+    for agent in agents:
+        max_dt = float(per_agent_max_dt.get(agent, default_max_dt))
+        is_master = bool(master) and agent == master
+        col = f"{agent}.match_dt"
+        stats: dict[str, Any] = {
+            "agent": agent,
+            "is_master": is_master,
+            "max_match_dt_s": max_dt,
+            "max_match_dt_ms": max_dt * 1000.0,
+            "n": 0,
+            "mean_ms": None,
+            "p50_ms": None,
+            "p95_ms": None,
+            "max_ms": None,
+            "sync": 1.0 if is_master else 0.0,
+            "budget": 1.0 if is_master else 0.0,
+        }
+        if df is None or col not in df.columns or kept_n == 0:
+            per_agent.append(stats)
+            sync_parts.append(float(stats["sync"]))
+            budget_parts.append(float(stats["budget"]))
+            continue
+        series = np.asarray(df.loc[keep, col], dtype=float)
+        series = series[np.isfinite(series)]
+        series = np.abs(series)
+        stats["n"] = int(series.size)
+        if series.size == 0:
+            if is_master:
+                stats["mean_ms"] = 0.0
+                stats["p50_ms"] = 0.0
+                stats["p95_ms"] = 0.0
+                stats["max_ms"] = 0.0
+            per_agent.append(stats)
+            sync_parts.append(float(stats["sync"]))
+            budget_parts.append(float(stats["budget"]))
+            continue
+        mean_s = float(series.mean())
+        p50_s = _percentile(series, 50)
+        p95_s = _percentile(series, 95)
+        max_s = float(series.max())
+        stats["mean_ms"] = mean_s * 1000.0
+        stats["p50_ms"] = p50_s * 1000.0
+        stats["p95_ms"] = p95_s * 1000.0
+        stats["max_ms"] = max_s * 1000.0
+        if is_master:
+            stats["sync"] = 1.0
+            stats["budget"] = 1.0
+        elif max_dt > 0:
+            stats["sync"] = float(np.clip(1.0 - mean_s / max_dt, 0.0, 1.0))
+            stats["budget"] = float(np.clip(1.0 - p95_s / max_dt, 0.0, 1.0))
+        else:
+            stats["sync"] = 0.0
+            stats["budget"] = 0.0
+        per_agent.append(stats)
+        sync_parts.append(float(stats["sync"]))
+        budget_parts.append(float(stats["budget"]))
+
+    sync = float(np.mean(sync_parts)) if sync_parts else 0.0
+    budget = float(np.mean(budget_parts)) if budget_parts else 0.0
+    score = 100.0 * (0.35 * keep_rate + 0.45 * sync + 0.20 * budget)
+    score = float(np.clip(score, 0.0, 100.0))
+
+    return {
+        "score": round(score, 1),
+        "grade": _grade_for_score(score),
+        "weights": {"keep_rate": 0.35, "sync": 0.45, "budget": 0.20},
+        "components": {
+            "keep_rate": round(keep_rate, 4),
+            "sync": round(sync, 4),
+            "budget": round(budget, 4),
+        },
+        "rows_in": rows_in,
+        "rows_out": int(rows_out),
+        "kept_mask": kept_n,
+        "trimmed_start": int(trimmed_start),
+        "trimmed_end": int(trimmed_end),
+        "drop_reasons": dict(drop_reasons or {}),
+        "agents": per_agent,
+        "master": master,
+        "default_max_dt": float(default_max_dt),
+    }
+
+
 def _rel_time(df) -> np.ndarray:
     if "t_rel" in df.columns:
         t = np.asarray(df["t_rel"], dtype=float)

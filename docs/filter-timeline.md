@@ -95,7 +95,21 @@
 | 中 · match_dt | 各传感器 `match_dt(ms)` 随时间曲线，点线为 `--max-match-dt` 阈值 |
 | 下 · 直方图 | **保留行**上各传感器 `match_dt` 分布 |
 
-后处理 UI 的 Step 2 卡片会加载该图；一键三步的运行日志也会打印 `align_plot …` 或 `align_plot FAIL: …`。绘图失败不阻断 filter（`align_plot_info.ok=false`）。绘图使用 OpenCV（不依赖 matplotlib）。
+后处理 UI 的 Step 2 卡片会加载该图；图下展示 **对齐评分**（0–100）、保留率 / sync / budget 等指标、各传感器 `match_dt` 分位数表，以及可展开的计算原理说明。一键三步的运行日志也会打印 `align_plot …` 或 `align_plot FAIL: …`。绘图失败不阻断 filter（`align_plot_info.ok=false`）。绘图使用 OpenCV（不依赖 matplotlib）。
+
+评分写入 `filter_meta.align_quality`：
+
+```text
+score = 100 × (0.35×keep_rate + 0.45×sync + 0.20×budget)
+```
+
+| 分量 | 含义 |
+|------|------|
+| keep_rate | `rows_out / rows_in` |
+| sync | 保留行上 `clamp(1 − mean(|match_dt|)/max_match_dt)`，require 传感器取平均（master=1） |
+| budget | 同上，用 `p95(|match_dt|)` |
+
+等级：≥85 优 · ≥70 良 · ≥55 中 · 其余差。
 
 ### 2.7 `export-hik-dataset`（filter 之后）
 
@@ -176,7 +190,12 @@ hik 导出默认：`<episode>/export/hik_dataset/`，旁路元数据 `export/hik
   },
   "require": ["gello", "cam-left"],
   "max_match_dt": {"default": 0.033},
-  "align_plot": "export/filter_align.png"
+  "align_plot": "export/filter_align.png",
+  "align_quality": {
+    "score": 88.2,
+    "grade": "excellent",
+    "components": {"keep_rate": 0.92, "sync": 0.87, "budget": 0.81}
+  }
 }
 ```
 

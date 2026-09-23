@@ -310,6 +310,14 @@ def run_postprocess(
                 else:
                     err = (api or {}).get("error") or "no align_plot"
                     log_lines.append(f"align_plot FAIL: {err}")
+                aq = meta.get("align_quality") if isinstance(meta.get("align_quality"), dict) else {}
+                if aq and aq.get("score") is not None:
+                    log_lines.append(
+                        f"align_quality score={aq.get('score')} grade={aq.get('grade')} "
+                        f"keep={((aq.get('components') or {}).get('keep_rate'))} "
+                        f"sync={((aq.get('components') or {}).get('sync'))} "
+                        f"budget={((aq.get('components') or {}).get('budget'))}"
+                    )
         except Exception as e:  # noqa: BLE001
             err = f"{type(e).__name__}: {e}"
             results.append(
