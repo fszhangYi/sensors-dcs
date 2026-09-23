@@ -2,6 +2,8 @@
 
 For each ``episode_XXXXX`` under an input root that has ``export/hik_dataset``:
 
+* skip when ``manifest.valid`` is false (default)
+* skip when ``{output}/{i}/`` (or ``video/{i}.mp4``) already exists — never overwrite
 * copy into ``{output}/{i}/`` with ``i`` from the episode folder index
 * exclude ``camera_map.yaml`` and ``episode_grid.mp4`` from the training copy
 * copy ``episode_grid.mp4`` → ``{output}/video/{i}.mp4`` when present
@@ -49,7 +51,7 @@ def _ignore_pack(_dir: str, names: list[str]) -> set[str]:
     return {n for n in names if n in _IGNORE_NAMES}
 
 
-def _rm_dst(path: Path) -> None:
+def _rm_path(path: Path) -> None:
     if path.is_dir():
         shutil.rmtree(path)
     elif path.is_file() or path.is_symlink():
@@ -63,6 +65,9 @@ def pack_hik_datasets(
     skip_invalid: bool = True,
 ) -> dict[str, Any]:
     """Scan ``input_root/episode_*`` and pack hik_dataset trees into ``output_root``.
+
+    Existing ``{output}/{i}/`` or ``video/{i}.mp4`` are left untouched (skipped).
+    Episodes with ``manifest.valid=false`` are skipped when ``skip_invalid`` is True.
 
     Returns a summary dict with ``ok``, counts, and per-episode ``items``.
     """
@@ -149,18 +154,24 @@ def pack_hik_datasets(
         dst_ep = dst_root / str(idx)
         grid_src = hik / "episode_grid.mp4"
         grid_dst = video_dir / f"{idx}.mp4"
+        if dst_ep.exists() or grid_dst.exists():
+            row["status"] = "skipped"
+            row["reason"] = "already_exists"
+            row["dataset_dir"] = str(dst_ep) if dst_ep.exists() else None
+            row["video"] = str(grid_dst) if grid_dst.exists() else None
+            skipped += 1
+            items.append(row)
+            continue
+
         try:
-            _rm_dst(dst_ep)
             shutil.copytree(hik, dst_ep, ignore=_ignore_pack)
             # Defensive: remove if ignore missed nested copies.
             for banned in _IGNORE_NAMES:
                 leftover = dst_ep / banned
                 if leftover.exists():
-                    _rm_dst(leftover)
+                    _rm_path(leftover)
             row["dataset_dir"] = str(dst_ep)
             if grid_src.is_file():
-                if grid_dst.exists():
-                    _rm_dst(grid_dst)
                 shutil.copy2(grid_src, grid_dst)
                 row["video"] = str(grid_dst)
             else:
@@ -175,7 +186,7 @@ def pack_hik_datasets(
             errors += 1
             try:
                 if dst_ep.exists():
-                    _rm_dst(dst_ep)
+                    _rm_path(dst_ep)
             except OSError:
                 pass
         items.append(row)

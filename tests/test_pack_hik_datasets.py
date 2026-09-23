@@ -77,7 +77,7 @@ def test_pack_copies_excludes_and_videos(tmp_path: Path) -> None:
     assert (src / "episode_00000" / "export" / "hik_dataset" / "episode_grid.mp4").is_file()
 
 
-def test_pack_overwrite_and_allow_invalid(tmp_path: Path) -> None:
+def test_pack_skips_existing_and_invalid(tmp_path: Path) -> None:
     src = tmp_path / "in"
     dst = tmp_path / "out"
     src.mkdir()
@@ -85,24 +85,34 @@ def test_pack_overwrite_and_allow_invalid(tmp_path: Path) -> None:
     first = pack_hik_datasets(src, dst)
     assert first["copied"] == 1
     (dst / "1" / "stale.txt").write_text("old\n", encoding="utf-8")
+    old_meta = (dst / "1" / "metadata.json").read_text(encoding="utf-8")
 
-    # Refresh source content and re-pack
+    # Refresh source — re-pack must skip existing index, leave stale file.
     (src / "episode_00001" / "export" / "hik_dataset" / "metadata.json").write_text(
         '{"v": 2}\n', encoding="utf-8"
     )
     second = pack_hik_datasets(src, dst)
-    assert second["copied"] == 1
-    assert not (dst / "1" / "stale.txt").exists()
-    assert '"v": 2' in (dst / "1" / "metadata.json").read_text(encoding="utf-8")
+    assert second["copied"] == 0
+    assert second["skipped"] == 1
+    assert any(i.get("reason") == "already_exists" for i in second["items"])
+    assert (dst / "1" / "stale.txt").is_file()
+    assert (dst / "1" / "metadata.json").read_text(encoding="utf-8") == old_meta
 
     _write_episode(src, "episode_00002", valid=False)
     skip = pack_hik_datasets(src, dst, skip_invalid=True)
-    assert skip["copied"] == 1
+    assert skip["copied"] == 0
     assert any(i.get("reason") == "invalid_episode" for i in skip["items"])
+    assert any(i.get("reason") == "already_exists" for i in skip["items"])
+    assert not (dst / "2").exists()
 
+    # Optional escape: allow packing invalid when skip_invalid=False and index free.
     keep = pack_hik_datasets(src, dst, skip_invalid=False)
-    assert keep["copied"] == 2
+    assert keep["copied"] == 1
     assert (dst / "2" / "metadata.json").is_file()
+    # index 1 still skipped
+    assert any(
+        i.get("index") == 1 and i.get("reason") == "already_exists" for i in keep["items"]
+    )
 
 
 def test_pack_rejects_same_or_nested_roots(tmp_path: Path) -> None:

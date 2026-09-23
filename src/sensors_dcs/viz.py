@@ -516,6 +516,32 @@ PREVIEW_HTML = """<!DOCTYPE html>
       display: flex; flex-wrap: wrap; gap: 0.55rem; align-items: center;
     }
     .actions .hint, .pp-actions .hint { color: var(--muted); font-size: 0.82rem; }
+    .rec-log {
+      display: block;
+      width: 100%;
+      box-sizing: border-box;
+      margin: 0.35rem 0 0.55rem;
+      padding: 0.4rem 0.65rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--chrome);
+      color: var(--muted);
+      font-size: 0.8rem;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      word-break: break-word;
+      min-height: 1.6em;
+    }
+    .rec-log.is-error {
+      color: #f87171;
+      border-color: rgba(248, 113, 113, 0.35);
+      background: rgba(248, 113, 113, 0.08);
+    }
+    .rec-log.is-ok {
+      color: #34d399;
+      border-color: rgba(52, 211, 153, 0.35);
+      background: rgba(52, 211, 153, 0.08);
+    }
     .save-path {
       flex-shrink: 0;
       display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
@@ -2300,6 +2326,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       </label>
       <span class="hint" id="runHint" data-i18n="hint.idle">空闲 — 点「开始」录制当前 episode</span>
     </div>
+    <div class="rec-log" id="recLog" role="status" aria-live="polite" data-i18n="rec.log_idle">（无后处理消息）</div>
     <div class="save-path">
       <label for="saveDirInput" data-i18n="save.label">保存路径</label>
       <input type="text" id="saveDirInput" data-i18n-placeholder="save.placeholder" placeholder="留空则沿用当前路径" />
@@ -2485,6 +2512,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           </label>
         </div>
         <span class="hint" id="infRunHint" data-i18n="hint.idle">空闲 — 点「开始」录制当前 episode</span>
+        <div class="rec-log" id="infRecLog" role="status" aria-live="polite" data-i18n="rec.log_idle">（无后处理消息）</div>
         <div class="save-path inf-rec-save">
           <label for="infSaveDirInput" data-i18n="save.label">保存路径</label>
           <input type="text" id="infSaveDirInput" data-i18n-placeholder="save.placeholder" placeholder="留空则沿用当前路径" />
@@ -2601,6 +2629,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
               </label>
             </div>
             <span class="hint" id="flowRunHint" data-i18n="hint.idle">空闲 — 点「开始」录制当前 episode</span>
+            <div class="rec-log" id="flowRecLog" role="status" aria-live="polite" data-i18n="rec.log_idle">（无后处理消息）</div>
             <div class="save-path inf-rec-save flow-rec-save">
               <label for="flowSaveDirInput" data-i18n="save.label">保存路径</label>
               <input type="text" id="flowSaveDirInput" data-i18n-placeholder="save.placeholder" placeholder="留空则沿用当前路径" />
@@ -2715,7 +2744,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
         <section class="pp-card">
           <h2 data-i18n="pp.pack_title">批量打包 hik_dataset</h2>
-          <p class="pp-hint" data-i18n="pp.pack_hint">扫描采集根下各 episode/export/hik_dataset，复制为输出目录中的 {i}/（去掉 camera_map.yaml），并把 episode_grid.mp4 收到 video/{i}.mp4。不修改源数据。</p>
+          <p class="pp-hint" data-i18n="pp.pack_hint">扫描采集根下各 episode/export/hik_dataset，复制为输出目录中的 {i}/（去掉 camera_map.yaml），并把 episode_grid.mp4 收到 video/{i}.mp4。valid=false 跳过；输出里已有同序号则跳过不覆盖。不修改源数据。</p>
           <div class="pp-row">
             <label for="ppPackInput" data-i18n="pp.pack_input">输入根</label>
             <input type="text" class="wide" id="ppPackInput" data-i18n-placeholder="pp.pack_input_ph" placeholder="D:\\data_new" />
@@ -3265,6 +3294,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         btnSaveDir: document.getElementById(ids.btnSaveDir),
         saveDirInput: document.getElementById(ids.saveDirInput),
         runHint: document.getElementById(ids.runHint),
+        recLog: ids.recLog ? document.getElementById(ids.recLog) : null,
         chkQuickCollect: document.getElementById(ids.chkQuickCollect),
         chkAsyncFlush: document.getElementById(ids.chkAsyncFlush),
         lsQuick: lsQuick,
@@ -3277,6 +3307,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       hzFront: 'hzFront', raw: 'raw',
       btnStart: 'btnStart', btnStop: 'btnStop', btnDiscard: 'btnDiscard',
       btnSaveDir: 'btnSaveDir', saveDirInput: 'saveDirInput', runHint: 'runHint',
+      recLog: 'recLog',
       chkQuickCollect: 'chkQuickCollect', chkAsyncFlush: 'chkAsyncFlush',
     }, 'dcs.quickCollect', 'dcs.asyncFlush', 'collect');
     const inferRec = bindRecordPanel({
@@ -3284,6 +3315,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       hzFront: 'infHzFront', raw: 'infRaw',
       btnStart: 'infBtnStart', btnStop: 'infBtnStop', btnDiscard: 'infBtnDiscard',
       btnSaveDir: 'infBtnSaveDir', saveDirInput: 'infSaveDirInput', runHint: 'infRunHint',
+      recLog: 'infRecLog',
       chkQuickCollect: 'infChkQuickCollect', chkAsyncFlush: 'infChkAsyncFlush',
     }, 'dcs.inf.quickCollect', 'dcs.inf.asyncFlush', 'infer');
     const flowRec = bindRecordPanel({
@@ -3291,9 +3323,21 @@ PREVIEW_HTML = """<!DOCTYPE html>
       hzFront: 'flowHzFront', raw: null,
       btnStart: 'flowBtnStart', btnStop: 'flowBtnStop', btnDiscard: 'flowBtnDiscard',
       btnSaveDir: 'flowBtnSaveDir', saveDirInput: 'flowSaveDirInput', runHint: 'flowRunHint',
+      recLog: 'flowRecLog',
       chkQuickCollect: 'flowChkQuickCollect', chkAsyncFlush: 'flowChkAsyncFlush',
     }, 'dcs.inf.quickCollect', 'dcs.inf.asyncFlush', 'infer');
     const recordPanels = [collectRec, inferRec, flowRec].filter((p) => p && p.btnStart);
+    function setRecLog(message, opts) {
+      const isErr = !!(opts && opts.error);
+      const isOk = !!(opts && opts.ok);
+      const text = message || '';
+      recordPanels.forEach((p) => {
+        if (!p || !p.recLog) return;
+        p.recLog.textContent = text;
+        p.recLog.classList.toggle('is-error', isErr);
+        p.recLog.classList.toggle('is-ok', isOk && !isErr);
+      });
+    }
     // Legacy aliases (collect) used by exit / arm hints elsewhere.
     const recStateEl = collectRec.recStateEl;
     const saveDirEl = collectRec.saveDirEl;
@@ -3493,23 +3537,19 @@ PREVIEW_HTML = """<!DOCTYPE html>
           const epPath = j.finished_episode_path;
           if (ppEpisode) ppEpisode.value = epPath;
           const runQc = async () => {
-            if (ui.runHint) {
-              ui.runHint.textContent = discarding
-                ? t('hint.qc_discard')
-                : t('hint.qc_stop');
-            }
+            const runningMsg = discarding
+              ? t('hint.qc_discard')
+              : t('hint.qc_stop');
+            setRecLog(runningMsg);
             await inspectSelectedEpisode(epPath, { silent: true });
             const pp = await runPostprocess({
               steps: ['export-timeline', 'filter-timeline', 'export-hik-dataset'],
               allow_invalid: discarding || (document.getElementById('ppAllowInvalid') || {}).checked,
             }, epPath);
             if (pp && pp.ok) {
-              if (ui.runHint) ui.runHint.textContent = t('hint.qc_ok', { path: epPath });
-              showAppToast(t('hint.qc_ok', { path: epPath }));
+              setRecLog(t('hint.qc_ok', { path: epPath }), { ok: true });
             } else if (pp) {
-              if (ui.runHint) ui.runHint.textContent = t('hint.qc_fail', { error: pp.error || 'unknown' });
-              showAppToast(t('hint.qc_fail', { error: pp.error || 'unknown' }), { error: true, ms: 7000 });
-              try { switchTab('post'); } catch (e) {}
+              setRecLog(t('hint.qc_fail', { error: pp.error || 'unknown' }), { error: true });
             }
           };
           if (asyncFlush || j.async_flush) {
