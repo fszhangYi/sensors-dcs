@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import queue
+import shutil
 import threading
 import time
 from dataclasses import dataclass, field
@@ -208,13 +209,22 @@ class RecordController:
         timeout: float = 120.0,
         valid: bool = True,
         async_flush: bool = False,
+        keep_files: bool = True,
     ) -> dict[str, Any]:
         """Stop accepting frames and flush the episode to disk.
 
         ``async_flush=True``: return to idle immediately and finish the flush
         (manifest + queue drain) on a background thread so the next episode
         can start without waiting.
+
+        ``keep_files=False`` (only meaningful with ``valid=False``): abort the
+        episode and delete its directory — no on-disk archive. Async flush is
+        ignored in that path.
         """
+        drop_files = (not bool(valid)) and (not bool(keep_files))
+        if drop_files:
+            return self._abort_discard(timeout=timeout)
+
         with self._lock:
             if self.state != "recording" or self._session is None:
                 return {
@@ -264,6 +274,7 @@ class RecordController:
                 "finished_episode_index": ep,
                 "finished_episode_path": str(ep_dir),
                 "valid": bool(valid),
+                "kept_files": True,
                 **self.status(),
             }
 
@@ -277,6 +288,81 @@ class RecordController:
             "finished_episode_index": ep,
             "finished_episode_path": str(ep_dir),
             "valid": bool(valid),
+            "kept_files": True,
+            **self.status(),
+        }
+
+    def _abort_discard(self, *, timeout: float = 30.0) -> dict[str, Any]:
+        """Stop recording, drop the queue, delete the episode directory."""
+        with self._lock:
+            if self.state != "recording" or self._session is None:
+                return {
+                    "ok": False,
+                    "error": f"cannot stop while state={self.state}",
+                    **self._status_unlocked(),
+                }
+            sess = self._session
+            sess.accepting = False
+            ep = sess.ep
+            ep_dir = sess.ep_dir
+            self.state = "flushing"
+            self._session = None
+
+        self._notify()
+
+        sess.stop_event.set()
+        if sess.sampler is not None:
+            sess.sampler.join(timeout=5.0)
+        # Drop pending frames so the writer exits without draining to disk.
+        while True:
+            try:
+                sess.q.get_nowait()
+            except queue.Empty:
+                break
+        try:
+            sess.q.put_nowait(None)
+        except queue.Full:
+            try:
+                sess.q.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                sess.q.put_nowait(None)
+            except queue.Full:
+                pass
+        if sess.writer is not None:
+            sess.writer.join(timeout=max(1.0, float(timeout)))
+
+        deleted = False
+        err: str | None = None
+        try:
+            if ep_dir.is_dir():
+                shutil.rmtree(ep_dir)
+                deleted = True
+        except OSError as e:
+            err = f"discard delete failed: {e}"
+            self._last_error = err
+
+        with self._lock:
+            self.state = "idle"
+            self.episode_index = ep + 1
+            (self.save_dir / "NEXT_EPISODE").write_text(
+                str(self.episode_index) + "\n", encoding="utf-8"
+            )
+            if err:
+                self._last_error = err
+
+        self._notify()
+        return {
+            "ok": err is None,
+            "async_flush": False,
+            "manifest": None,
+            "finished_episode_index": ep,
+            "finished_episode_path": None,
+            "valid": False,
+            "kept_files": False,
+            "deleted": deleted,
+            "error": err,
             **self.status(),
         }
 

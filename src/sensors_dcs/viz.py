@@ -3370,7 +3370,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (panel.btnStart) panel.btnStart.disabled = true;
         if (panel.btnStop) panel.btnStop.disabled = false;
         if (panel.btnDiscard) panel.btnDiscard.disabled = false;
-        if (panel.runHint) panel.runHint.textContent = t('hint.recording');
+        if (panel.runHint) {
+          panel.runHint.textContent = (panel.mode === 'infer')
+            ? t('hint.recording_infer')
+            : t('hint.recording');
+        }
       } else if (st === 'flushing') {
         if (panel.btnStart) panel.btnStart.disabled = true;
         if (panel.btnStop) panel.btnStop.disabled = true;
@@ -3423,14 +3427,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
       });
       const isStop = path.indexOf('stop') >= 0;
       const discarding = isStop && body && body.valid === false;
+      const dropping = discarding && body && body.keep_files === false;
       const asyncFlush = !!(ui.chkAsyncFlush && ui.chkAsyncFlush.checked);
       if (isStop && body && typeof body === 'object') {
         body.async_flush = asyncFlush;
       }
       if (ui.runHint) {
-        ui.runHint.textContent = discarding
-          ? t('hint.discarding')
-          : (isStop ? (asyncFlush ? t('hint.async_stopping') : t('hint.stopping')) : t('hint.starting'));
+        ui.runHint.textContent = dropping
+          ? t('hint.discarding_drop')
+          : (discarding
+            ? t('hint.discarding')
+            : (isStop ? (asyncFlush ? t('hint.async_stopping') : t('hint.stopping')) : t('hint.starting')));
       }
       try {
         const opts = { method: 'POST' };
@@ -3444,10 +3451,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (!j.ok && j.error) {
           if (ui.runHint) ui.runHint.textContent = j.error;
         } else if (discarding && j.ok) {
-          if (ui.runHint) ui.runHint.textContent = t('hint.discarded');
+          if (ui.runHint) {
+            ui.runHint.textContent = (j.kept_files === false)
+              ? t('hint.discarded_drop')
+              : t('hint.discarded');
+          }
         }
         const wantQc = !!(ui.chkQuickCollect && ui.chkQuickCollect.checked);
-        if (isStop && j.ok && wantQc && j.finished_episode_path) {
+        if (isStop && j.ok && wantQc && j.finished_episode_path && j.kept_files !== false) {
           const epPath = j.finished_episode_path;
           if (ppEpisode) ppEpisode.value = epPath;
           const runQc = async () => {
@@ -3504,9 +3515,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
         async_flush: !!(panel.chkAsyncFlush && panel.chkAsyncFlush.checked),
       }, panel));
       panel.btnDiscard.addEventListener('click', () => {
-        if (!confirm(t('confirm.discard'))) return;
+        const isInfer = panel.mode === 'infer';
+        // Collect: confirm + keep on disk (valid=false). Infer/Flow: drop files, no dialog.
+        if (!isInfer) {
+          if (!confirm(t('confirm.discard'))) return;
+        }
         postRecord('/api/record/stop', {
           valid: false,
+          keep_files: !isInfer,
           async_flush: !!(panel.chkAsyncFlush && panel.chkAsyncFlush.checked),
         }, panel);
       });
@@ -9716,9 +9732,12 @@ def create_viz_app(
             return {"ok": False, "error": "collect unavailable (boot error)", "state": "idle"}
         if recorder is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
-        # Accept JSON ``{"valid": true|false, "async_flush": true|false}``.
+        # Accept JSON ``{"valid": true|false, "async_flush": true|false,
+        # "keep_files": true|false}``. ``keep_files=false`` with ``valid=false``
+        # deletes the episode dir (infer Discard default).
         valid = True
         async_flush = False
+        keep_files = True
         try:
             ctype = (request.headers.get("content-type") or "").lower()
             if "application/json" in ctype:
@@ -9730,11 +9749,17 @@ def create_viz_app(
                             valid = bool(data["valid"])
                         if "async_flush" in data:
                             async_flush = bool(data["async_flush"])
+                        if "keep_files" in data:
+                            keep_files = bool(data["keep_files"])
         except Exception:  # noqa: BLE001
             valid = True
             async_flush = False
+            keep_files = True
         return await asyncio.to_thread(
-            recorder.stop, valid=valid, async_flush=async_flush
+            recorder.stop,
+            valid=valid,
+            async_flush=async_flush,
+            keep_files=keep_files,
         )
 
     @app.post("/api/record/save_dir")
