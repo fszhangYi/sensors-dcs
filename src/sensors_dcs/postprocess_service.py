@@ -337,6 +337,63 @@ def run_postprocess(
     }
 
 
+def pack_hik_dataset_root(
+    *,
+    input_root: str | Path,
+    output_root: str | Path,
+    skip_invalid: bool = True,
+) -> dict[str, Any]:
+    """UI/CLI wrapper: batch-pack ``episode_*/export/hik_dataset`` trees."""
+    from sensors_dcs.export.pack_hik_datasets import pack_hik_datasets
+
+    log_lines = [
+        f"==> pack-hik-datasets input={input_root} output={output_root} "
+        f"skip_invalid={bool(skip_invalid)}"
+    ]
+    try:
+        result = pack_hik_datasets(
+            input_root,
+            output_root,
+            skip_invalid=bool(skip_invalid),
+        )
+    except Exception as e:  # noqa: BLE001
+        err = f"{type(e).__name__}: {e}"
+        log_lines.append(f"FAIL: {err}")
+        return {
+            "ok": False,
+            "error": err,
+            "traceback": traceback.format_exc(),
+            "log": "\n".join(log_lines),
+        }
+
+    log_lines.append(
+        f"copied={result.get('copied')} skipped={result.get('skipped')} "
+        f"errors={result.get('errors')} warnings={result.get('warnings')}"
+    )
+    for item in result.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        st = item.get("status")
+        ep = item.get("episode")
+        if st == "copied":
+            extra = ""
+            if item.get("warning"):
+                extra = f" warn={item.get('warning')}"
+            log_lines.append(
+                f"OK {ep} -> {item.get('index')}{extra}"
+            )
+        elif st == "skipped":
+            log_lines.append(f"SKIP {ep}: {item.get('reason')}")
+        elif st == "error":
+            log_lines.append(f"FAIL {ep}: {item.get('error')}")
+
+    out = dict(result)
+    out["log"] = "\n".join(log_lines)
+    if not out.get("ok") and not out.get("error"):
+        out["error"] = "pack failed"
+    return out
+
+
 def compose_raw_video(
     *,
     episode: str | Path,

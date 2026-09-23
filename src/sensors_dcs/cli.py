@@ -219,6 +219,30 @@ def main(argv: list[str] | None = None) -> int:
         help="export even when episode manifest.valid=false (作废)",
     )
 
+    p_pack = sub.add_parser(
+        "pack-hik-datasets",
+        help="batch-copy episode_*/export/hik_dataset into {out}/{i}/ "
+        "plus video/{i}.mp4 (drops camera_map.yaml from copies)",
+    )
+    p_pack.add_argument(
+        "-i",
+        "--input-root",
+        required=True,
+        help="collect root containing episode_* directories (e.g. D:/data_new)",
+    )
+    p_pack.add_argument(
+        "-o",
+        "--output-root",
+        required=True,
+        help="destination root for {i}/ datasets and video/",
+    )
+    p_pack.add_argument(
+        "--allow-invalid",
+        action="store_true",
+        default=False,
+        help="also pack episodes with manifest.valid=false",
+    )
+
     args = parser.parse_args(argv)
 
     if args.cmd == "show-config":
@@ -346,6 +370,20 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(json.dumps({"ok": True, **meta}, ensure_ascii=False, indent=2))
         return 0
+
+    if args.cmd == "pack-hik-datasets":
+        try:
+            from sensors_dcs.postprocess_service import pack_hik_dataset_root
+        except ImportError as e:
+            print(f"[sensors-dcs] {e}", flush=True)
+            return 1
+        result = pack_hik_dataset_root(
+            input_root=args.input_root,
+            output_root=args.output_root,
+            skip_invalid=not bool(getattr(args, "allow_invalid", False)),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
 
     return 1
 

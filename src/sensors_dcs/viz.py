@@ -86,6 +86,14 @@ class RawVideoBody(BaseModel):
     fps: float | None = None
 
 
+class PackHikBody(BaseModel):
+    """Batch-pack episode_*/export/hik_dataset into a flat training layout."""
+
+    input_root: str
+    output_root: str
+    allow_invalid: bool = False
+
+
 class AuthLoginBody(BaseModel):
     username: str = ""
     password: str = ""
@@ -2703,6 +2711,29 @@ PREVIEW_HTML = """<!DOCTYPE html>
           <div class="pp-actions">
             <button type="button" id="btnPpRawVideo" data-i18n="pp.raw_video_run">合成原始视频</button>
           </div>
+        </section>
+
+        <section class="pp-card">
+          <h2 data-i18n="pp.pack_title">批量打包 hik_dataset</h2>
+          <p class="pp-hint" data-i18n="pp.pack_hint">扫描采集根下各 episode/export/hik_dataset，复制为输出目录中的 {i}/（去掉 camera_map.yaml），并把 episode_grid.mp4 收到 video/{i}.mp4。不修改源数据。</p>
+          <div class="pp-row">
+            <label for="ppPackInput" data-i18n="pp.pack_input">输入根</label>
+            <input type="text" class="wide" id="ppPackInput" data-i18n-placeholder="pp.pack_input_ph" placeholder="D:\\data_new" />
+            <button type="button" id="btnPpBrowsePackInput" data-i18n="pp.browse">浏览…</button>
+          </div>
+          <div class="pp-row">
+            <label for="ppPackOutput" data-i18n="pp.pack_output">输出根</label>
+            <input type="text" class="wide" id="ppPackOutput" data-i18n-placeholder="pp.pack_output_ph" placeholder="D:\\hik_pack" />
+            <button type="button" id="btnPpBrowsePackOutput" data-i18n="pp.browse">浏览…</button>
+          </div>
+          <div class="pp-row">
+            <label class="quick-collect"><input type="checkbox" id="ppPackAllowInvalid" /> <span data-i18n="pp.pack_allow_invalid">包含作废 episode（valid=false）</span></label>
+          </div>
+          <div class="pp-actions">
+            <button type="button" class="primary" id="btnPpPackHik" data-i18n="pp.pack_run">开始打包</button>
+            <span class="hint" id="ppPackHint"></span>
+          </div>
+          <pre id="ppPackLog" data-i18n="pp.log_idle">（尚未运行）</pre>
         </section>
 
         <section class="pp-card">
@@ -6286,6 +6317,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const ppAllowInvalid = document.getElementById('ppAllowInvalid');
     const ppHint = document.getElementById('ppHint');
     const ppLog = document.getElementById('ppLog');
+    const ppPackInput = document.getElementById('ppPackInput');
+    const ppPackOutput = document.getElementById('ppPackOutput');
+    const ppPackAllowInvalid = document.getElementById('ppPackAllowInvalid');
+    const ppPackHint = document.getElementById('ppPackHint');
+    const ppPackLog = document.getElementById('ppPackLog');
     let ppBusy = false;
     let collectOk = true;
 
@@ -7266,7 +7302,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const pathKind = opts.pathKind || (target === 'episode' ? 'dir' : 'file');
       const titleKey = opts.titleKey || (
         target === 'episode' ? 'pathPicker.titleEpisode'
-          : (target === 'cameraMap' ? 'pathPicker.titleCameraMap' : 'pathPicker.title')
+          : (target === 'cameraMap' ? 'pathPicker.titleCameraMap'
+            : (target === 'packInput' ? 'pathPicker.titlePackInput'
+              : (target === 'packOutput' ? 'pathPicker.titlePackOutput' : 'pathPicker.title')))
       );
       await ensureSettingsRoots();
       let seed = opts.seed;
@@ -7275,6 +7313,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
           seed = (ppEpisode && ppEpisode.value) || '';
         } else if (target === 'cameraMap') {
           seed = (ppCameraMap && ppCameraMap.value) || '';
+        } else if (target === 'packInput') {
+          seed = (ppPackInput && ppPackInput.value) || '';
+        } else if (target === 'packOutput') {
+          seed = (ppPackOutput && ppPackOutput.value) || '';
         } else {
           seed = (settingsConfigPath && settingsConfigPath.value)
             || (settingsConfigCurrent && settingsConfigCurrent.textContent)
@@ -7625,6 +7667,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
             ppCameraMap.value = val;
             savePpForm();
           }
+        } else if (target === 'packInput') {
+          if (ppPackInput) {
+            ppPackInput.value = val;
+            savePpForm();
+          }
+        } else if (target === 'packOutput') {
+          if (ppPackOutput) {
+            ppPackOutput.value = val;
+            savePpForm();
+          }
         } else if (settingsConfigPath) {
           settingsConfigPath.value = val;
           settingsConfigPath.dataset.touched = '1';
@@ -7711,6 +7763,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
         materialize: !!ppMaterialize.checked,
         camera_map: (ppCameraMap.value || '').trim() || null,
         allow_invalid: !!ppAllowInvalid.checked,
+        pack_input: (ppPackInput && ppPackInput.value || '').trim() || '',
+        pack_output: (ppPackOutput && ppPackOutput.value || '').trim() || '',
+        pack_allow_invalid: !!(ppPackAllowInvalid && ppPackAllowInvalid.checked),
       };
     }
 
@@ -7798,9 +7853,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
       if (map) ppCameraMap.value = map;
       else if (defMap) ppCameraMap.value = defMap;
+      if (ppPackInput && src.pack_input) ppPackInput.value = src.pack_input;
+      if (ppPackOutput && src.pack_output) ppPackOutput.value = src.pack_output;
+      if (ppPackAllowInvalid && src.pack_allow_invalid != null) {
+        ppPackAllowInvalid.checked = !!src.pack_allow_invalid;
+      }
     }
 
-    [ppAlign, ppAlignClock, ppPrimaryCamera, ppMaster, ppMasterHz, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppAllowInvalid, ppEpisode].forEach((el) => {
+    [ppAlign, ppAlignClock, ppPrimaryCamera, ppMaster, ppMasterHz, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppAllowInvalid, ppEpisode, ppPackInput, ppPackOutput, ppPackAllowInvalid].forEach((el) => {
       if (!el) return;
       el.addEventListener('change', savePpForm);
       el.addEventListener('blur', savePpForm);
@@ -7923,10 +7983,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
     if (btnPpBrowseCameraMap) {
       btnPpBrowseCameraMap.addEventListener('click', () => openPathPicker({ target: 'cameraMap', pathKind: 'file' }));
     }
+    const btnPpBrowsePackInput = document.getElementById('btnPpBrowsePackInput');
+    if (btnPpBrowsePackInput) {
+      btnPpBrowsePackInput.addEventListener('click', () => openPathPicker({ target: 'packInput', pathKind: 'dir' }));
+    }
+    const btnPpBrowsePackOutput = document.getElementById('btnPpBrowsePackOutput');
+    if (btnPpBrowsePackOutput) {
+      btnPpBrowsePackOutput.addEventListener('click', () => openPathPicker({ target: 'packOutput', pathKind: 'dir' }));
+    }
 
     function setPpBusy(on, text) {
       ppBusy = !!on;
-      ['btnPpExport', 'btnPpFilter', 'btnPpHik', 'btnPpRunAll', 'btnPpRawVideo', 'btnPpRefresh', 'btnPpBrowseEpisode', 'btnPpBrowseCameraMap'].forEach((id) => {
+      ['btnPpExport', 'btnPpFilter', 'btnPpHik', 'btnPpRunAll', 'btnPpRawVideo', 'btnPpRefresh',
+        'btnPpBrowseEpisode', 'btnPpBrowseCameraMap', 'btnPpPackHik',
+        'btnPpBrowsePackInput', 'btnPpBrowsePackOutput'].forEach((id) => {
         const b = document.getElementById(id);
         if (b) b.disabled = !!on;
       });
@@ -8067,6 +8137,49 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
     }
 
+    async function runPackHik() {
+      const inputRoot = ((ppPackInput && ppPackInput.value) || '').trim();
+      const outputRoot = ((ppPackOutput && ppPackOutput.value) || '').trim();
+      if (!inputRoot || !outputRoot) {
+        if (ppPackHint) ppPackHint.textContent = t('pp.pack_need_paths');
+        return { ok: false, error: 'missing paths' };
+      }
+      const body = {
+        input_root: inputRoot,
+        output_root: outputRoot,
+        allow_invalid: !!(ppPackAllowInvalid && ppPackAllowInvalid.checked),
+      };
+      savePpForm();
+      setPpBusy(true);
+      if (ppPackHint) ppPackHint.textContent = t('pp.pack_running');
+      if (ppPackLog) ppPackLog.textContent = 'running pack-hik…\\n' + JSON.stringify(body, null, 2);
+      try {
+        const r = await fetch('/api/postprocess/pack-hik', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const j = await r.json();
+        if (ppPackLog) ppPackLog.textContent = (j.log || '') + '\\n\\n' + JSON.stringify(j, null, 2);
+        if (ppPackHint) {
+          ppPackHint.textContent = j.ok
+            ? t('pp.pack_done', {
+              copied: j.copied != null ? j.copied : 0,
+              skipped: j.skipped != null ? j.skipped : 0,
+              warnings: j.warnings != null ? j.warnings : 0,
+            })
+            : t('pp.pack_fail', { error: j.error || '' });
+        }
+        return j;
+      } catch (e) {
+        if (ppPackHint) ppPackHint.textContent = String(e);
+        if (ppPackLog) ppPackLog.textContent = String(e);
+        return { ok: false, error: String(e) };
+      } finally {
+        setPpBusy(false);
+      }
+    }
+
     document.getElementById('btnPpExport').addEventListener('click', () =>
       runPostprocess({ steps: ['export-timeline'] }));
     document.getElementById('btnPpFilter').addEventListener('click', () =>
@@ -8077,6 +8190,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       runPostprocess({ steps: ['export-timeline', 'filter-timeline', 'export-hik-dataset'] }));
     const btnPpRawVideo = document.getElementById('btnPpRawVideo');
     if (btnPpRawVideo) btnPpRawVideo.addEventListener('click', () => runRawVideo());
+    const btnPpPackHik = document.getElementById('btnPpPackHik');
+    if (btnPpPackHik) btnPpPackHik.addEventListener('click', () => runPackHik());
 
     fetch('/api/postprocess/defaults').then((r) => r.json()).then((j) => {
       if (!j.ok) return;
@@ -9857,6 +9972,22 @@ def create_viz_app(
                 episode=req.episode,
                 master_camera=req.master_camera,
                 fps=req.fps,
+            )
+        finally:
+            _pp_lock.release()
+
+    @app.post("/api/postprocess/pack-hik")
+    async def postprocess_pack_hik(req: PackHikBody) -> dict[str, Any]:
+        from sensors_dcs.postprocess_service import pack_hik_dataset_root
+
+        if not _pp_lock.acquire(blocking=False):
+            return {"ok": False, "error": "another postprocess job is running"}
+        try:
+            return await asyncio.to_thread(
+                pack_hik_dataset_root,
+                input_root=req.input_root,
+                output_root=req.output_root,
+                skip_invalid=not bool(req.allow_invalid),
             )
         finally:
             _pp_lock.release()
