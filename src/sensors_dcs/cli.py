@@ -243,6 +243,47 @@ def main(argv: list[str] | None = None) -> int:
         help="also pack episodes with manifest.valid=false",
     )
 
+    p_batch = sub.add_parser(
+        "run-postprocess-root",
+        help="batch-run export-timeline → filter-timeline → export-hik-dataset "
+        "on every episode_* under a collect root",
+    )
+    p_batch.add_argument(
+        "-i",
+        "--input-root",
+        required=True,
+        help="collect root containing episode_* directories (e.g. D:/data_new)",
+    )
+    p_batch.add_argument("--align", default="asof", choices=["asof", "nearest", "grid", "union"])
+    p_batch.add_argument("--master", default="cam-left")
+    p_batch.add_argument("--master-hz", type=float, default=5.0)
+    p_batch.add_argument("--align-clock", choices=["wall", "hw_ts"], default="wall")
+    p_batch.add_argument("--primary-camera", default="cam-middle")
+    p_batch.add_argument(
+        "--require",
+        default="arm,cam-left,cam-right,cam-middle,gripper-read",
+    )
+    p_batch.add_argument("--max-match-dt", default="0.033")
+    p_batch.add_argument("--trim", default="both", choices=["both", "start", "end", "none"])
+    p_batch.add_argument("--no-materialize", action="store_true", default=False)
+    p_batch.add_argument(
+        "--camera-map",
+        required=True,
+        help="path to hik_camera_map.yaml",
+    )
+    p_batch.add_argument(
+        "--allow-invalid",
+        action="store_true",
+        default=False,
+        help="also process episodes with manifest.valid=false",
+    )
+    p_batch.add_argument(
+        "--no-overwrite",
+        action="store_true",
+        default=False,
+        help="skip episodes that already have export/ (default: delete export/ then re-run)",
+    )
+
     args = parser.parse_args(argv)
 
     if args.cmd == "show-config":
@@ -381,6 +422,30 @@ def main(argv: list[str] | None = None) -> int:
             input_root=args.input_root,
             output_root=args.output_root,
             skip_invalid=not bool(getattr(args, "allow_invalid", False)),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+
+    if args.cmd == "run-postprocess-root":
+        try:
+            from sensors_dcs.postprocess_service import run_postprocess_root
+        except ImportError as e:
+            print(f"[sensors-dcs] {e}", flush=True)
+            return 1
+        result = run_postprocess_root(
+            input_root=args.input_root,
+            align=args.align,
+            master=args.master,
+            master_hz=args.master_hz,
+            align_clock=args.align_clock,
+            primary_camera=args.primary_camera,
+            require=args.require,
+            max_match_dt=args.max_match_dt,
+            trim=args.trim,
+            materialize=not bool(getattr(args, "no_materialize", False)),
+            camera_map=args.camera_map,
+            allow_invalid=bool(getattr(args, "allow_invalid", False)),
+            overwrite=not bool(getattr(args, "no_overwrite", False)),
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1

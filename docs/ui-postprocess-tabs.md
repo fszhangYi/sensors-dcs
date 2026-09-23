@@ -24,6 +24,7 @@ sensors-dcs export-hik-dataset -e … --camera-map …/hik_camera_map.yaml
 | 主页 CTA | 可跳到采集或后处理 |
 | 数据后处理 → 各 Step 按钮 | 只跑对应一步 |
 | 一键执行三步 | 顺序三步，失败即停 |
+| **批量一键三步** | 选数据集根，遍历 `episode_*`；默认删除各集 `export/` 后重跑；不覆盖则跳过已有 `export/`；`valid=false` 默认跳过 |
 | 快速采集 + 结束 | `valid=true` 后跑三步；`allow_invalid` 跟表单 |
 | 快速采集 + 作废 | 落盘 `valid=false` 后跑三步，并 **强制** `allow_invalid` |
 
@@ -31,6 +32,9 @@ sensors-dcs export-hik-dataset -e … --camera-map …/hik_camera_map.yaml
 
 - `GET /api/postprocess/defaults` — 默认参数、camera-map 候选、`save_dir` 下 episode 列表  
 - `POST /api/postprocess/run` — body 见 `PostprocessBody`（`episode` + 可选 `steps`）  
+- `POST /api/postprocess/run-root` — body 见 `PostprocessRootBody`（`input_root` + 与单集相同的对齐/过滤/hik 字段 + `overwrite`，默认 true）  
 - `POST /api/record/stop` 响应新增 `finished_episode_path` / `finished_episode_index` / `valid`
 
-实现：`src/sensors_dcs/postprocess_service.py`、`viz.py`、`ui_i18n.py`（`home.*` / `tab.home`）。
+CLI：`sensors-dcs run-postprocess-root -i <collect_root> --camera-map …`（`--no-overwrite` 跳过已有 export）。
+
+实现：`src/sensors_dcs/postprocess_service.py`、`viz.py`、`ui_i18n.py`（`home.*` / `tab.home` / `pp.batch_*`）。

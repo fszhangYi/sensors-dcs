@@ -94,6 +94,25 @@ class PackHikBody(BaseModel):
     allow_invalid: bool = False
 
 
+class PostprocessRootBody(BaseModel):
+    """Batch-run the three postprocess steps on every episode_* under a root."""
+
+    input_root: str
+    steps: list[str] | None = None
+    align: str = "asof"
+    master: str = "cam-left"
+    master_hz: float | None = 5.0
+    align_clock: str = "wall"
+    primary_camera: str = "cam-middle"
+    require: str = "arm,cam-left,cam-right,cam-middle,gripper-read"
+    max_match_dt: str = "0.033"
+    trim: str = "both"
+    materialize: bool = True
+    camera_map: str | None = None
+    allow_invalid: bool = False
+    overwrite: bool = True
+
+
 class AuthLoginBody(BaseModel):
     username: str = ""
     password: str = ""
@@ -2864,6 +2883,24 @@ PREVIEW_HTML = """<!DOCTYPE html>
               <pre id="ppLog" data-i18n="pp.log_idle">（尚未运行）</pre>
             </div>
           </div>
+        </section>
+
+        <section class="pp-card">
+          <h2 data-i18n="pp.batch_title">批量一键三步</h2>
+          <p class="pp-hint" data-i18n="pp.batch_hint">选择采集根目录，对其中每个 episode_* 按上方对齐 / require / camera-map 参数顺序跑完三步。默认覆盖：先删除该集 export/ 再重跑；取消覆盖则已有 export/ 的集跳过。valid=false 默认跳过（可用上方 allow-invalid）。</p>
+          <div class="pp-row">
+            <label for="ppBatchRoot" data-i18n="pp.batch_root">数据集根</label>
+            <input type="text" class="wide" id="ppBatchRoot" data-i18n-placeholder="pp.batch_root_ph" placeholder="D:\\data_new" />
+            <button type="button" id="btnPpBrowseBatchRoot" data-i18n="pp.browse">浏览…</button>
+          </div>
+          <div class="pp-row">
+            <label class="quick-collect"><input type="checkbox" id="ppBatchOverwrite" checked /> <span data-i18n="pp.batch_overwrite">覆盖（删除原 export/）</span></label>
+          </div>
+          <div class="pp-actions">
+            <button type="button" class="primary" id="btnPpBatchRun" data-i18n="pp.batch_run">批量执行三步</button>
+            <span class="hint" id="ppBatchHint"></span>
+          </div>
+          <pre id="ppBatchLog" data-i18n="pp.log_idle">（尚未运行）</pre>
         </section>
 
         <section class="pp-card">
@@ -6612,6 +6649,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const ppPackAllowInvalid = document.getElementById('ppPackAllowInvalid');
     const ppPackHint = document.getElementById('ppPackHint');
     const ppPackLog = document.getElementById('ppPackLog');
+    const ppBatchRoot = document.getElementById('ppBatchRoot');
+    const ppBatchOverwrite = document.getElementById('ppBatchOverwrite');
+    const ppBatchHint = document.getElementById('ppBatchHint');
+    const ppBatchLog = document.getElementById('ppBatchLog');
     let ppBusy = false;
     let collectOk = true;
 
@@ -7594,7 +7635,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
         target === 'episode' ? 'pathPicker.titleEpisode'
           : (target === 'cameraMap' ? 'pathPicker.titleCameraMap'
             : (target === 'packInput' ? 'pathPicker.titlePackInput'
-              : (target === 'packOutput' ? 'pathPicker.titlePackOutput' : 'pathPicker.title')))
+              : (target === 'packOutput' ? 'pathPicker.titlePackOutput'
+                : (target === 'batchRoot' ? 'pathPicker.titleBatchRoot' : 'pathPicker.title'))))
       );
       await ensureSettingsRoots();
       let seed = opts.seed;
@@ -7607,6 +7649,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
           seed = (ppPackInput && ppPackInput.value) || '';
         } else if (target === 'packOutput') {
           seed = (ppPackOutput && ppPackOutput.value) || '';
+        } else if (target === 'batchRoot') {
+          seed = (ppBatchRoot && ppBatchRoot.value) || '';
         } else {
           seed = (settingsConfigPath && settingsConfigPath.value)
             || (settingsConfigCurrent && settingsConfigCurrent.textContent)
@@ -7967,6 +8011,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
             ppPackOutput.value = val;
             savePpForm();
           }
+        } else if (target === 'batchRoot') {
+          if (ppBatchRoot) {
+            ppBatchRoot.value = val;
+            savePpForm();
+          }
         } else if (settingsConfigPath) {
           settingsConfigPath.value = val;
           settingsConfigPath.dataset.touched = '1';
@@ -8056,6 +8105,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
         pack_input: (ppPackInput && ppPackInput.value || '').trim() || '',
         pack_output: (ppPackOutput && ppPackOutput.value || '').trim() || '',
         pack_allow_invalid: !!(ppPackAllowInvalid && ppPackAllowInvalid.checked),
+        batch_root: (ppBatchRoot && ppBatchRoot.value || '').trim() || '',
+        batch_overwrite: !(ppBatchOverwrite && ppBatchOverwrite.checked === false),
       };
     }
 
@@ -8148,9 +8199,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (ppPackAllowInvalid && src.pack_allow_invalid != null) {
         ppPackAllowInvalid.checked = !!src.pack_allow_invalid;
       }
+      if (ppBatchRoot && src.batch_root) ppBatchRoot.value = src.batch_root;
+      if (ppBatchOverwrite && src.batch_overwrite != null) {
+        ppBatchOverwrite.checked = !!src.batch_overwrite;
+      }
     }
 
-    [ppAlign, ppAlignClock, ppPrimaryCamera, ppMaster, ppMasterHz, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppAllowInvalid, ppEpisode, ppPackInput, ppPackOutput, ppPackAllowInvalid].forEach((el) => {
+    [ppAlign, ppAlignClock, ppPrimaryCamera, ppMaster, ppMasterHz, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppAllowInvalid, ppEpisode, ppPackInput, ppPackOutput, ppPackAllowInvalid, ppBatchRoot, ppBatchOverwrite].forEach((el) => {
       if (!el) return;
       el.addEventListener('change', savePpForm);
       el.addEventListener('blur', savePpForm);
@@ -8281,12 +8336,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
     if (btnPpBrowsePackOutput) {
       btnPpBrowsePackOutput.addEventListener('click', () => openPathPicker({ target: 'packOutput', pathKind: 'dir' }));
     }
+    const btnPpBrowseBatchRoot = document.getElementById('btnPpBrowseBatchRoot');
+    if (btnPpBrowseBatchRoot) {
+      btnPpBrowseBatchRoot.addEventListener('click', () => openPathPicker({ target: 'batchRoot', pathKind: 'dir' }));
+    }
 
     function setPpBusy(on, text) {
       ppBusy = !!on;
       ['btnPpExport', 'btnPpFilter', 'btnPpHik', 'btnPpRunAll', 'btnPpRawVideo', 'btnPpRefresh',
         'btnPpBrowseEpisode', 'btnPpBrowseCameraMap', 'btnPpPackHik',
-        'btnPpBrowsePackInput', 'btnPpBrowsePackOutput'].forEach((id) => {
+        'btnPpBrowsePackInput', 'btnPpBrowsePackOutput',
+        'btnPpBatchRun', 'btnPpBrowseBatchRoot'].forEach((id) => {
         const b = document.getElementById(id);
         if (b) b.disabled = !!on;
       });
@@ -8582,6 +8642,80 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
     }
 
+    async function runBatchPostprocess() {
+      const inputRoot = ((ppBatchRoot && ppBatchRoot.value) || '').trim();
+      if (!inputRoot) {
+        if (ppBatchHint) ppBatchHint.textContent = t('pp.batch_need_root');
+        return { ok: false, error: 'missing input_root' };
+      }
+      const form = readPpForm();
+      const clock = form.align_clock || 'wall';
+      if (clock === 'hw_ts') {
+        if (!form.primary_camera) {
+          if (ppBatchHint) ppBatchHint.textContent = t('pp.need_primary_camera');
+          return { ok: false, error: 'missing primary_camera' };
+        }
+      } else if (!form.master) {
+        // Prefer form master; server still falls back to per-episode suggested_master.
+        // Empty master is allowed when episodes can suggest one.
+      }
+      const body = {
+        input_root: inputRoot,
+        steps: ['export-timeline', 'filter-timeline', 'export-hik-dataset'],
+        align: form.align,
+        align_clock: form.align_clock,
+        primary_camera: form.primary_camera,
+        master: form.master || 'cam-left',
+        master_hz: form.master_hz,
+        require: form.require,
+        max_match_dt: form.max_match_dt,
+        trim: form.trim,
+        materialize: form.materialize,
+        camera_map: form.camera_map,
+        allow_invalid: form.allow_invalid,
+        overwrite: !(ppBatchOverwrite && ppBatchOverwrite.checked === false),
+      };
+      if (!body.camera_map) {
+        if (ppBatchHint) ppBatchHint.textContent = t('pp.batch_need_camera_map');
+        return { ok: false, error: 'missing camera_map' };
+      }
+      savePpForm();
+      setPpBusy(true, t('pp.batch_running'));
+      if (ppBatchHint) ppBatchHint.textContent = t('pp.batch_running');
+      if (ppBatchLog) ppBatchLog.textContent = 'running batch postprocess…\\n' + JSON.stringify(body, null, 2);
+      try {
+        const r = await fetch('/api/postprocess/run-root', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const j = await r.json();
+        if (ppBatchLog) ppBatchLog.textContent = (j.log || '') + '\\n\\n' + JSON.stringify(j, null, 2);
+        if (ppBatchHint) {
+          ppBatchHint.textContent = j.ok
+            ? t('pp.batch_done', {
+              ok: j.ok_count != null ? j.ok_count : 0,
+              skipped: j.skipped != null ? j.skipped : 0,
+              failed: j.failed != null ? j.failed : 0,
+            })
+            : t('pp.batch_fail', {
+              error: j.error || '',
+              ok: j.ok_count != null ? j.ok_count : 0,
+              skipped: j.skipped != null ? j.skipped : 0,
+              failed: j.failed != null ? j.failed : 0,
+            });
+        }
+        try { refreshEpisodeList(); } catch (_) {}
+        return j;
+      } catch (e) {
+        if (ppBatchHint) ppBatchHint.textContent = String(e);
+        if (ppBatchLog) ppBatchLog.textContent = String(e);
+        return { ok: false, error: String(e) };
+      } finally {
+        setPpBusy(false);
+      }
+    }
+
     document.getElementById('btnPpExport').addEventListener('click', () =>
       runPostprocess({ steps: ['export-timeline'] }));
     document.getElementById('btnPpFilter').addEventListener('click', () =>
@@ -8594,6 +8728,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     if (btnPpRawVideo) btnPpRawVideo.addEventListener('click', () => runRawVideo());
     const btnPpPackHik = document.getElementById('btnPpPackHik');
     if (btnPpPackHik) btnPpPackHik.addEventListener('click', () => runPackHik());
+    const btnPpBatchRun = document.getElementById('btnPpBatchRun');
+    if (btnPpBatchRun) btnPpBatchRun.addEventListener('click', () => runBatchPostprocess());
 
     fetch('/api/postprocess/defaults').then((r) => r.json()).then((j) => {
       if (!j.ok) return;
@@ -10390,6 +10526,33 @@ def create_viz_app(
                 input_root=req.input_root,
                 output_root=req.output_root,
                 skip_invalid=not bool(req.allow_invalid),
+            )
+        finally:
+            _pp_lock.release()
+
+    @app.post("/api/postprocess/run-root")
+    async def postprocess_run_root(req: PostprocessRootBody) -> dict[str, Any]:
+        from sensors_dcs.postprocess_service import run_postprocess_root
+
+        if not _pp_lock.acquire(blocking=False):
+            return {"ok": False, "error": "another postprocess job is running"}
+        try:
+            return await asyncio.to_thread(
+                run_postprocess_root,
+                input_root=req.input_root,
+                steps=req.steps,
+                align=req.align,
+                master=req.master,
+                master_hz=req.master_hz,
+                align_clock=req.align_clock,
+                primary_camera=req.primary_camera,
+                require=req.require,
+                max_match_dt=req.max_match_dt,
+                trim=req.trim,
+                materialize=req.materialize,
+                camera_map=req.camera_map,
+                allow_invalid=req.allow_invalid,
+                overwrite=req.overwrite,
             )
         finally:
             _pp_lock.release()

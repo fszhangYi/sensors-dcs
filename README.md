@@ -11,6 +11,7 @@ sensors-dcs/
   src/sensors_dcs/
   docs/export-timeline.md           # 统一时间轴导出设计
   docs/filter-timeline.md           # 宽表过滤 + hik 训练集导出
+  docs/known-gaps.md                # 已知漏洞 / 待补缺口（P1–P3）
   docs/hik-dataset.md               # hik_dataset 产物全解（详细）
   docs/hik-dataset-steps.md         # hik steps.json / cartesian 字段含义
   docs/hik-dataset-actions.md       # steps.actions 怎么算 / 能否采集

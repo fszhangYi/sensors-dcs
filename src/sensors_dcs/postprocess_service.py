@@ -353,6 +353,224 @@ def run_postprocess(
     }
 
 
+def clear_episode_export(episode: str | Path) -> dict[str, Any]:
+    """Remove ``<episode>/export`` entirely (used by batch overwrite)."""
+    import shutil
+
+    ep = Path(episode)
+    export_dir = ep / "export"
+    if not export_dir.exists():
+        return {"cleared": False, "path": str(export_dir), "reason": "missing"}
+    if not export_dir.is_dir():
+        return {"cleared": False, "path": str(export_dir), "reason": "not_a_directory"}
+    shutil.rmtree(export_dir)
+    return {"cleared": True, "path": str(export_dir)}
+
+
+def _pick_master_for_episode(
+    insp: dict[str, Any],
+    *,
+    preferred: str | None,
+) -> str | None:
+    candidates = list(insp.get("master_candidates") or [])
+    pref = (preferred or "").strip()
+    if pref and pref in candidates:
+        return pref
+    suggested = insp.get("suggested_master")
+    if suggested and str(suggested) in candidates:
+        return str(suggested)
+    if len(candidates) == 1:
+        return str(candidates[0])
+    return pref or (str(suggested) if suggested else None) or None
+
+
+def run_postprocess_root(
+    *,
+    input_root: str | Path,
+    steps: list[str] | None = None,
+    align: str = DEFAULT_ALIGN,
+    master: str = DEFAULT_MASTER,
+    master_hz: float | None = DEFAULT_MASTER_HZ,
+    align_clock: str = DEFAULT_ALIGN_CLOCK,
+    primary_camera: str = DEFAULT_PRIMARY_CAMERA,
+    require: str = DEFAULT_REQUIRE,
+    max_match_dt: str = DEFAULT_MAX_MATCH_DT,
+    trim: str = DEFAULT_TRIM,
+    materialize: bool = True,
+    camera_map: str | None = None,
+    allow_invalid: bool = False,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Run the three-step postprocess on every ``episode_*`` under ``input_root``.
+
+    ``overwrite=True`` (default): delete each episode's ``export/`` before running.
+    ``overwrite=False``: skip episodes that already have an ``export/`` directory.
+    Per-episode failures are recorded; the batch continues.
+    """
+    root = Path(input_root).expanduser()
+    try:
+        root = root.resolve()
+    except OSError:
+        pass
+    log_lines: list[str] = [
+        f"==> run-postprocess-root input={root} overwrite={bool(overwrite)} "
+        f"allow_invalid={bool(allow_invalid)}"
+    ]
+    if not root.is_dir():
+        err = f"input_root is not a directory: {root}"
+        log_lines.append(f"FAIL: {err}")
+        return {
+            "ok": False,
+            "error": err,
+            "input_root": str(root),
+            "ok_count": 0,
+            "skipped": 0,
+            "failed": 0,
+            "items": [],
+            "log": "\n".join(log_lines),
+        }
+
+    wanted = list(steps or DEFAULT_STEPS)
+    episodes = sorted(
+        (p for p in root.glob("episode_*") if p.is_dir()),
+        key=lambda p: p.name,
+    )
+    log_lines.append(f"found {len(episodes)} episode_* under {root}")
+
+    items: list[dict[str, Any]] = []
+    ok_count = 0
+    skipped = 0
+    failed = 0
+
+    for ep in episodes:
+        item: dict[str, Any] = {
+            "episode": str(ep),
+            "name": ep.name,
+            "status": "pending",
+        }
+        export_dir = ep / "export"
+        insp = inspect_episode(ep)
+
+        if insp.get("provisional") is True:
+            item["status"] = "skipped"
+            item["reason"] = "provisional"
+            item["error"] = insp.get("error") or "manifest still provisional"
+            skipped += 1
+            log_lines.append(f"SKIP {ep.name}: provisional")
+            items.append(item)
+            continue
+
+        if insp.get("valid") is False and not allow_invalid:
+            item["status"] = "skipped"
+            item["reason"] = "invalid"
+            item["error"] = insp.get("error") or "manifest.valid=false"
+            skipped += 1
+            log_lines.append(f"SKIP {ep.name}: invalid")
+            items.append(item)
+            continue
+
+        if export_dir.exists() and not overwrite:
+            item["status"] = "skipped"
+            item["reason"] = "export_exists"
+            skipped += 1
+            log_lines.append(f"SKIP {ep.name}: export/ exists (overwrite=false)")
+            items.append(item)
+            continue
+
+        ep_master = _pick_master_for_episode(insp, preferred=master)
+        if not ep_master and (align_clock or "").strip().lower() != "hw_ts":
+            # wall align still needs a master agent id
+            item["status"] = "failed"
+            item["reason"] = "no_master"
+            item["error"] = "no master candidate for episode"
+            failed += 1
+            log_lines.append(f"FAIL {ep.name}: no master")
+            items.append(item)
+            continue
+
+        if overwrite and export_dir.exists():
+            try:
+                cleared = clear_episode_export(ep)
+                item["cleared_export"] = cleared
+                log_lines.append(f"CLEAR {ep.name}/export cleared={cleared.get('cleared')}")
+            except Exception as e:  # noqa: BLE001
+                item["status"] = "failed"
+                item["reason"] = "clear_export_failed"
+                item["error"] = f"{type(e).__name__}: {e}"
+                failed += 1
+                log_lines.append(f"FAIL {ep.name}: clear export: {item['error']}")
+                items.append(item)
+                continue
+
+        log_lines.append(f"==> {ep.name} master={ep_master}")
+        try:
+            result = run_postprocess(
+                episode=ep,
+                steps=wanted,
+                align=align,
+                master=ep_master or master,
+                master_hz=master_hz,
+                align_clock=align_clock,
+                primary_camera=primary_camera,
+                require=require,
+                max_match_dt=max_match_dt,
+                trim=trim,
+                materialize=materialize,
+                camera_map=camera_map,
+                allow_invalid=allow_invalid,
+            )
+        except Exception as e:  # noqa: BLE001
+            item["status"] = "failed"
+            item["reason"] = "exception"
+            item["error"] = f"{type(e).__name__}: {e}"
+            item["traceback"] = traceback.format_exc()
+            failed += 1
+            log_lines.append(f"FAIL {ep.name}: {item['error']}")
+            items.append(item)
+            continue
+
+        item["result"] = {
+            "ok": result.get("ok"),
+            "error": result.get("error"),
+            "steps": [
+                {"step": r.get("step"), "ok": r.get("ok"), "error": r.get("error")}
+                for r in (result.get("results") or [])
+                if isinstance(r, dict)
+            ],
+        }
+        if result.get("ok"):
+            item["status"] = "ok"
+            ok_count += 1
+            log_lines.append(f"ok {ep.name}")
+        else:
+            item["status"] = "failed"
+            item["reason"] = "postprocess_failed"
+            item["error"] = result.get("error")
+            failed += 1
+            log_lines.append(f"FAIL {ep.name}: {result.get('error')}")
+            if result.get("log"):
+                log_lines.append(str(result["log"]))
+        items.append(item)
+
+    summary_ok = failed == 0
+    out = {
+        "ok": summary_ok,
+        "input_root": str(root),
+        "overwrite": bool(overwrite),
+        "allow_invalid": bool(allow_invalid),
+        "steps": wanted,
+        "ok_count": ok_count,
+        "skipped": skipped,
+        "failed": failed,
+        "total": len(episodes),
+        "items": items,
+        "log": "\n".join(log_lines),
+    }
+    if not summary_ok:
+        out["error"] = f"{failed} episode(s) failed"
+    return out
+
+
 def pack_hik_dataset_root(
     *,
     input_root: str | Path,
