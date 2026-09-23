@@ -124,10 +124,58 @@ def ensure_episode_exportable(
         return
     if manifest.get("valid") is False:
         label = episode_label or str(manifest.get("episode_index", "?"))
+        if manifest.get("provisional"):
+            raise ValueError(
+                f"episode {label} manifest is still provisional (valid=false); "
+                "record stop/flush has not finished writing the final manifest yet. "
+                "Wait for flush to complete, then retry."
+            )
         raise ValueError(
-            f"episode {label} has manifest.valid=false (作废/provisional); "
+            f"episode {label} has manifest.valid=false (作废); "
             "refusing export. Pass allow_invalid=True / --allow-invalid to override."
         )
+
+
+def read_episode_manifest(episode: str | Path) -> dict[str, Any] | None:
+    """Load ``manifest.json`` from an episode dir; ``None`` if missing/unreadable."""
+    root = Path(episode)
+    path = root / "manifest.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def wait_episode_manifest_ready(
+    episode: str | Path,
+    *,
+    timeout_s: float = 120.0,
+    poll_s: float = 0.1,
+) -> dict[str, Any] | None:
+    """Block until the episode manifest is no longer ``provisional``.
+
+    Async flush returns the episode path before the final manifest is written;
+    the on-disk file still has ``provisional=true`` / ``valid=false`` until
+    ``_finalize_session`` finishes. Quick-collect must wait for that rewrite.
+
+    Returns the last-read manifest (may still be provisional on timeout), or
+    ``None`` if the file never appeared / stayed unreadable.
+    """
+    import time
+
+    root = Path(episode)
+    deadline = time.monotonic() + max(0.0, float(timeout_s))
+    last: dict[str, Any] | None = None
+    while True:
+        last = read_episode_manifest(root)
+        if last is not None and not last.get("provisional"):
+            return last
+        if time.monotonic() >= deadline:
+            return last
+        time.sleep(max(0.01, float(poll_s)))
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:

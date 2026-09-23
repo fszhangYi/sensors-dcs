@@ -69,3 +69,59 @@ def test_async_flush_allows_next_start(tmp_path: Path) -> None:
     assert '"valid": true' in man
 
     assert rec.stop(valid=True, async_flush=False)["ok"] is True
+
+
+def test_wait_manifest_ready_resolves_async_provisional(tmp_path: Path) -> None:
+    """Quick-collect previously raced the provisional start-time manifest."""
+    import json
+
+    from sensors_dcs.export.timeline import (
+        ensure_episode_exportable,
+        wait_episode_manifest_ready,
+    )
+
+    cfg = RecordConfig(save_dir=str(tmp_path), episode_index=0, queue_maxsize=32)
+    rec = RecordController(cfg, agents={"gello": _DummyAgent()}, site="test")  # type: ignore[arg-type]
+    assert rec.start()["ok"] is True
+    ep0 = tmp_path / "episode_00000"
+    provisional = json.loads((ep0 / "manifest.json").read_text(encoding="utf-8"))
+    assert provisional.get("provisional") is True
+    assert provisional.get("valid") is False
+
+    # Without waiting, export must refuse the provisional file.
+    try:
+        ensure_episode_exportable(provisional, episode_label=ep0.name)
+        raise AssertionError("expected provisional refuse")
+    except ValueError as e:
+        assert "provisional" in str(e).lower()
+
+    stop = rec.stop(valid=True, async_flush=True)
+    assert stop["ok"] is True
+
+    # Simulate quick-collect: wait then exportable.
+    ready = wait_episode_manifest_ready(ep0, timeout_s=5.0, poll_s=0.05)
+    assert ready is not None
+    assert ready.get("provisional") is not True
+    assert ready.get("valid") is True
+    ensure_episode_exportable(ready, episode_label=ep0.name)
+
+    # Drain second episode if started elsewhere — stop cleanly if still recording.
+    st = rec.status()
+    if st.get("state") == "recording":
+        assert rec.stop(valid=True, async_flush=False)["ok"] is True
+
+
+def test_wait_manifest_ready_noop_when_already_final(tmp_path: Path) -> None:
+    from sensors_dcs.export.timeline import wait_episode_manifest_ready
+
+    ep = tmp_path / "episode_00000"
+    ep.mkdir()
+    (ep / "manifest.json").write_text(
+        '{"episode_index": 0, "valid": true, "agents": []}\n',
+        encoding="utf-8",
+    )
+    t0 = time.time()
+    man = wait_episode_manifest_ready(ep, timeout_s=2.0, poll_s=0.05)
+    assert time.time() - t0 < 1.0
+    assert man is not None
+    assert man.get("valid") is True

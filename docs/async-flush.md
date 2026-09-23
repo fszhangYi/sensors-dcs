@@ -53,7 +53,7 @@ RecordController
 ## 约束与注意
 
 - 改保存路径仍要求当前不在 `recording|flushing`（同步 flush 中不可改）；异步模式下有后台 job 时允许改路径（新 episode 写到新根）。
-- 异步 + 快速采集：后处理可能与下一集录制抢磁盘 IO，属预期权衡。
+- 异步 + 快速采集：后处理会先**等待**该集后台 flush 把最终 manifest（去掉 provisional、写好 valid）写完，再跑三步，避免读到开录时的 `valid=false` 临时文件。与下一集录制并行时仍可能抢磁盘 IO，属预期权衡。
 - 进程退出（安全退出）仍会先尽量停掉当前 recording；已 detach 的 flush 线程为 daemon，极端 kill 可能丢尾部队列，与原先 daemon writer 风险同类。
 - 多集同时 flush 时，agents 环缓冲仍只有「最新帧」语义；录制采样按各 session 自己的 last_seq 去重，互不影响。
 

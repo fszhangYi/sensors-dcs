@@ -3662,6 +3662,50 @@ PREVIEW_HTML = """<!DOCTYPE html>
       syncFlowRecBadge(rec);
     }
 
+    async function waitEpisodeFlushReady(epPath, opts) {
+      const timeoutMs = (opts && opts.timeoutMs != null) ? opts.timeoutMs : 120000;
+      const expectValid = !(opts && opts.expectValid === false);
+      const t0 = Date.now();
+      const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+      let lastNote = '';
+      while (Date.now() - t0 < timeoutMs) {
+        let stillFlushing = false;
+        try {
+          const s = await fetch('/api/record/status').then((x) => x.json());
+          const jobs = s.flushing_jobs || [];
+          for (let i = 0; i < jobs.length; i++) {
+            const job = jobs[i];
+            if (String(job.episode_path || '') !== String(epPath)) continue;
+            if (job.state === 'flushing') stillFlushing = true;
+            if (job.state === 'error') {
+              throw new Error(job.error || 'async flush failed');
+            }
+          }
+        } catch (e) {
+          if (String(e && e.message || e).indexOf('async flush') >= 0) throw e;
+        }
+        try {
+          const insp = await fetch(
+            '/api/postprocess/episode?path=' + encodeURIComponent(epPath),
+            { credentials: 'same-origin' }
+          ).then((r) => r.json());
+          const provisional = insp.provisional === true;
+          if (!stillFlushing && !provisional) {
+            if (expectValid && insp.valid === false) {
+              lastNote = insp.error || insp.note || 'manifest.valid=false';
+              // Final discard (not a race): stop waiting.
+            }
+            return insp;
+          }
+          lastNote = provisional
+            ? 'provisional manifest'
+            : (stillFlushing ? 'flushing' : (insp.error || ''));
+        } catch (_) {}
+        await sleep(150);
+      }
+      throw new Error(t('hint.qc_wait_flush_timeout', { detail: lastNote || 'timeout' }));
+    }
+
     async function postRecord(path, body, panel) {
       const ui = panel || collectRec;
       busy = true;
@@ -3706,11 +3750,25 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (isStop && j.ok && wantQc && j.finished_episode_path && j.kept_files !== false) {
           const epPath = j.finished_episode_path;
           if (ppEpisode) ppEpisode.value = epPath;
+          const needFlushWait = !!(asyncFlush || j.async_flush);
           const runQc = async () => {
             const runningMsg = discarding
               ? t('hint.qc_discard')
               : t('hint.qc_stop');
             setRecLog(runningMsg);
+            if (needFlushWait) {
+              setRecLog(t('hint.qc_wait_flush'));
+              try {
+                await waitEpisodeFlushReady(epPath, {
+                  expectValid: !discarding,
+                  timeoutMs: 120000,
+                });
+              } catch (waitErr) {
+                setRecLog(t('hint.qc_fail', { error: String(waitErr && waitErr.message || waitErr) }), { error: true });
+                return;
+              }
+              setRecLog(runningMsg);
+            }
             await inspectSelectedEpisode(epPath, { silent: true });
             const pp = await runPostprocess({
               steps: ['export-timeline', 'filter-timeline', 'export-hik-dataset'],
@@ -6345,14 +6403,36 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const k = (ev.key || '').toLowerCase();
       let handled = false;
       if (k === 's') {
-        handled = clickIfEnabled(inferRec && inferRec.btnStart)
-          || clickIfEnabled(flowRec && flowRec.btnStart);
+        // Prefer the active sub-page panel (flow vs control) so checkboxes/hints match.
+        const flowPage = document.getElementById('infPageFlow');
+        const onFlow = !!(flowPage && flowPage.classList.contains('active'));
+        if (onFlow) {
+          handled = clickIfEnabled(flowRec && flowRec.btnStart)
+            || clickIfEnabled(inferRec && inferRec.btnStart);
+        } else {
+          handled = clickIfEnabled(inferRec && inferRec.btnStart)
+            || clickIfEnabled(flowRec && flowRec.btnStart);
+        }
       } else if (k === 'e') {
-        handled = clickIfEnabled(inferRec && inferRec.btnStop)
-          || clickIfEnabled(flowRec && flowRec.btnStop);
+        const flowPage = document.getElementById('infPageFlow');
+        const onFlow = !!(flowPage && flowPage.classList.contains('active'));
+        if (onFlow) {
+          handled = clickIfEnabled(flowRec && flowRec.btnStop)
+            || clickIfEnabled(inferRec && inferRec.btnStop);
+        } else {
+          handled = clickIfEnabled(inferRec && inferRec.btnStop)
+            || clickIfEnabled(flowRec && flowRec.btnStop);
+        }
       } else if (k === 'x') {
-        handled = clickIfEnabled(inferRec && inferRec.btnDiscard)
-          || clickIfEnabled(flowRec && flowRec.btnDiscard);
+        const flowPage = document.getElementById('infPageFlow');
+        const onFlow = !!(flowPage && flowPage.classList.contains('active'));
+        if (onFlow) {
+          handled = clickIfEnabled(flowRec && flowRec.btnDiscard)
+            || clickIfEnabled(inferRec && inferRec.btnDiscard);
+        } else {
+          handled = clickIfEnabled(inferRec && inferRec.btnDiscard)
+            || clickIfEnabled(flowRec && flowRec.btnDiscard);
+        }
       } else if (k === 'h') {
         handled = clickIfEnabled(infArmHome);
       } else if (k === 'l') {

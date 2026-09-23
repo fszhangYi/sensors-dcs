@@ -245,13 +245,21 @@ def run_postprocess(
     """Run selected postprocess steps sequentially. Stops on first failure."""
     from sensors_dcs.export.filter import filter_episode_timeline
     from sensors_dcs.export.hik_dataset import export_hik_dataset
-    from sensors_dcs.export.timeline import export_episode_timeline, resolve_episode_dir
+    from sensors_dcs.export.timeline import (
+        export_episode_timeline,
+        resolve_episode_dir,
+        wait_episode_manifest_ready,
+    )
 
     ep = resolve_episode_dir(episode)
     wanted = list(steps or DEFAULT_STEPS)
     unknown = [s for s in wanted if s not in DEFAULT_STEPS]
     if unknown:
         return {"ok": False, "error": f"unknown steps: {unknown}", "episode": str(ep), "results": []}
+
+    # Async flush may still be rewriting the start-time provisional manifest
+    # (valid=false). Wait so quick-collect does not race the final rewrite.
+    wait_episode_manifest_ready(ep, timeout_s=120.0, poll_s=0.1)
 
     clock = (align_clock or DEFAULT_ALIGN_CLOCK).strip().lower()
     if clock not in {"wall", "hw_ts"}:
