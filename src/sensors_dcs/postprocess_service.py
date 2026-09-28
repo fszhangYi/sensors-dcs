@@ -270,6 +270,181 @@ def inspect_episode(episode: str | Path) -> dict[str, Any]:
     return base
 
 
+GRIPPER_SERIES_MAX_POINTS = 800
+_DEFAULT_GRIPPER_KINDS = ("gripper_read", "gripper_write")
+_GRIPPER_FIELD_BY_KIND = {
+    "gripper_read": "position_norm",
+    "gripper_write": "command_position_norm",
+}
+
+
+def _downsample_progress_points(
+    points: list[dict[str, float]],
+    *,
+    max_points: int = GRIPPER_SERIES_MAX_POINTS,
+) -> list[dict[str, float]]:
+    """Keep first/last and evenly sample by index when over ``max_points``."""
+    n = len(points)
+    if n <= max_points or max_points < 2:
+        return points
+    out: list[dict[str, float]] = []
+    last_idx = -1
+    for i in range(max_points):
+        idx = int(round(i * (n - 1) / (max_points - 1)))
+        if idx == last_idx:
+            continue
+        out.append(points[idx])
+        last_idx = idx
+    return out
+
+
+def load_episode_gripper_series(
+    episode: str | Path,
+    *,
+    kinds: list[str] | tuple[str, ...] | None = None,
+    max_points: int = GRIPPER_SERIES_MAX_POINTS,
+) -> dict[str, Any]:
+    """Load gripper read/write curves vs episode time-progress percent.
+
+    Progress uses wall span of **all** ``states/*.jsonl`` samples (not gripper-only).
+    Does not scan cameras. Returns ``{ok, episode, episode_label, series, error}``.
+    """
+    from sensors_dcs.export.timeline import resolve_episode_dir
+
+    wanted = tuple(kinds) if kinds is not None else _DEFAULT_GRIPPER_KINDS
+    kind_set = {str(k).strip() for k in wanted if str(k).strip()}
+    kind_set &= set(_GRIPPER_FIELD_BY_KIND)
+    raw = str(episode or "").strip()
+    empty: dict[str, Any] = {
+        "ok": False,
+        "episode": raw or None,
+        "episode_label": None,
+        "series": [],
+        "error": None,
+    }
+    if not raw:
+        empty["error"] = "empty episode path"
+        return empty
+    try:
+        ep = resolve_episode_dir(raw)
+    except Exception as exc:  # noqa: BLE001
+        empty["error"] = f"{type(exc).__name__}: {exc}"
+        return empty
+    empty["episode"] = str(ep)
+    empty["episode_label"] = ep.name
+    if not ep.is_dir():
+        empty["error"] = f"episode directory not found: {ep}"
+        return empty
+
+    states_dir = ep / "states"
+    if not states_dir.is_dir():
+        return {
+            "ok": True,
+            "episode": str(ep),
+            "episode_label": ep.name,
+            "series": [],
+            "error": None,
+        }
+
+    # Lightweight parse: only need t_wall + gripper payloads (no camera load).
+    from sensors_dcs.export.timeline import _flatten_state_row, _read_jsonl
+
+    samples = []
+    for path in sorted(states_dir.glob("*.jsonl")):
+        try:
+            for row in _read_jsonl(path):
+                samples.append(_flatten_state_row(row))
+        except Exception as exc:  # noqa: BLE001
+            empty["error"] = f"unreadable {path.name}: {exc}"
+            return empty
+
+    if not samples:
+        return {
+            "ok": True,
+            "episode": str(ep),
+            "episode_label": ep.name,
+            "series": [],
+            "error": None,
+        }
+
+    t0 = min(s.t_wall for s in samples)
+    t_end = max(s.t_wall for s in samples)
+    span = t_end - t0
+
+    # Group gripper samples by (agent_id, kind).
+    buckets: dict[tuple[str, str], list[tuple[float, float]]] = {}
+    for s in samples:
+        if s.kind not in kind_set:
+            continue
+        field = _GRIPPER_FIELD_BY_KIND[s.kind]
+        raw_v = s.fields.get(field)
+        if raw_v is None:
+            continue
+        try:
+            v = float(raw_v)
+        except (TypeError, ValueError):
+            continue
+        if not (v == v):  # NaN
+            continue
+        key = (s.agent_id, s.kind)
+        buckets.setdefault(key, []).append((float(s.t_wall), v))
+
+    series_out: list[dict[str, Any]] = []
+    for (agent_id, kind), pts in sorted(buckets.items(), key=lambda x: (x[0][0], x[0][1])):
+        pts.sort(key=lambda p: p[0])
+        field = _GRIPPER_FIELD_BY_KIND[kind]
+        if span <= 1e-12:
+            points = [{"pct": 0.0, "v": pts[0][1]}] if pts else []
+        else:
+            points = [
+                {"pct": max(0.0, min(100.0, (t - t0) / span * 100.0)), "v": v}
+                for t, v in pts
+            ]
+        points = _downsample_progress_points(points, max_points=max_points)
+        series_out.append(
+            {
+                "episode": str(ep),
+                "episode_label": ep.name,
+                "agent_id": agent_id,
+                "kind": kind,
+                "field": field,
+                "t0": float(t0),
+                "t_end": float(t_end),
+                "points": points,
+            }
+        )
+
+    return {
+        "ok": True,
+        "episode": str(ep),
+        "episode_label": ep.name,
+        "series": series_out,
+        "error": None,
+    }
+
+
+def load_gripper_series_batch(
+    paths: list[str] | None,
+    *,
+    kinds: list[str] | tuple[str, ...] | None = None,
+    max_points: int = GRIPPER_SERIES_MAX_POINTS,
+) -> dict[str, Any]:
+    """Load gripper series for multiple episodes; per-path errors collected."""
+    series: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for raw in paths or []:
+        p = str(raw or "").strip()
+        if not p:
+            errors.append({"path": "", "error": "empty episode path"})
+            continue
+        one = load_episode_gripper_series(p, kinds=kinds, max_points=max_points)
+        if not one.get("ok"):
+            errors.append({"path": p, "error": str(one.get("error") or "load failed")})
+            continue
+        series.extend(one.get("series") or [])
+    return {"ok": True, "series": series, "errors": errors}
+
+
 def run_postprocess(
     *,
     episode: str | Path,

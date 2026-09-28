@@ -86,6 +86,13 @@ class RatePolicySaveBody(BaseModel):
     policy: dict[str, Any]
 
 
+class GripperSeriesBody(BaseModel):
+    """Load gripper read/write curves vs episode time-progress percent."""
+
+    paths: list[str] = []
+    kinds: list[str] | None = None
+
+
 class RawVideoBody(BaseModel):
     """Compose a grid MP4 from raw episode camera JPEGs (not Step 1–3)."""
 
@@ -1450,32 +1457,114 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .pp-rate-body {
       display: grid;
-      grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr);
+      grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.85fr);
       gap: 0.55rem;
       align-items: stretch;
       min-width: 0;
     }
-    .pp-rate-seg-wrap {
+    .pp-rate-chart-wrap {
       margin: 0;
       display: grid;
       gap: 0.4rem;
       align-content: start;
       min-width: 0;
     }
-    .pp-rate-seg-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.82rem;
-    }
-    .pp-rate-seg-table th,
-    .pp-rate-seg-table td {
+    .pp-rate-overlay {
+      display: grid;
+      gap: 0.35rem;
+      padding: 0.4rem 0.5rem;
       border: 1px solid var(--border, #333);
-      padding: 0.22rem 0.32rem;
-      text-align: left;
+      border-radius: 6px;
+      background: color-mix(in srgb, var(--panel, #1a1a1a) 92%, transparent);
     }
-    .pp-rate-seg-table input[type="number"] {
-      width: 4.2rem;
-      min-width: 3.2rem;
+    .pp-rate-overlay-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      align-items: center;
+    }
+    .pp-rate-ep-list {
+      max-height: 6.5rem;
+      overflow: auto;
+      display: grid;
+      gap: 0.2rem;
+      margin: 0;
+      padding: 0.25rem 0.35rem;
+      border: 1px solid var(--border, #333);
+      border-radius: 4px;
+      font-size: 0.78rem;
+    }
+    .pp-rate-ep-item {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      align-items: center;
+      padding: 0.12rem 0;
+    }
+    .pp-rate-ep-item label {
+      display: inline-flex;
+      gap: 0.25rem;
+      align-items: center;
+      margin: 0;
+      min-width: 0;
+      font-size: 0.78rem;
+      color: var(--text, #e8e8e8);
+    }
+    .pp-rate-ep-item .pp-rate-ep-name {
+      flex: 1 1 8rem;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .pp-rate-canvas-box {
+      position: relative;
+      width: 100%;
+      min-height: 220px;
+      height: 240px;
+      border: 1px solid var(--border, #333);
+      border-radius: 6px;
+      background: color-mix(in srgb, var(--panel, #121212) 96%, #0a2a24);
+      overflow: hidden;
+      touch-action: none;
+      user-select: none;
+    }
+    .pp-rate-canvas-box canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      cursor: crosshair;
+    }
+    .pp-rate-canvas-box.is-drag-hz canvas { cursor: ns-resize; }
+    .pp-rate-canvas-box.is-drag-bp canvas { cursor: ew-resize; }
+    .pp-rate-chart-tip {
+      position: absolute;
+      left: 0.5rem;
+      top: 0.4rem;
+      font-size: 0.72rem;
+      color: var(--spark, #34d399);
+      pointer-events: none;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.65);
+    }
+    .pp-rate-chart-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem 0.75rem;
+      font-size: 0.72rem;
+      color: var(--muted);
+      min-height: 1rem;
+    }
+    .pp-rate-chart-legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.28rem;
+    }
+    .pp-rate-chart-legend i {
+      display: inline-block;
+      width: 0.7rem;
+      height: 0.18rem;
+      border-radius: 1px;
+      background: currentColor;
     }
     .pp-rate-preview-wrap {
       display: grid;
@@ -1515,6 +1604,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       .pp-zone-align { grid-column: auto; grid-row: auto; order: 0; }
       .pp-fields { grid-template-columns: 1fr; }
       .pp-rate-body { grid-template-columns: 1fr; }
+      .pp-rate-canvas-box { height: 200px; }
     }
     .pp-card .pp-hint {
       margin: 0;
@@ -2963,29 +3053,34 @@ PREVIEW_HTML = """<!DOCTYPE html>
             </div>
             <div class="pp-zone pp-zone-rate" aria-labelledby="ppZoneRateBuild">
               <h2 id="ppZoneRateBuild" data-i18n="pp.rate_build_title">0 · 生成变频策略</h2>
-              <p class="pp-hint" data-i18n="pp.rate_build_hint">按 episode 时间进度分段设定 Hz，保存为 JSON；下方对齐参数再加载该策略。</p>
+              <p class="pp-hint" data-i18n="pp.rate_build_hint">在双轴图上拖阶梯设定 Hz（可叠加 gripper 曲线）；保存为 JSON 后下方对齐参数再加载。</p>
               <div class="pp-row">
                 <label for="ppRateName" data-i18n="pp.rate_name">名称</label>
                 <input type="text" id="ppRateName" value="fine_middle_v1" />
               </div>
               <div class="pp-rate-body">
-                <div class="pp-rate-seg-wrap">
-                  <table class="pp-rate-seg-table" id="ppRateSegTable">
-                    <thead>
-                      <tr>
-                        <th data-i18n="pp.rate_seg_start">起始%</th>
-                        <th data-i18n="pp.rate_seg_end">结束%</th>
-                        <th data-i18n="pp.rate_seg_hz">Hz</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody id="ppRateSegBody"></tbody>
-                  </table>
+                <div class="pp-rate-chart-wrap">
+                  <div class="pp-rate-overlay">
+                    <div class="pp-hint" data-i18n="pp.rate_chart_overlay_hint">多选 episode，勾选 read/write 后加载曲线作参考（不写入策略 JSON）。</div>
+                    <div id="ppRateEpList" class="pp-rate-ep-list" role="group" aria-label="episodes"></div>
+                    <div class="pp-rate-overlay-row pp-actions">
+                      <button type="button" id="btnPpRateLoadSeries" data-i18n="pp.rate_chart_load">加载曲线</button>
+                      <button type="button" id="btnPpRateClearSeries" data-i18n="pp.rate_chart_clear">清除曲线</button>
+                      <span class="hint" id="ppRateSeriesHint"></span>
+                    </div>
+                  </div>
+                  <div class="pp-rate-canvas-box" id="ppRateCanvasBox">
+                    <canvas id="ppRateCanvas" width="640" height="240"></canvas>
+                    <div class="pp-rate-chart-tip" id="ppRateChartTip" hidden></div>
+                  </div>
+                  <div class="pp-rate-chart-legend" id="ppRateChartLegend"></div>
                   <div class="pp-actions">
-                    <button type="button" id="btnPpRateAddSeg" data-i18n="pp.rate_add_seg">添加分段</button>
+                    <button type="button" id="btnPpRateAddBp" data-i18n="pp.rate_chart_add_bp">添加断点</button>
+                    <button type="button" id="btnPpRateDelBp" data-i18n="pp.rate_chart_del_bp">删除断点</button>
                     <button type="button" id="btnPpRatePresetFine" data-i18n="pp.rate_preset_fine">填入精细中段模板</button>
                     <button type="button" id="btnPpRatePresetFixed" data-i18n="pp.rate_preset_fixed">填入固定 5Hz</button>
                   </div>
+                  <p class="pp-hint" data-i18n="pp.rate_chart_axes">横轴：episode % · 左轴：gripper(0–1) · 右轴：策略 Hz。拖竖线改边界，拖横条改 Hz。</p>
                 </div>
                 <div class="pp-rate-preview-wrap">
                   <label for="ppRatePreview" data-i18n="pp.rate_preview">JSON 预览</label>
@@ -6804,10 +6899,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const ppRatePolicySelect = document.getElementById('ppRatePolicySelect');
     const ppRatePolicySummary = document.getElementById('ppRatePolicySummary');
     const ppRateName = document.getElementById('ppRateName');
-    const ppRateSegBody = document.getElementById('ppRateSegBody');
     const ppRatePreview = document.getElementById('ppRatePreview');
     const ppRateSavePath = document.getElementById('ppRateSavePath');
     const ppRateBuildHint = document.getElementById('ppRateBuildHint');
+    const ppRateEpList = document.getElementById('ppRateEpList');
+    const ppRateCanvas = document.getElementById('ppRateCanvas');
+    const ppRateCanvasBox = document.getElementById('ppRateCanvasBox');
+    const ppRateChartTip = document.getElementById('ppRateChartTip');
+    const ppRateChartLegend = document.getElementById('ppRateChartLegend');
+    const ppRateSeriesHint = document.getElementById('ppRateSeriesHint');
     const ppRequire = document.getElementById('ppRequire');
     const ppMaxDt = document.getElementById('ppMaxDt');
     const ppTrim = document.getElementById('ppTrim');
@@ -8281,6 +8381,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
       ppRateBuildHint.style.color = isErr ? 'var(--danger, #c44)' : '';
     }
 
+    function setRateSeriesHint(msg, isErr) {
+      if (!ppRateSeriesHint) return;
+      ppRateSeriesHint.textContent = msg || '';
+      ppRateSeriesHint.style.color = isErr ? 'var(--danger, #c44)' : '';
+    }
+
     function defaultFineSegments() {
       return [
         { start_pct: 0, end_pct: 10, hz: 5 },
@@ -8294,19 +8400,73 @@ PREVIEW_HTML = """<!DOCTYPE html>
       return [{ start_pct: 0, end_pct: 100, hz: 5 }];
     }
 
+    const RATE_HZ_MIN = 0.5;
+    const RATE_HZ_MAX = 60;
+    const RATE_MIN_SEG_PCT = 1;
+    const RATE_SNAP_PCT = 0.5;
+    const RATE_SERIES_COLORS = [
+      '#34d399', '#60a5fa', '#fbbf24', '#f472b6', '#a78bfa', '#2dd4bf', '#fb923c', '#94a3b8',
+    ];
+
+    const rateChart = {
+      segments: defaultFineSegments(),
+      series: [],
+      selectedBp: null, // interior breakpoint index (1..n-1 on boundary list)
+      pendingAddBp: false,
+      drag: null,
+      plot: null,
+      tip: '',
+    };
+
+    function cloneRateSegs(segs) {
+      return (segs || []).map((s) => ({
+        start_pct: Number(s.start_pct),
+        end_pct: Number(s.end_pct),
+        hz: Number(s.hz),
+      }));
+    }
+
+    function normalizeRateSegs(segs) {
+      let rows = cloneRateSegs(segs);
+      if (!rows.length) rows = defaultFixedSegments();
+      rows.sort((a, b) => a.start_pct - b.start_pct);
+      rows[0].start_pct = 0;
+      for (let i = 0; i < rows.length; i++) {
+        if (i > 0) rows[i].start_pct = rows[i - 1].end_pct;
+        let hz = Number(rows[i].hz);
+        if (!Number.isFinite(hz) || hz <= 0) hz = 5;
+        rows[i].hz = Math.max(RATE_HZ_MIN, Math.min(RATE_HZ_MAX, hz));
+      }
+      rows[rows.length - 1].end_pct = 100;
+      // Enforce min width by merging tiny gaps into next segment when needed.
+      const out = [];
+      for (let i = 0; i < rows.length; i++) {
+        const s = rows[i];
+        if (s.end_pct - s.start_pct < RATE_MIN_SEG_PCT - 1e-9 && i < rows.length - 1) {
+          rows[i + 1].start_pct = s.start_pct;
+          continue;
+        }
+        out.push(s);
+      }
+      if (!out.length) return defaultFixedSegments();
+      out[0].start_pct = 0;
+      out[out.length - 1].end_pct = 100;
+      return out;
+    }
+
+    function snapPct(v) {
+      return Math.round(v / RATE_SNAP_PCT) * RATE_SNAP_PCT;
+    }
+
     function readRateSegRows() {
-      const rows = [];
-      if (!ppRateSegBody) return rows;
-      ppRateSegBody.querySelectorAll('tr').forEach((tr) => {
-        const nums = tr.querySelectorAll('input[type="number"]');
-        if (nums.length < 3) return;
-        rows.push({
-          start_pct: parseFloat(nums[0].value),
-          end_pct: parseFloat(nums[1].value),
-          hz: parseFloat(nums[2].value),
-        });
-      });
-      return rows;
+      return cloneRateSegs(rateChart.segments);
+    }
+
+    function setRateSegRows(segs) {
+      rateChart.segments = normalizeRateSegs(segs);
+      rateChart.selectedBp = null;
+      refreshRatePreview();
+      drawRateChart();
     }
 
     function buildRatePolicyObject() {
@@ -8334,46 +8494,525 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
     }
 
-    function addRateSegRow(seg) {
-      if (!ppRateSegBody) return;
-      const tr = document.createElement('tr');
-      const mk = (val, step) => {
-        const inp = document.createElement('input');
-        inp.type = 'number';
-        inp.step = step || '1';
-        inp.min = '0';
-        inp.value = String(val);
-        inp.addEventListener('input', refreshRatePreview);
-        return inp;
+    function rateChartLayout(w, h) {
+      const pad = { l: 44, r: 44, t: 16, b: 28 };
+      return {
+        pad: pad,
+        x0: pad.l,
+        y0: pad.t,
+        x1: w - pad.r,
+        y1: h - pad.b,
+        w: Math.max(1, w - pad.l - pad.r),
+        h: Math.max(1, h - pad.t - pad.b),
+        hzMax: RATE_HZ_MAX,
       };
-      const td0 = document.createElement('td');
-      td0.appendChild(mk(seg.start_pct, '1'));
-      const td1 = document.createElement('td');
-      td1.appendChild(mk(seg.end_pct, '1'));
-      const td2 = document.createElement('td');
-      td2.appendChild(mk(seg.hz, '0.1'));
-      const td3 = document.createElement('td');
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.textContent = '×';
-      btn.title = 'remove';
-      btn.addEventListener('click', () => {
-        tr.remove();
-        refreshRatePreview();
-      });
-      td3.appendChild(btn);
-      tr.appendChild(td0);
-      tr.appendChild(td1);
-      tr.appendChild(td2);
-      tr.appendChild(td3);
-      ppRateSegBody.appendChild(tr);
     }
 
-    function setRateSegRows(segs) {
-      if (!ppRateSegBody) return;
-      ppRateSegBody.innerHTML = '';
-      (segs || []).forEach((s) => addRateSegRow(s));
+    function pctToX(plot, pct) {
+      return plot.x0 + (pct / 100) * plot.w;
+    }
+
+    function xToPct(plot, x) {
+      return ((x - plot.x0) / plot.w) * 100;
+    }
+
+    function hzToY(plot, hz) {
+      return plot.y1 - (hz / plot.hzMax) * plot.h;
+    }
+
+    function yToHz(plot, y) {
+      return ((plot.y1 - y) / plot.h) * plot.hzMax;
+    }
+
+    function gripToY(plot, v) {
+      const vv = Math.max(0, Math.min(1, Number(v) || 0));
+      return plot.y1 - vv * plot.h;
+    }
+
+    function showRateTip(text) {
+      rateChart.tip = text || '';
+      if (!ppRateChartTip) return;
+      if (!text) {
+        ppRateChartTip.hidden = true;
+        ppRateChartTip.textContent = '';
+        return;
+      }
+      ppRateChartTip.hidden = false;
+      ppRateChartTip.textContent = text;
+    }
+
+    function updateRateLegend() {
+      if (!ppRateChartLegend) return;
+      ppRateChartLegend.innerHTML = '';
+      (rateChart.series || []).forEach((s, i) => {
+        const color = RATE_SERIES_COLORS[i % RATE_SERIES_COLORS.length];
+        const el = document.createElement('span');
+        el.style.color = color;
+        const sw = document.createElement('i');
+        el.appendChild(sw);
+        const kindShort = s.kind === 'gripper_write' ? 'write' : 'read';
+        el.appendChild(document.createTextNode(
+          (s.episode_label || s.agent_id || 'ep') + ' · ' + kindShort
+        ));
+        ppRateChartLegend.appendChild(el);
+      });
+      const pol = document.createElement('span');
+      pol.style.color = '#fbbf24';
+      const sw2 = document.createElement('i');
+      pol.appendChild(sw2);
+      pol.appendChild(document.createTextNode(t('pp.rate_chart_legend_hz')));
+      ppRateChartLegend.appendChild(pol);
+    }
+
+    function drawRateChart() {
+      if (!ppRateCanvas || !ppRateCanvasBox) return;
+      const box = ppRateCanvasBox;
+      const dpr = window.devicePixelRatio || 1;
+      const cssW = Math.max(120, box.clientWidth || 640);
+      const cssH = Math.max(160, box.clientHeight || 240);
+      if (ppRateCanvas.width !== Math.round(cssW * dpr) || ppRateCanvas.height !== Math.round(cssH * dpr)) {
+        ppRateCanvas.width = Math.round(cssW * dpr);
+        ppRateCanvas.height = Math.round(cssH * dpr);
+      }
+      const ctx = ppRateCanvas.getContext('2d');
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cssW, cssH);
+      const plot = rateChartLayout(cssW, cssH);
+      rateChart.plot = plot;
+
+      // Grid
+      ctx.strokeStyle = 'rgba(148,163,184,0.18)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= 4; i++) {
+        const y = plot.y0 + (plot.h * i) / 4;
+        ctx.beginPath();
+        ctx.moveTo(plot.x0, y);
+        ctx.lineTo(plot.x1, y);
+        ctx.stroke();
+      }
+      for (let i = 0; i <= 5; i++) {
+        const x = plot.x0 + (plot.w * i) / 5;
+        ctx.beginPath();
+        ctx.moveTo(x, plot.y0);
+        ctx.lineTo(x, plot.y1);
+        ctx.stroke();
+      }
+
+      // Gripper series (left axis 0–1)
+      (rateChart.series || []).forEach((s, i) => {
+        const pts = s.points || [];
+        if (pts.length < 2) return;
+        ctx.strokeStyle = RATE_SERIES_COLORS[i % RATE_SERIES_COLORS.length];
+        ctx.globalAlpha = 0.85;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        pts.forEach((p, j) => {
+          const x = pctToX(plot, p.pct);
+          const y = gripToY(plot, p.v);
+          if (j === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      });
+
+      // Rate step fill + stroke (right axis)
+      const segs = rateChart.segments || [];
+      segs.forEach((seg) => {
+        const x0 = pctToX(plot, seg.start_pct);
+        const x1 = pctToX(plot, seg.end_pct);
+        const y = hzToY(plot, seg.hz);
+        ctx.fillStyle = 'rgba(251, 191, 36, 0.18)';
+        ctx.fillRect(x0, y, Math.max(1, x1 - x0), plot.y1 - y);
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x0, y);
+        ctx.lineTo(x1, y);
+        ctx.stroke();
+        // Vertical drop at segment start (except first connects from previous end via next loop)
+        ctx.beginPath();
+        ctx.moveTo(x0, y);
+        ctx.lineTo(x0, plot.y1);
+        ctx.globalAlpha = 0.35;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      });
+
+      // Breakpoint handles
+      const bps = [];
+      segs.forEach((seg, i) => {
+        if (i === 0) bps.push(0);
+        bps.push(seg.end_pct);
+      });
+      bps.forEach((pct, i) => {
+        const locked = i === 0 || i === bps.length - 1;
+        const x = pctToX(plot, pct);
+        const selected = rateChart.selectedBp === i;
+        ctx.strokeStyle = locked ? 'rgba(148,163,184,0.55)' : (selected ? '#34d399' : '#e2e8f0');
+        ctx.lineWidth = selected ? 2.5 : 1.5;
+        ctx.setLineDash(locked ? [4, 3] : []);
+        ctx.beginPath();
+        ctx.moveTo(x, plot.y0);
+        ctx.lineTo(x, plot.y1);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        if (!locked) {
+          ctx.fillStyle = selected ? '#34d399' : '#f8fafc';
+          ctx.beginPath();
+          ctx.arc(x, plot.y0 + 6, 4.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
+
+      // Axes labels
+      ctx.fillStyle = 'rgba(148,163,184,0.95)';
+      ctx.font = '11px IBM Plex Sans, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('0%', plot.x0, plot.y1 + 16);
+      ctx.fillText('50%', plot.x0 + plot.w * 0.5, plot.y1 + 16);
+      ctx.fillText('100%', plot.x1, plot.y1 + 16);
+      ctx.textAlign = 'right';
+      ctx.fillText('1', plot.x0 - 6, plot.y0 + 4);
+      ctx.fillText('0', plot.x0 - 6, plot.y1);
+      ctx.textAlign = 'left';
+      ctx.fillText(String(RATE_HZ_MAX), plot.x1 + 6, plot.y0 + 4);
+      ctx.fillText('0', plot.x1 + 6, plot.y1);
+      ctx.fillStyle = 'rgba(52,211,153,0.9)';
+      ctx.textAlign = 'right';
+      ctx.fillText('grip', plot.x0 - 6, plot.y0 + plot.h * 0.5);
+      ctx.fillStyle = 'rgba(251,191,36,0.95)';
+      ctx.textAlign = 'left';
+      ctx.fillText('Hz', plot.x1 + 6, plot.y0 + plot.h * 0.5);
+
+      if (rateChart.tip) showRateTip(rateChart.tip);
+    }
+
+    function hitTestRateChart(clientX, clientY) {
+      if (!ppRateCanvas || !rateChart.plot) return null;
+      const rect = ppRateCanvas.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      const plot = rateChart.plot;
+      const segs = rateChart.segments || [];
+      // Interior breakpoints
+      for (let i = 1; i < segs.length; i++) {
+        const bpX = pctToX(plot, segs[i].start_pct);
+        if (Math.abs(x - bpX) <= 7) {
+          return { type: 'bp', index: i }; // boundary index = segment start index
+        }
+      }
+      // Horizontal bars
+      for (let i = 0; i < segs.length; i++) {
+        const seg = segs[i];
+        const x0 = pctToX(plot, seg.start_pct);
+        const x1 = pctToX(plot, seg.end_pct);
+        const hy = hzToY(plot, seg.hz);
+        if (x >= x0 && x <= x1 && Math.abs(y - hy) <= 8) {
+          return { type: 'hz', index: i };
+        }
+        // Also allow dragging inside the filled band (upper portion near bar)
+        if (x >= x0 && x <= x1 && y >= hy - 2 && y <= plot.y1 && Math.abs(y - hy) <= 28) {
+          return { type: 'hz', index: i };
+        }
+      }
+      if (x >= plot.x0 && x <= plot.x1 && y >= plot.y0 && y <= plot.y1) {
+        return { type: 'plot', pct: xToPct(plot, x) };
+      }
+      return null;
+    }
+
+    function insertRateBreakpoint(pctRaw) {
+      let pct = snapPct(pctRaw);
+      pct = Math.max(RATE_MIN_SEG_PCT, Math.min(100 - RATE_MIN_SEG_PCT, pct));
+      const segs = cloneRateSegs(rateChart.segments);
+      for (let i = 0; i < segs.length; i++) {
+        const seg = segs[i];
+        if (pct <= seg.start_pct + RATE_MIN_SEG_PCT - 1e-9) continue;
+        if (pct >= seg.end_pct - RATE_MIN_SEG_PCT + 1e-9) continue;
+        const left = { start_pct: seg.start_pct, end_pct: pct, hz: seg.hz };
+        const right = { start_pct: pct, end_pct: seg.end_pct, hz: seg.hz };
+        segs.splice(i, 1, left, right);
+        rateChart.segments = normalizeRateSegs(segs);
+        rateChart.selectedBp = i + 1;
+        refreshRatePreview();
+        drawRateChart();
+        showRateTip(pct.toFixed(1) + '% · split');
+        return true;
+      }
+      return false;
+    }
+
+    function deleteSelectedRateBreakpoint() {
+      const idx = rateChart.selectedBp;
+      if (idx == null || idx <= 0) return false;
+      const segs = cloneRateSegs(rateChart.segments);
+      // selectedBp is boundary index among [0, starts..., 100]; interior starts are 1..len-1
+      // Map: boundary i (1..segs.length-1) merges segs[i-1] and segs[i]
+      if (idx < 1 || idx >= segs.length) return false;
+      const left = segs[idx - 1];
+      const right = segs[idx];
+      segs.splice(idx - 1, 2, {
+        start_pct: left.start_pct,
+        end_pct: right.end_pct,
+        hz: left.hz,
+      });
+      rateChart.segments = normalizeRateSegs(segs);
+      rateChart.selectedBp = null;
       refreshRatePreview();
+      drawRateChart();
+      return true;
+    }
+
+    function onRatePointerDown(ev) {
+      if (!ppRateCanvas) return;
+      const hit = hitTestRateChart(ev.clientX, ev.clientY);
+      if (rateChart.pendingAddBp) {
+        rateChart.pendingAddBp = false;
+        if (hit && (hit.type === 'plot' || hit.type === 'hz' || hit.type === 'bp')) {
+          const pct = hit.type === 'bp'
+            ? rateChart.segments[hit.index].start_pct
+            : (hit.pct != null ? hit.pct : xToPct(rateChart.plot, ev.clientX - ppRateCanvas.getBoundingClientRect().left));
+          if (!insertRateBreakpoint(pct)) setRateBuildHint(t('pp.rate_chart_add_bp_fail'), true);
+        }
+        return;
+      }
+      if (!hit) return;
+      if (hit.type === 'bp') {
+        rateChart.selectedBp = hit.index;
+        rateChart.drag = { type: 'bp', index: hit.index };
+        if (ppRateCanvasBox) ppRateCanvasBox.classList.add('is-drag-bp');
+        try { ppRateCanvas.setPointerCapture(ev.pointerId); } catch (_) {}
+        drawRateChart();
+        ev.preventDefault();
+        return;
+      }
+      if (hit.type === 'hz') {
+        rateChart.selectedBp = null;
+        rateChart.drag = { type: 'hz', index: hit.index };
+        if (ppRateCanvasBox) ppRateCanvasBox.classList.add('is-drag-hz');
+        try { ppRateCanvas.setPointerCapture(ev.pointerId); } catch (_) {}
+        const seg = rateChart.segments[hit.index];
+        showRateTip(seg.start_pct.toFixed(1) + '–' + seg.end_pct.toFixed(1) + '% · ' + seg.hz + ' Hz');
+        drawRateChart();
+        ev.preventDefault();
+      }
+    }
+
+    function onRatePointerMove(ev) {
+      if (!rateChart.drag || !rateChart.plot) {
+        const hit = hitTestRateChart(ev.clientX, ev.clientY);
+        if (hit && hit.type === 'hz') {
+          const seg = rateChart.segments[hit.index];
+          showRateTip(seg.start_pct.toFixed(1) + '–' + seg.end_pct.toFixed(1) + '% · ' + seg.hz + ' Hz');
+        } else if (hit && hit.type === 'bp') {
+          showRateTip(rateChart.segments[hit.index].start_pct.toFixed(1) + '%');
+        } else if (!rateChart.drag) {
+          showRateTip('');
+        }
+        return;
+      }
+      const rect = ppRateCanvas.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+      const segs = cloneRateSegs(rateChart.segments);
+      if (rateChart.drag.type === 'bp') {
+        const i = rateChart.drag.index;
+        const left = segs[i - 1];
+        const right = segs[i];
+        let pct = snapPct(xToPct(rateChart.plot, x));
+        const lo = left.start_pct + RATE_MIN_SEG_PCT;
+        const hi = right.end_pct - RATE_MIN_SEG_PCT;
+        pct = Math.max(lo, Math.min(hi, pct));
+        left.end_pct = pct;
+        right.start_pct = pct;
+        rateChart.segments = segs;
+        rateChart.selectedBp = i;
+        showRateTip(pct.toFixed(1) + '%');
+        refreshRatePreview();
+        drawRateChart();
+      } else if (rateChart.drag.type === 'hz') {
+        let hz = yToHz(rateChart.plot, y);
+        hz = Math.round(hz * 2) / 2;
+        hz = Math.max(RATE_HZ_MIN, Math.min(RATE_HZ_MAX, hz));
+        segs[rateChart.drag.index].hz = hz;
+        rateChart.segments = segs;
+        const seg = segs[rateChart.drag.index];
+        showRateTip(seg.start_pct.toFixed(1) + '–' + seg.end_pct.toFixed(1) + '% · ' + hz + ' Hz');
+        refreshRatePreview();
+        drawRateChart();
+      }
+    }
+
+    function onRatePointerUp(ev) {
+      if (rateChart.drag) {
+        rateChart.segments = normalizeRateSegs(rateChart.segments);
+        rateChart.drag = null;
+        if (ppRateCanvasBox) {
+          ppRateCanvasBox.classList.remove('is-drag-bp');
+          ppRateCanvasBox.classList.remove('is-drag-hz');
+        }
+        try { ppRateCanvas.releasePointerCapture(ev.pointerId); } catch (_) {}
+        refreshRatePreview();
+        drawRateChart();
+      }
+    }
+
+    function onRateDblClick(ev) {
+      const hit = hitTestRateChart(ev.clientX, ev.clientY);
+      if (!hit) return;
+      let pct = hit.pct;
+      if (hit.type === 'hz' && rateChart.plot) {
+        const rect = ppRateCanvas.getBoundingClientRect();
+        pct = xToPct(rateChart.plot, ev.clientX - rect.left);
+      }
+      if (hit.type === 'bp') return;
+      if (pct == null) return;
+      insertRateBreakpoint(pct);
+      ev.preventDefault();
+    }
+
+    if (ppRateCanvas) {
+      ppRateCanvas.addEventListener('pointerdown', onRatePointerDown);
+      ppRateCanvas.addEventListener('pointermove', onRatePointerMove);
+      ppRateCanvas.addEventListener('pointerup', onRatePointerUp);
+      ppRateCanvas.addEventListener('pointercancel', onRatePointerUp);
+      ppRateCanvas.addEventListener('dblclick', onRateDblClick);
+      window.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Delete' || ev.key === 'Backspace') {
+          const tag = (ev.target && ev.target.tagName) || '';
+          if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+          if (deleteSelectedRateBreakpoint()) ev.preventDefault();
+        }
+      });
+      if (typeof ResizeObserver !== 'undefined' && ppRateCanvasBox) {
+        const ro = new ResizeObserver(() => drawRateChart());
+        ro.observe(ppRateCanvasBox);
+      }
+    }
+
+    function fillRateEpOverlay(episodes) {
+      if (!ppRateEpList) return;
+      const prev = {};
+      ppRateEpList.querySelectorAll('.pp-rate-ep-item').forEach((row) => {
+        const path = row.getAttribute('data-path') || '';
+        const sel = row.querySelector('input[data-role="sel"]');
+        const rd = row.querySelector('input[data-role="read"]');
+        const wr = row.querySelector('input[data-role="write"]');
+        if (path) {
+          prev[path] = {
+            sel: !!(sel && sel.checked),
+            read: rd ? !!rd.checked : true,
+            write: wr ? !!wr.checked : true,
+          };
+        }
+      });
+      ppRateEpList.innerHTML = '';
+      const list = episodes || [];
+      if (!list.length) {
+        const empty = document.createElement('div');
+        empty.className = 'pp-hint';
+        empty.textContent = t('pp.no_ep');
+        ppRateEpList.appendChild(empty);
+        return;
+      }
+      list.forEach((ep) => {
+        const path = ep.path || ep;
+        const name = ep.name || String(path).split(/[/\\\\]/).pop();
+        const st = prev[path] || { sel: false, read: true, write: true };
+        const row = document.createElement('div');
+        row.className = 'pp-rate-ep-item';
+        row.setAttribute('data-path', path);
+        const mkCheck = (role, checked, label) => {
+          const lab = document.createElement('label');
+          const inp = document.createElement('input');
+          inp.type = 'checkbox';
+          inp.setAttribute('data-role', role);
+          inp.checked = !!checked;
+          lab.appendChild(inp);
+          lab.appendChild(document.createTextNode(label));
+          return lab;
+        };
+        const selLab = mkCheck('sel', st.sel, '');
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'pp-rate-ep-name';
+        nameSpan.textContent = name;
+        nameSpan.title = path;
+        selLab.appendChild(nameSpan);
+        row.appendChild(selLab);
+        row.appendChild(mkCheck('read', st.read, 'read'));
+        row.appendChild(mkCheck('write', st.write, 'write'));
+        ppRateEpList.appendChild(row);
+      });
+    }
+
+    function collectRateOverlaySelection() {
+      const byPath = {};
+      if (!ppRateEpList) return { paths: [], kindsByPath: byPath };
+      ppRateEpList.querySelectorAll('.pp-rate-ep-item').forEach((row) => {
+        const path = row.getAttribute('data-path') || '';
+        const sel = row.querySelector('input[data-role="sel"]');
+        if (!path || !sel || !sel.checked) return;
+        const rd = row.querySelector('input[data-role="read"]');
+        const wr = row.querySelector('input[data-role="write"]');
+        const kinds = [];
+        if (!rd || rd.checked) kinds.push('gripper_read');
+        if (!wr || wr.checked) kinds.push('gripper_write');
+        if (!kinds.length) return;
+        byPath[path] = kinds;
+      });
+      return { paths: Object.keys(byPath), kindsByPath: byPath };
+    }
+
+    async function loadRateGripperSeries() {
+      const sel = collectRateOverlaySelection();
+      if (!sel.paths.length) {
+        setRateSeriesHint(t('pp.rate_chart_need_ep'), true);
+        return;
+      }
+      // Union of kinds requested across selected episodes.
+      const kindSet = new Set();
+      sel.paths.forEach((p) => (sel.kindsByPath[p] || []).forEach((k) => kindSet.add(k)));
+      setRateSeriesHint(t('pp.rate_chart_loading'));
+      try {
+        const r = await fetch('/api/postprocess/gripper-series', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paths: sel.paths, kinds: Array.from(kindSet) }),
+        });
+        const j = await r.json();
+        if (!r.ok || !j.ok) {
+          setRateSeriesHint(t('pp.rate_chart_load_fail', { error: j.error || ('HTTP ' + r.status) }), true);
+          return;
+        }
+        // Filter series to each episode's checked kinds (match resolved path or basename).
+        const filtered = (j.series || []).filter((s) => {
+          const epPath = s.episode || '';
+          const label = s.episode_label || '';
+          const hitPath = sel.paths.find((p) => {
+            if (p === epPath) return true;
+            const base = String(p).replace(/\\\\/g, '/').split('/').pop();
+            return base === label
+              || String(epPath).endsWith('/' + base)
+              || String(epPath).endsWith('\\\\' + base);
+          });
+          if (!hitPath) return false;
+          const kinds = sel.kindsByPath[hitPath] || [];
+          return kinds.indexOf(s.kind) >= 0;
+        });
+        rateChart.series = filtered;
+        updateRateLegend();
+        drawRateChart();
+        const errN = (j.errors || []).length;
+        setRateSeriesHint(
+          t('pp.rate_chart_load_ok', { n: filtered.length, err: errN }),
+          errN > 0
+        );
+      } catch (e) {
+        setRateSeriesHint(t('pp.rate_chart_load_fail', { error: String(e) }), true);
+      }
     }
 
     function formatRatePolicySummary(policy) {
@@ -8447,22 +9086,43 @@ PREVIEW_HTML = """<!DOCTYPE html>
       ppRateSavePath.value = dir + '/' + name + '.json';
     }
 
-    // Seed piecewise editor with the fine-middle template.
+    // Seed piecewise chart editor with the fine-middle template.
     setRateSegRows(defaultFineSegments());
+    updateRateLegend();
     if (ppRateName) {
       ppRateName.addEventListener('input', () => {
         refreshRatePreview();
         syncRateSavePathFromName();
       });
     }
-    const btnPpRateAddSeg = document.getElementById('btnPpRateAddSeg');
-    if (btnPpRateAddSeg) {
-      btnPpRateAddSeg.addEventListener('click', () => {
-        const rows = readRateSegRows();
-        const last = rows.length ? rows[rows.length - 1] : { end_pct: 0 };
-        const start = Number.isFinite(last.end_pct) ? last.end_pct : 0;
-        addRateSegRow({ start_pct: start, end_pct: Math.min(100, start + 10), hz: 5 });
-        refreshRatePreview();
+    const btnPpRateAddBp = document.getElementById('btnPpRateAddBp');
+    if (btnPpRateAddBp) {
+      btnPpRateAddBp.addEventListener('click', () => {
+        rateChart.pendingAddBp = true;
+        setRateBuildHint(t('pp.rate_chart_add_bp_hint'));
+      });
+    }
+    const btnPpRateDelBp = document.getElementById('btnPpRateDelBp');
+    if (btnPpRateDelBp) {
+      btnPpRateDelBp.addEventListener('click', () => {
+        if (!deleteSelectedRateBreakpoint()) {
+          setRateBuildHint(t('pp.rate_chart_del_bp_need'), true);
+        } else {
+          setRateBuildHint('');
+        }
+      });
+    }
+    const btnPpRateLoadSeries = document.getElementById('btnPpRateLoadSeries');
+    if (btnPpRateLoadSeries) {
+      btnPpRateLoadSeries.addEventListener('click', () => { loadRateGripperSeries(); });
+    }
+    const btnPpRateClearSeries = document.getElementById('btnPpRateClearSeries');
+    if (btnPpRateClearSeries) {
+      btnPpRateClearSeries.addEventListener('click', () => {
+        rateChart.series = [];
+        updateRateLegend();
+        drawRateChart();
+        setRateSeriesHint('');
       });
     }
     const btnPpRatePresetFine = document.getElementById('btnPpRatePresetFine');
@@ -8708,6 +9368,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         ppEpisodeSelect.value = cur;
         if (ppEpisodeSelect.value !== cur) ppEpisodeSelect.value = '';
       }
+      fillRateEpOverlay(episodes || []);
     }
 
     function isPostTabActive() {
@@ -10971,6 +11632,13 @@ def create_viz_app(
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
         return {"ok": True, "path": str(out), "policy": policy.to_dict()}
+
+    @app.post("/api/postprocess/gripper-series")
+    async def postprocess_gripper_series(req: GripperSeriesBody) -> dict[str, Any]:
+        """Multi-episode gripper curves for the rate-policy chart overlay."""
+        from sensors_dcs.postprocess_service import load_gripper_series_batch
+
+        return load_gripper_series_batch(req.paths or [], kinds=req.kinds)
 
     @app.get("/api/postprocess/episode")
     async def postprocess_episode(path: str = "") -> dict[str, Any]:
