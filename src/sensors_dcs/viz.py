@@ -1380,19 +1380,25 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .pp-card.pp-card-hub {
       display: block;
-      padding: 0.75rem;
+      padding: 0.7rem;
     }
     .pp-hub {
       display: grid;
-      grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1.1fr);
-      gap: 0.75rem;
-      align-items: stretch;
+      grid-template-columns: minmax(15rem, 0.95fr) minmax(18rem, 1.35fr) minmax(15rem, 1.05fr);
+      gap: 0.7rem;
+      align-items: start;
+    }
+    .pp-hub-source {
+      display: grid;
+      gap: 0.7rem;
+      align-content: start;
+      min-width: 0;
     }
     .pp-zone {
       display: grid;
-      gap: 0.5rem;
+      gap: 0.45rem;
       min-width: 0;
-      padding: 0.55rem 0.7rem;
+      padding: 0.6rem 0.75rem 0.7rem;
       border-radius: 10px;
       border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
       background: color-mix(in srgb, var(--chrome, var(--panel)) 55%, transparent);
@@ -1402,38 +1408,113 @@ PREVIEW_HTML = """<!DOCTYPE html>
       margin: 0;
       font-size: 0.9rem;
       font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+    .pp-zone > .pp-hint:first-of-type {
+      margin: 0 0 0.1rem;
+      line-height: 1.45;
     }
     .pp-zone .pp-row label { min-width: 4.5rem; }
     .pp-zone .pp-row input.wide { flex: 1 1 8rem; min-width: 6rem; }
-    .pp-zone #ppLog {
-      max-height: 12rem;
-      min-height: 4.5rem;
+    .pp-zone-run {
+      align-content: start;
     }
-    .pp-rate-seg-wrap { margin: 0.4rem 0 0.6rem; }
+    .pp-zone-run .pp-actions {
+      margin-top: 0.1rem;
+    }
+    .pp-zone #ppLog {
+      max-height: 11rem;
+      min-height: 4rem;
+    }
+    .pp-fields {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.4rem 0.55rem;
+      align-items: start;
+    }
+    .pp-fields .pp-row {
+      margin: 0;
+      min-width: 0;
+    }
+    .pp-fields .pp-row label {
+      min-width: 0;
+      flex: 0 0 auto;
+    }
+    .pp-fields .pp-row select,
+    .pp-fields .pp-row input:not(.wide) {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .pp-fields .pp-row-full {
+      grid-column: 1 / -1;
+    }
+    .pp-rate-body {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr);
+      gap: 0.55rem;
+      align-items: stretch;
+      min-width: 0;
+    }
+    .pp-rate-seg-wrap {
+      margin: 0;
+      display: grid;
+      gap: 0.4rem;
+      align-content: start;
+      min-width: 0;
+    }
     .pp-rate-seg-table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 0.85rem;
-      margin-bottom: 0.4rem;
+      font-size: 0.82rem;
     }
     .pp-rate-seg-table th,
     .pp-rate-seg-table td {
       border: 1px solid var(--border, #333);
-      padding: 0.25rem 0.35rem;
+      padding: 0.22rem 0.32rem;
       text-align: left;
     }
     .pp-rate-seg-table input[type="number"] {
-      width: 4.5rem;
-      min-width: 3.5rem;
+      width: 4.2rem;
+      min-width: 3.2rem;
+    }
+    .pp-rate-preview-wrap {
+      display: grid;
+      gap: 0.35rem;
+      align-content: start;
+      min-width: 0;
+    }
+    .pp-rate-preview-wrap > label {
+      color: var(--muted);
+      font-size: 0.82rem;
     }
     .pp-rate-preview {
+      width: 100%;
+      box-sizing: border-box;
       font-family: ui-monospace, Consolas, monospace;
-      font-size: 0.75rem;
-      min-height: 7rem;
+      font-size: 0.72rem;
+      line-height: 1.35;
+      min-height: 8.5rem;
+      height: 100%;
       resize: vertical;
+    }
+    .pp-zone-rate .pp-actions {
+      margin-top: 0.15rem;
+    }
+    @media (max-width: 1180px) {
+      .pp-hub {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+      }
+      .pp-hub-source { grid-column: 1; }
+      .pp-zone-rate { grid-column: 1 / -1; order: 3; }
+      .pp-zone-align { grid-column: 2; grid-row: 1; }
     }
     @media (max-width: 960px) {
       .pp-hub { grid-template-columns: 1fr; }
+      .pp-hub-source,
+      .pp-zone-rate,
+      .pp-zone-align { grid-column: auto; grid-row: auto; order: 0; }
+      .pp-fields { grid-template-columns: 1fr; }
+      .pp-rate-body { grid-template-columns: 1fr; }
     }
     .pp-card .pp-hint {
       margin: 0;
@@ -2852,51 +2933,64 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <div class="pp-grid">
         <section class="pp-card pp-card-hub">
           <div class="pp-hub">
-            <div class="pp-zone" aria-labelledby="ppZoneEpisode">
-              <h2 id="ppZoneEpisode" data-i18n="pp.episode">Episode</h2>
-              <p class="pp-hint" data-i18n="pp.episode_hint">选择已落盘目录，或粘贴完整路径（如 D:\\data_new\\episode_00016）。</p>
-              <div class="pp-row">
-                <label for="ppEpisodeSelect" data-i18n="pp.list">列表</label>
-                <select id="ppEpisodeSelect"></select>
-                <button type="button" id="btnPpRefresh" data-i18n="btn.refresh">刷新</button>
+            <div class="pp-hub-source">
+              <div class="pp-zone pp-zone-episode" aria-labelledby="ppZoneEpisode">
+                <h2 id="ppZoneEpisode" data-i18n="pp.episode">Episode</h2>
+                <p class="pp-hint" data-i18n="pp.episode_hint">选择已落盘目录，或粘贴完整路径（如 D:\\data_new\\episode_00016）。</p>
+                <div class="pp-row">
+                  <label for="ppEpisodeSelect" data-i18n="pp.list">列表</label>
+                  <select id="ppEpisodeSelect"></select>
+                  <button type="button" id="btnPpRefresh" data-i18n="btn.refresh">刷新</button>
+                </div>
+                <div class="pp-row">
+                  <label for="ppEpisode" data-i18n="pp.path">路径</label>
+                  <input type="text" class="wide" id="ppEpisode" placeholder="D:\\data_new\\episode_00016" />
+                  <button type="button" id="btnPpBrowseEpisode" data-i18n="pp.browse">浏览…</button>
+                </div>
+                <div class="pp-row">
+                  <label class="quick-collect"><input type="checkbox" id="ppAllowInvalid" /> <span data-i18n="pp.allow_invalid">allow-invalid（作废 episode 也导出）</span></label>
+                </div>
               </div>
-              <div class="pp-row">
-                <label for="ppEpisode" data-i18n="pp.path">路径</label>
-                <input type="text" class="wide" id="ppEpisode" placeholder="D:\\data_new\\episode_00016" />
-                <button type="button" id="btnPpBrowseEpisode" data-i18n="pp.browse">浏览…</button>
-              </div>
-              <div class="pp-row">
-                <label class="quick-collect"><input type="checkbox" id="ppAllowInvalid" /> <span data-i18n="pp.allow_invalid">allow-invalid（作废 episode 也导出）</span></label>
+              <div class="pp-zone pp-zone-run" aria-labelledby="ppZoneRunAll">
+                <h2 id="ppZoneRunAll" data-i18n="pp.run_all_title">一键三步</h2>
+                <p class="pp-hint" data-i18n="pp.run_all_hint">顺序执行下方三步；「快速采集」勾选后结束/作废也会走同一套参数。</p>
+                <div class="pp-actions">
+                  <button type="button" class="primary" id="btnPpRunAll" data-i18n="pp.run_all">一键执行三步</button>
+                  <span class="hint" id="ppHint"></span>
+                </div>
+                <pre id="ppLog" data-i18n="pp.log_idle">（尚未运行）</pre>
               </div>
             </div>
-            <div class="pp-zone" aria-labelledby="ppZoneRateBuild">
+            <div class="pp-zone pp-zone-rate" aria-labelledby="ppZoneRateBuild">
               <h2 id="ppZoneRateBuild" data-i18n="pp.rate_build_title">0 · 生成变频策略</h2>
               <p class="pp-hint" data-i18n="pp.rate_build_hint">按 episode 时间进度分段设定 Hz，保存为 JSON；下方对齐参数再加载该策略。</p>
               <div class="pp-row">
                 <label for="ppRateName" data-i18n="pp.rate_name">名称</label>
                 <input type="text" id="ppRateName" value="fine_middle_v1" />
               </div>
-              <div class="pp-rate-seg-wrap">
-                <table class="pp-rate-seg-table" id="ppRateSegTable">
-                  <thead>
-                    <tr>
-                      <th data-i18n="pp.rate_seg_start">起始%</th>
-                      <th data-i18n="pp.rate_seg_end">结束%</th>
-                      <th data-i18n="pp.rate_seg_hz">Hz</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody id="ppRateSegBody"></tbody>
-                </table>
-                <div class="pp-actions">
-                  <button type="button" id="btnPpRateAddSeg" data-i18n="pp.rate_add_seg">添加分段</button>
-                  <button type="button" id="btnPpRatePresetFine" data-i18n="pp.rate_preset_fine">填入精细中段模板</button>
-                  <button type="button" id="btnPpRatePresetFixed" data-i18n="pp.rate_preset_fixed">填入固定 5Hz</button>
+              <div class="pp-rate-body">
+                <div class="pp-rate-seg-wrap">
+                  <table class="pp-rate-seg-table" id="ppRateSegTable">
+                    <thead>
+                      <tr>
+                        <th data-i18n="pp.rate_seg_start">起始%</th>
+                        <th data-i18n="pp.rate_seg_end">结束%</th>
+                        <th data-i18n="pp.rate_seg_hz">Hz</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody id="ppRateSegBody"></tbody>
+                  </table>
+                  <div class="pp-actions">
+                    <button type="button" id="btnPpRateAddSeg" data-i18n="pp.rate_add_seg">添加分段</button>
+                    <button type="button" id="btnPpRatePresetFine" data-i18n="pp.rate_preset_fine">填入精细中段模板</button>
+                    <button type="button" id="btnPpRatePresetFixed" data-i18n="pp.rate_preset_fixed">填入固定 5Hz</button>
+                  </div>
                 </div>
-              </div>
-              <div class="pp-row">
-                <label for="ppRatePreview" data-i18n="pp.rate_preview">JSON 预览</label>
-                <textarea id="ppRatePreview" class="wide pp-rate-preview" rows="8" readonly></textarea>
+                <div class="pp-rate-preview-wrap">
+                  <label for="ppRatePreview" data-i18n="pp.rate_preview">JSON 预览</label>
+                  <textarea id="ppRatePreview" class="wide pp-rate-preview" rows="8" readonly></textarea>
+                </div>
               </div>
               <div class="pp-row">
                 <label for="ppRateSavePath" data-i18n="pp.rate_save_path">保存路径</label>
@@ -2909,56 +3003,49 @@ PREVIEW_HTML = """<!DOCTYPE html>
                 <span class="hint" id="ppRateBuildHint"></span>
               </div>
             </div>
-            <div class="pp-zone" aria-labelledby="ppZoneAlign">
+            <div class="pp-zone pp-zone-align" aria-labelledby="ppZoneAlign">
               <h2 id="ppZoneAlign" data-i18n="pp.align_title">对齐参数（Step 1 → hik）</h2>
               <p class="pp-hint" data-i18n="pp.align_hint">加载上方生成的变频策略 JSON（按时间进度分段 Hz）；align-clock=hw_ts 时主网格来自 primary-camera 的 color_timestamp（默认 wall）。一键三步 / 快速采集转 hik_dataset 时都读这里。</p>
-              <div class="pp-row">
-                <label for="ppAlign">align</label>
-                <select id="ppAlign">
-                  <option value="asof" selected>asof</option>
-                  <option value="nearest">nearest</option>
-                  <option value="grid">grid</option>
-                  <option value="union">union</option>
-                </select>
-              </div>
-              <div class="pp-row">
-                <label for="ppAlignClock">align-clock</label>
-                <select id="ppAlignClock">
-                  <option value="wall" selected>wall</option>
-                  <option value="hw_ts">hw_ts</option>
-                </select>
-              </div>
-              <div class="pp-row">
-                <label for="ppPrimaryCamera">primary-camera</label>
-                <select id="ppPrimaryCamera">
-                  <option value="cam-middle" selected>cam-middle</option>
-                </select>
-              </div>
-              <div class="pp-row">
-                <label for="ppMaster">master</label>
-                <select id="ppMaster">
-                  <option value="" data-i18n="pp.master_pick">先选择合格 episode…</option>
-                </select>
-              </div>
-              <div class="pp-row">
-                <label for="ppRatePolicySelect" data-i18n="pp.rate_policy_pick">策略候选</label>
-                <select id="ppRatePolicySelect"></select>
-              </div>
-              <div class="pp-row">
-                <label for="ppRatePolicy" data-i18n="pp.rate_policy">rate-policy</label>
-                <input type="text" class="wide" id="ppRatePolicy" placeholder="configs/rate_policies/fixed_5hz.json" />
-                <button type="button" id="btnPpBrowseRatePolicy" data-i18n="pp.browse">浏览…</button>
+              <div class="pp-fields">
+                <div class="pp-row">
+                  <label for="ppAlign">align</label>
+                  <select id="ppAlign">
+                    <option value="asof" selected>asof</option>
+                    <option value="nearest">nearest</option>
+                    <option value="grid">grid</option>
+                    <option value="union">union</option>
+                  </select>
+                </div>
+                <div class="pp-row">
+                  <label for="ppAlignClock">align-clock</label>
+                  <select id="ppAlignClock">
+                    <option value="wall" selected>wall</option>
+                    <option value="hw_ts">hw_ts</option>
+                  </select>
+                </div>
+                <div class="pp-row">
+                  <label for="ppPrimaryCamera">primary-camera</label>
+                  <select id="ppPrimaryCamera">
+                    <option value="cam-middle" selected>cam-middle</option>
+                  </select>
+                </div>
+                <div class="pp-row">
+                  <label for="ppMaster">master</label>
+                  <select id="ppMaster">
+                    <option value="" data-i18n="pp.master_pick">先选择合格 episode…</option>
+                  </select>
+                </div>
+                <div class="pp-row pp-row-full">
+                  <label for="ppRatePolicySelect" data-i18n="pp.rate_policy_pick">策略候选</label>
+                  <select id="ppRatePolicySelect"></select>
+                </div>
+                <div class="pp-row pp-row-full">
+                  <label for="ppRatePolicy" data-i18n="pp.rate_policy">rate-policy</label>
+                  <input type="text" class="wide" id="ppRatePolicy" placeholder="configs/rate_policies/fixed_5hz.json" />
+                  <button type="button" id="btnPpBrowseRatePolicy" data-i18n="pp.browse">浏览…</button>
+                </div>
               </div>
               <p class="pp-hint" id="ppRatePolicySummary" data-i18n="pp.rate_policy_idle">尚未加载策略</p>
-            </div>
-            <div class="pp-zone" aria-labelledby="ppZoneRunAll">
-              <h2 id="ppZoneRunAll" data-i18n="pp.run_all_title">一键三步</h2>
-              <p class="pp-hint" data-i18n="pp.run_all_hint">顺序执行下方三步；「快速采集」勾选后结束/作废也会走同一套参数。</p>
-              <div class="pp-actions">
-                <button type="button" class="primary" id="btnPpRunAll" data-i18n="pp.run_all">一键执行三步</button>
-                <span class="hint" id="ppHint"></span>
-              </div>
-              <pre id="ppLog" data-i18n="pp.log_idle">（尚未运行）</pre>
             </div>
           </div>
         </section>
