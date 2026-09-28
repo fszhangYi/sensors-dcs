@@ -73,7 +73,13 @@ def main(argv: list[str] | None = None) -> int:
         "--master-hz",
         type=float,
         default=None,
-        help="downsample master timeline to this hz (asof/nearest only; e.g. gello 50Hz -> 15Hz)",
+        help="downsample master timeline to this hz (asof/nearest only; e.g. gello 50Hz -> 15Hz). "
+        "Ignored when --rate-policy is set.",
+    )
+    p_export.add_argument(
+        "--rate-policy",
+        default=None,
+        help="path to piecewise rate-policy JSON (overrides --master-hz)",
     )
     p_export.add_argument(
         "--align-clock",
@@ -257,6 +263,11 @@ def main(argv: list[str] | None = None) -> int:
     p_batch.add_argument("--align", default="asof", choices=["asof", "nearest", "grid", "union"])
     p_batch.add_argument("--master", default="cam-left")
     p_batch.add_argument("--master-hz", type=float, default=5.0)
+    p_batch.add_argument(
+        "--rate-policy",
+        default=None,
+        help="path to piecewise rate-policy JSON (overrides --master-hz)",
+    )
     p_batch.add_argument("--align-clock", choices=["wall", "hw_ts"], default="wall")
     p_batch.add_argument("--primary-camera", default="cam-middle")
     p_batch.add_argument(
@@ -332,6 +343,7 @@ def main(argv: list[str] | None = None) -> int:
                 master=args.master,
                 hz=args.hz,
                 master_hz=args.master_hz,
+                rate_policy=getattr(args, "rate_policy", None),
                 fmt=args.export_format,
                 allow_invalid=bool(getattr(args, "allow_invalid", False)),
                 align_clock=getattr(args, "align_clock", "wall") or "wall",
@@ -437,6 +449,7 @@ def main(argv: list[str] | None = None) -> int:
             align=args.align,
             master=args.master,
             master_hz=args.master_hz,
+            rate_policy=getattr(args, "rate_policy", None),
             align_clock=args.align_clock,
             primary_camera=args.primary_camera,
             require=args.require,

@@ -21,6 +21,10 @@ def test_postprocess_defaults_include_camera_map() -> None:
     assert d["align"] == "asof"
     assert d["master"] == "cam-left"
     assert d["master_hz"] == 5.0
+    assert d["rate_policy"]
+    assert Path(d["rate_policy"]).name == "fixed_5hz.json"
+    assert isinstance(d["rate_policy_candidates"], list)
+    assert any(Path(p).name == "fixed_5hz.json" for p in d["rate_policy_candidates"])
     assert d["align_clock"] == "wall"
     assert d["primary_camera"] == "cam-middle"
     assert "cam-left" in d["require"]

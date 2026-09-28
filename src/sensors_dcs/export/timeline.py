@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 from sensors_dcs.export.parquet_io import require_pandas, write_parquet
+from sensors_dcs.export.rate_policy import (
+    RatePolicy,
+    resolve_rate_policy,
+    subsample_times_policy,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -643,6 +648,19 @@ def _nearest_join(base_times: list[float], agent_df, agent_id: str):
     return pd.DataFrame(rows)
 
 
+def _downsample_master_times(
+    times: list[float],
+    *,
+    master_hz: float | None = None,
+    rate_policy: RatePolicy | None = None,
+) -> list[float]:
+    """Apply rate policy or legacy uniform ``master_hz`` to master timestamps."""
+    policy = resolve_rate_policy(rate_policy=rate_policy, master_hz=master_hz)
+    if policy is None:
+        return times
+    return subsample_times_policy(times, policy)
+
+
 def _build_base_times(
     manifest: dict[str, Any],
     samples: list[Sample],
@@ -653,6 +671,7 @@ def _build_base_times(
     t_start: float,
     hz: float | None,
     master_hz: float | None = None,
+    rate_policy: RatePolicy | None = None,
     align_clock: AlignClock = "wall",
     hw_anchors: list[FrameAnchor] | None = None,
 ) -> list[float]:
@@ -663,9 +682,9 @@ def _build_base_times(
     """
     if align_clock == "hw_ts" and mode in {"asof", "nearest"} and hw_anchors:
         times = hw_grid_times(hw_anchors)
-        if master_hz is not None and master_hz > 0:
-            return subsample_times(times, master_hz)
-        return times
+        return _downsample_master_times(
+            times, master_hz=master_hz, rate_policy=rate_policy
+        )
 
     if mode == "grid":
         t_end = float(manifest.get("t_end") or max(s.t_wall for s in samples))
@@ -678,26 +697,18 @@ def _build_base_times(
         return sorted({s.t_wall for s in samples})
     master_samples = by_agent[master_id]
     times = [sample_grid_time(s, "wall") for s in master_samples]
-    if master_hz is not None and master_hz > 0:
-        return subsample_times(times, master_hz)
-    return times
+    return _downsample_master_times(
+        times, master_hz=master_hz, rate_policy=rate_policy
+    )
 
 
 def subsample_times(times: list[float], hz: float) -> list[float]:
     """Pick master timestamps at most `hz`, keeping first sample at/after each grid point."""
     if not times or hz <= 0:
         return times
-    dt = 1.0 / hz
-    out: list[float] = []
-    target = times[0]
-    idx = 0
-    end = times[-1]
-    while target <= end + 1e-9:
-        while idx + 1 < len(times) and times[idx + 1] < target + 1e-9:
-            idx += 1
-        out.append(times[idx])
-        target += dt
-    return out
+    from sensors_dcs.export.rate_policy import fixed_hz_policy
+
+    return subsample_times_policy(times, fixed_hz_policy(hz))
 
 
 def build_aligned_frame(
@@ -708,6 +719,7 @@ def build_aligned_frame(
     mode: AlignMode = "asof",
     hz: float | None = None,
     master_hz: float | None = None,
+    rate_policy: RatePolicy | str | Path | dict[str, Any] | None = None,
     align_clock: AlignClock = "wall",
     primary_camera: str = "cam-middle",
 ):
@@ -719,6 +731,7 @@ def build_aligned_frame(
         mode=mode,
         hz=hz,
         master_hz=master_hz,
+        rate_policy=rate_policy,
         align_clock=align_clock,
         primary_camera=primary_camera,
     )
@@ -733,6 +746,7 @@ def build_aligned_frame_with_meta(
     mode: AlignMode = "asof",
     hz: float | None = None,
     master_hz: float | None = None,
+    rate_policy: RatePolicy | str | Path | dict[str, Any] | None = None,
     align_clock: AlignClock = "wall",
     primary_camera: str = "cam-middle",
 ) -> tuple[Any, dict[str, Any]]:
@@ -804,11 +818,21 @@ def build_aligned_frame_with_meta(
         master_id = primary_camera
         if master_id not in by_agent:
             raise ValueError(f"primary camera not found in episode: {master_id}")
-        # Optionally downsample HW anchors by master_hz on t_hw axis.
+        policy = resolve_rate_policy(rate_policy=rate_policy, master_hz=master_hz)
         anchors_use = hw_anchors
-        if master_hz is not None and master_hz > 0:
-            keep_hw = set(subsample_times(hw_grid_times(hw_anchors), master_hz))
+        if policy is not None:
+            keep_hw = set(
+                subsample_times_policy(hw_grid_times(hw_anchors), policy)
+            )
             anchors_use = [a for a in hw_anchors if a.t_hw in keep_hw]
+        clock_meta["rate_policy"] = (
+            {
+                **policy.to_dict(),
+                "source_path": policy.source_path,
+            }
+            if policy is not None
+            else None
+        )
         base = pd.DataFrame(
             {
                 "t_wall": [a.t_wall for a in anchors_use],
@@ -850,6 +874,16 @@ def build_aligned_frame_with_meta(
     if master_id not in by_agent:
         raise ValueError(f"master agent not found in episode: {master_id}")
 
+    policy = resolve_rate_policy(rate_policy=rate_policy, master_hz=master_hz)
+    clock_meta["rate_policy"] = (
+        {
+            **policy.to_dict(),
+            "source_path": policy.source_path,
+        }
+        if policy is not None
+        else None
+    )
+
     base_times = _build_base_times(
         manifest,
         samples,
@@ -859,6 +893,7 @@ def build_aligned_frame_with_meta(
         t_start=t_start,
         hz=hz,
         master_hz=master_hz,
+        rate_policy=policy,
         align_clock="wall",
         hw_anchors=None,
     )
@@ -902,6 +937,7 @@ def export_episode_timeline(
     master: str | None = None,
     hz: float | None = None,
     master_hz: float | None = None,
+    rate_policy: RatePolicy | str | Path | dict[str, Any] | None = None,
     fmt: ExportFormat = "parquet",
     allow_invalid: bool = False,
     align_clock: AlignClock = "wall",
@@ -934,6 +970,7 @@ def export_episode_timeline(
             mode=align,
             hz=hz,
             master_hz=master_hz,
+            rate_policy=rate_policy,
             align_clock=align_clock,
             primary_camera=primary_camera,
         )
@@ -971,6 +1008,7 @@ def export_episode_timeline(
         master_id = primary_camera
     else:
         master_id = master or (pick_default_master(manifest, samples) if samples else None)
+    policy_meta = clock_meta.get("rate_policy")
     meta = {
         "source_episode": root.name,
         "source_path": str(root),
@@ -982,6 +1020,7 @@ def export_episode_timeline(
             "master": master_id,
             "hz": hz,
             "master_hz": master_hz,
+            "rate_policy": policy_meta,
         },
         "align_clock": clock_meta.get("align_clock", "wall"),
         "primary_camera": clock_meta.get("primary_camera"),

@@ -18,6 +18,7 @@ DEFAULT_REQUIRE = "arm,cam-left,cam-right,cam-middle,gripper-read"
 DEFAULT_MAX_MATCH_DT = "0.033"
 DEFAULT_TRIM = "both"
 DEFAULT_STEPS = ("export-timeline", "filter-timeline", "export-hik-dataset")
+DEFAULT_RATE_POLICY_NAME = "fixed_5hz.json"
 
 
 def default_camera_map_candidates() -> list[str]:
@@ -47,12 +48,55 @@ def default_camera_map_candidates() -> list[str]:
     return out
 
 
+def default_rate_policy_candidates() -> list[str]:
+    """Prefer launch-pwd / repo rate-policy JSONs."""
+    from sensors_dcs.paths import capture_launch_cwd
+
+    capture_launch_cwd()
+    cwd = launch_cwd()
+    out: list[str] = []
+    seen: set[str] = set()
+    dirs = (
+        cwd / "configs" / "rate_policies",
+        project_root() / "configs" / "rate_policies",
+        user_data_dir() / "configs" / "rate_policies",
+    )
+    for d in dirs:
+        try:
+            if not d.is_dir():
+                continue
+            for p in sorted(d.glob("*.json")):
+                if not p.is_file():
+                    continue
+                key = str(p.resolve())
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(key)
+        except OSError:
+            continue
+    return out
+
+
+def default_rate_policy_path() -> str:
+    """Prefer ``fixed_5hz.json`` among candidates (else first / empty)."""
+    cands = default_rate_policy_candidates()
+    for p in cands:
+        if Path(p).name == DEFAULT_RATE_POLICY_NAME:
+            return p
+    return cands[0] if cands else ""
+
+
 def postprocess_defaults(*, save_dir: str | Path | None = None) -> dict[str, Any]:
     maps = default_camera_map_candidates()
+    rate_cands = default_rate_policy_candidates()
+    rate_default = default_rate_policy_path()
     return {
         "align": DEFAULT_ALIGN,
         "master": DEFAULT_MASTER,
         "master_hz": DEFAULT_MASTER_HZ,
+        "rate_policy": rate_default,
+        "rate_policy_candidates": rate_cands,
         "align_clock": DEFAULT_ALIGN_CLOCK,
         "primary_camera": DEFAULT_PRIMARY_CAMERA,
         "require": DEFAULT_REQUIRE,
@@ -233,6 +277,7 @@ def run_postprocess(
     align: str = DEFAULT_ALIGN,
     master: str = DEFAULT_MASTER,
     master_hz: float | None = DEFAULT_MASTER_HZ,
+    rate_policy: str | None = None,
     align_clock: str = DEFAULT_ALIGN_CLOCK,
     primary_camera: str = DEFAULT_PRIMARY_CAMERA,
     require: str = DEFAULT_REQUIRE,
@@ -272,6 +317,11 @@ def run_postprocess(
     primary = (primary_camera or DEFAULT_PRIMARY_CAMERA).strip() or DEFAULT_PRIMARY_CAMERA
 
     cam_map = (camera_map or "").strip() or None
+    rate_path = (rate_policy or "").strip() or None
+    # Prefer rate-policy JSON; fall back to legacy uniform master_hz.
+    use_master_hz = None if rate_path else (
+        float(master_hz) if master_hz is not None else None
+    )
     results: list[dict[str, Any]] = []
     log_lines: list[str] = []
 
@@ -283,7 +333,8 @@ def run_postprocess(
                     ep,
                     align=align,  # type: ignore[arg-type]
                     master=master or None,
-                    master_hz=float(master_hz) if master_hz is not None else None,
+                    master_hz=use_master_hz,
+                    rate_policy=rate_path,
                     allow_invalid=allow_invalid,
                     align_clock=clock,  # type: ignore[arg-type]
                     primary_camera=primary,
@@ -391,6 +442,7 @@ def run_postprocess_root(
     align: str = DEFAULT_ALIGN,
     master: str = DEFAULT_MASTER,
     master_hz: float | None = DEFAULT_MASTER_HZ,
+    rate_policy: str | None = None,
     align_clock: str = DEFAULT_ALIGN_CLOCK,
     primary_camera: str = DEFAULT_PRIMARY_CAMERA,
     require: str = DEFAULT_REQUIRE,
@@ -510,6 +562,7 @@ def run_postprocess_root(
                 align=align,
                 master=ep_master or master,
                 master_hz=master_hz,
+                rate_policy=rate_policy,
                 align_clock=align_clock,
                 primary_camera=primary_camera,
                 require=require,

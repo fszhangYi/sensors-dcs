@@ -7,12 +7,12 @@
 登录后默认落在 **主页**（软件介绍，中英 i18n）。另有两个工作 Tab，并把常用三条后处理 CLI 做成可视化接口：
 
 ```text
-sensors-dcs export-timeline -e … --align asof --master cam-left --master-hz <N>
+sensors-dcs export-timeline -e … --align asof --master cam-left --rate-policy configs/rate_policies/fixed_5hz.json
 sensors-dcs filter-timeline -e … --require arm,cam-left,cam-right,cam-middle,gripper-read --max-match-dt 0.033 --trim both --materialize
 sensors-dcs export-hik-dataset -e … --camera-map …/hik_camera_map.yaml
 ```
 
-后处理页「对齐参数」区可改 `align` / `master` / **`master-hz`**（默认 5，**不是写死**）。一键三步与快速采集都读该表单（`localStorage` 键 `dcs.postprocess`），再传给 `export-timeline`。
+后处理页先有「生成变频策略」区（分段 % → Hz，写出 JSON），「对齐参数」再**加载**该策略（不再填单一 master-hz 数字）。默认 `configs/rate_policies/fixed_5hz.json`（等价原 5 Hz）。一键三步与快速采集都读该表单（`localStorage` 键 `dcs.postprocess`），再传给 `export-timeline --rate-policy`。
 
 「数据采集」Tab 增加 **快速采集** 复选框：勾选后，点「结束」或「作废」在落盘完成后自动跑上述三步（参数与「数据后处理」Tab 共用）。
 
@@ -22,6 +22,7 @@ sensors-dcs export-hik-dataset -e … --camera-map …/hik_camera_map.yaml
 |------|------|
 | 登录 / 打开 `/` | 默认 **主页** Tab |
 | 主页 CTA | 可跳到采集或后处理 |
+| 数据后处理 → 生成策略 | 编辑分段 → 保存 JSON → 应用到对齐 |
 | 数据后处理 → 各 Step 按钮 | 只跑对应一步 |
 | 一键执行三步 | 顺序三步，失败即停 |
 | **批量一键三步** | 选数据集根，遍历 `episode_*`；默认删除各集 `export/` 后重跑；不覆盖则跳过已有 `export/`；`valid=false` 默认跳过 |
@@ -30,11 +31,13 @@ sensors-dcs export-hik-dataset -e … --camera-map …/hik_camera_map.yaml
 
 ## API
 
-- `GET /api/postprocess/defaults` — 默认参数、camera-map 候选、`save_dir` 下 episode 列表  
-- `POST /api/postprocess/run` — body 见 `PostprocessBody`（`episode` + 可选 `steps`）  
+- `GET /api/postprocess/defaults` — 默认参数、camera-map / rate-policy 候选、`save_dir` 下 episode 列表  
+- `GET /api/postprocess/rate-policy?path=` — 校验并返回策略 JSON  
+- `POST /api/postprocess/rate-policy/save` — body `{path, policy}` 写出策略文件  
+- `POST /api/postprocess/run` — body 见 `PostprocessBody`（`episode` + 可选 `steps` + `rate_policy`）  
 - `POST /api/postprocess/run-root` — body 见 `PostprocessRootBody`（`input_root` + 与单集相同的对齐/过滤/hik 字段 + `overwrite`，默认 true）  
 - `POST /api/record/stop` 响应新增 `finished_episode_path` / `finished_episode_index` / `valid`
 
-CLI：`sensors-dcs run-postprocess-root -i <collect_root> --camera-map …`（`--no-overwrite` 跳过已有 export）。
+CLI：`sensors-dcs export-timeline … --rate-policy configs/rate_policies/fine_middle_v1.json`；`run-postprocess-root` 同样支持 `--rate-policy`（覆盖 `--master-hz`）。
 
-实现：`src/sensors_dcs/postprocess_service.py`、`viz.py`、`ui_i18n.py`（`home.*` / `tab.home` / `pp.batch_*`）。
+实现：`src/sensors_dcs/export/rate_policy.py`、`postprocess_service.py`、`viz.py`、`ui_i18n.py`（`home.*` / `tab.home` / `pp.batch_*` / `pp.rate_*`）。

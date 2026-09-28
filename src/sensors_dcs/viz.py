@@ -68,6 +68,7 @@ class PostprocessBody(BaseModel):
     align: str = "asof"
     master: str = "cam-left"
     master_hz: float | None = 5.0
+    rate_policy: str | None = None
     align_clock: str = "wall"
     primary_camera: str = "cam-middle"
     require: str = "arm,cam-left,cam-right,cam-middle,gripper-read"
@@ -76,6 +77,13 @@ class PostprocessBody(BaseModel):
     materialize: bool = True
     camera_map: str | None = None
     allow_invalid: bool = False
+
+
+class RatePolicySaveBody(BaseModel):
+    """Write a piecewise rate-policy JSON to disk."""
+
+    path: str
+    policy: dict[str, Any]
 
 
 class RawVideoBody(BaseModel):
@@ -102,6 +110,7 @@ class PostprocessRootBody(BaseModel):
     align: str = "asof"
     master: str = "cam-left"
     master_hz: float | None = 5.0
+    rate_policy: str | None = None
     align_clock: str = "wall"
     primary_camera: str = "cam-middle"
     require: str = "arm,cam-left,cam-right,cam-middle,gripper-read"
@@ -1399,6 +1408,29 @@ PREVIEW_HTML = """<!DOCTYPE html>
     .pp-zone #ppLog {
       max-height: 12rem;
       min-height: 4.5rem;
+    }
+    .pp-rate-seg-wrap { margin: 0.4rem 0 0.6rem; }
+    .pp-rate-seg-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+      margin-bottom: 0.4rem;
+    }
+    .pp-rate-seg-table th,
+    .pp-rate-seg-table td {
+      border: 1px solid var(--border, #333);
+      padding: 0.25rem 0.35rem;
+      text-align: left;
+    }
+    .pp-rate-seg-table input[type="number"] {
+      width: 4.5rem;
+      min-width: 3.5rem;
+    }
+    .pp-rate-preview {
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 0.75rem;
+      min-height: 7rem;
+      resize: vertical;
     }
     @media (max-width: 960px) {
       .pp-hub { grid-template-columns: 1fr; }
@@ -2837,9 +2869,49 @@ PREVIEW_HTML = """<!DOCTYPE html>
                 <label class="quick-collect"><input type="checkbox" id="ppAllowInvalid" /> <span data-i18n="pp.allow_invalid">allow-invalid（作废 episode 也导出）</span></label>
               </div>
             </div>
+            <div class="pp-zone" aria-labelledby="ppZoneRateBuild">
+              <h2 id="ppZoneRateBuild" data-i18n="pp.rate_build_title">0 · 生成变频策略</h2>
+              <p class="pp-hint" data-i18n="pp.rate_build_hint">按 episode 时间进度分段设定 Hz，保存为 JSON；下方对齐参数再加载该策略。</p>
+              <div class="pp-row">
+                <label for="ppRateName" data-i18n="pp.rate_name">名称</label>
+                <input type="text" id="ppRateName" value="fine_middle_v1" />
+              </div>
+              <div class="pp-rate-seg-wrap">
+                <table class="pp-rate-seg-table" id="ppRateSegTable">
+                  <thead>
+                    <tr>
+                      <th data-i18n="pp.rate_seg_start">起始%</th>
+                      <th data-i18n="pp.rate_seg_end">结束%</th>
+                      <th data-i18n="pp.rate_seg_hz">Hz</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="ppRateSegBody"></tbody>
+                </table>
+                <div class="pp-actions">
+                  <button type="button" id="btnPpRateAddSeg" data-i18n="pp.rate_add_seg">添加分段</button>
+                  <button type="button" id="btnPpRatePresetFine" data-i18n="pp.rate_preset_fine">填入精细中段模板</button>
+                  <button type="button" id="btnPpRatePresetFixed" data-i18n="pp.rate_preset_fixed">填入固定 5Hz</button>
+                </div>
+              </div>
+              <div class="pp-row">
+                <label for="ppRatePreview" data-i18n="pp.rate_preview">JSON 预览</label>
+                <textarea id="ppRatePreview" class="wide pp-rate-preview" rows="8" readonly></textarea>
+              </div>
+              <div class="pp-row">
+                <label for="ppRateSavePath" data-i18n="pp.rate_save_path">保存路径</label>
+                <input type="text" class="wide" id="ppRateSavePath" placeholder="configs/rate_policies/fine_middle_v1.json" />
+                <button type="button" id="btnPpBrowseRateSave" data-i18n="pp.browse">浏览…</button>
+              </div>
+              <div class="pp-actions">
+                <button type="button" class="primary" id="btnPpRateSave" data-i18n="pp.rate_save">保存策略 JSON</button>
+                <button type="button" id="btnPpRateApply" data-i18n="pp.rate_apply">应用到对齐</button>
+                <span class="hint" id="ppRateBuildHint"></span>
+              </div>
+            </div>
             <div class="pp-zone" aria-labelledby="ppZoneAlign">
               <h2 id="ppZoneAlign" data-i18n="pp.align_title">对齐参数（Step 1 → hik）</h2>
-              <p class="pp-hint" data-i18n="pp.align_hint">master-hz 作用于 export-timeline 下采样；align-clock=hw_ts 时主网格来自 primary-camera 的 color_timestamp（默认 wall，与 W1 兼容）。一键三步 / 快速采集转 hik_dataset 时都读这里。</p>
+              <p class="pp-hint" data-i18n="pp.align_hint">加载上方生成的变频策略 JSON（按时间进度分段 Hz）；align-clock=hw_ts 时主网格来自 primary-camera 的 color_timestamp（默认 wall）。一键三步 / 快速采集转 hik_dataset 时都读这里。</p>
               <div class="pp-row">
                 <label for="ppAlign">align</label>
                 <select id="ppAlign">
@@ -2869,9 +2941,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
                 </select>
               </div>
               <div class="pp-row">
-                <label for="ppMasterHz">master-hz</label>
-                <input type="number" id="ppMasterHz" value="5" step="0.1" min="0.1" />
+                <label for="ppRatePolicySelect" data-i18n="pp.rate_policy_pick">策略候选</label>
+                <select id="ppRatePolicySelect"></select>
               </div>
+              <div class="pp-row">
+                <label for="ppRatePolicy" data-i18n="pp.rate_policy">rate-policy</label>
+                <input type="text" class="wide" id="ppRatePolicy" placeholder="configs/rate_policies/fixed_5hz.json" />
+                <button type="button" id="btnPpBrowseRatePolicy" data-i18n="pp.browse">浏览…</button>
+              </div>
+              <p class="pp-hint" id="ppRatePolicySummary" data-i18n="pp.rate_policy_idle">尚未加载策略</p>
             </div>
             <div class="pp-zone" aria-labelledby="ppZoneRunAll">
               <h2 id="ppZoneRunAll" data-i18n="pp.run_all_title">一键三步</h2>
@@ -2936,7 +3014,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
         <section class="pp-card">
           <h2 data-i18n="pp.step1">1 · export-timeline</h2>
-          <p class="pp-hint" data-i18n="pp.step1_hint">sensors-dcs export-timeline -e … --align / --align-clock / --primary-camera / --master / --master-hz（见上方对齐参数）</p>
+          <p class="pp-hint" data-i18n="pp.step1_hint">sensors-dcs export-timeline -e … --align / --align-clock / --primary-camera / --master / --rate-policy（见上方对齐参数）</p>
           <div class="pp-actions">
             <button type="button" id="btnPpExport" data-i18n="pp.run1">运行 Step 1</button>
           </div>
@@ -3011,7 +3089,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
         <section class="pp-card">
           <h2 data-i18n="pp.step3">3 · export-hik-dataset</h2>
-          <p class="pp-hint" data-i18n="pp.step3_hint">--camera-map …\\hik_camera_map.yaml；若尚未对齐，请先跑 Step1（master-hz 见上方）或一键三步</p>
+          <p class="pp-hint" data-i18n="pp.step3_hint">--camera-map …\\hik_camera_map.yaml；若尚未对齐，请先跑 Step1（rate-policy 见上方）或一键三步</p>
           <div class="pp-row">
             <label for="ppCameraMap">camera-map</label>
             <input type="text" class="wide" id="ppCameraMap" data-i18n-placeholder="pp.camera_map_ph" placeholder="路径到 hik_camera_map.yaml" />
@@ -6635,7 +6713,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const ppAlignClock = document.getElementById('ppAlignClock');
     const ppPrimaryCamera = document.getElementById('ppPrimaryCamera');
     const ppMaster = document.getElementById('ppMaster');
-    const ppMasterHz = document.getElementById('ppMasterHz');
+    const ppRatePolicy = document.getElementById('ppRatePolicy');
+    const ppRatePolicySelect = document.getElementById('ppRatePolicySelect');
+    const ppRatePolicySummary = document.getElementById('ppRatePolicySummary');
+    const ppRateName = document.getElementById('ppRateName');
+    const ppRateSegBody = document.getElementById('ppRateSegBody');
+    const ppRatePreview = document.getElementById('ppRatePreview');
+    const ppRateSavePath = document.getElementById('ppRateSavePath');
+    const ppRateBuildHint = document.getElementById('ppRateBuildHint');
     const ppRequire = document.getElementById('ppRequire');
     const ppMaxDt = document.getElementById('ppMaxDt');
     const ppTrim = document.getElementById('ppTrim');
@@ -7636,7 +7721,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
           : (target === 'cameraMap' ? 'pathPicker.titleCameraMap'
             : (target === 'packInput' ? 'pathPicker.titlePackInput'
               : (target === 'packOutput' ? 'pathPicker.titlePackOutput'
-                : (target === 'batchRoot' ? 'pathPicker.titleBatchRoot' : 'pathPicker.title'))))
+                : (target === 'batchRoot' ? 'pathPicker.titleBatchRoot'
+                  : (target === 'ratePolicy' ? 'pathPicker.titleRatePolicy'
+                    : (target === 'rateSave' ? 'pathPicker.titleRateSave' : 'pathPicker.title'))))))
       );
       await ensureSettingsRoots();
       let seed = opts.seed;
@@ -7651,6 +7738,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
           seed = (ppPackOutput && ppPackOutput.value) || '';
         } else if (target === 'batchRoot') {
           seed = (ppBatchRoot && ppBatchRoot.value) || '';
+        } else if (target === 'ratePolicy') {
+          seed = (ppRatePolicy && ppRatePolicy.value) || '';
+        } else if (target === 'rateSave') {
+          seed = (ppRateSavePath && ppRateSavePath.value) || '';
         } else {
           seed = (settingsConfigPath && settingsConfigPath.value)
             || (settingsConfigCurrent && settingsConfigCurrent.textContent)
@@ -8016,6 +8107,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
             ppBatchRoot.value = val;
             savePpForm();
           }
+        } else if (target === 'ratePolicy') {
+          if (ppRatePolicy) {
+            ppRatePolicy.value = val;
+            savePpForm();
+            refreshRatePolicySummary();
+          }
+        } else if (target === 'rateSave') {
+          if (ppRateSavePath) {
+            ppRateSavePath.value = val;
+          }
         } else if (settingsConfigPath) {
           settingsConfigPath.value = val;
           settingsConfigPath.dataset.touched = '1';
@@ -8087,15 +8188,299 @@ PREVIEW_HTML = """<!DOCTYPE html>
     refreshSettingsAuth().catch(() => {});
     if (sensorsEmbedFrame) sensorsEmbedFrame.title = t('sensors.title');
 
+    function setRateBuildHint(msg, isErr) {
+      if (!ppRateBuildHint) return;
+      ppRateBuildHint.textContent = msg || '';
+      ppRateBuildHint.style.color = isErr ? 'var(--danger, #c44)' : '';
+    }
+
+    function defaultFineSegments() {
+      return [
+        { start_pct: 0, end_pct: 10, hz: 5 },
+        { start_pct: 10, end_pct: 50, hz: 10 },
+        { start_pct: 50, end_pct: 80, hz: 15 },
+        { start_pct: 80, end_pct: 100, hz: 5 },
+      ];
+    }
+
+    function defaultFixedSegments() {
+      return [{ start_pct: 0, end_pct: 100, hz: 5 }];
+    }
+
+    function readRateSegRows() {
+      const rows = [];
+      if (!ppRateSegBody) return rows;
+      ppRateSegBody.querySelectorAll('tr').forEach((tr) => {
+        const nums = tr.querySelectorAll('input[type="number"]');
+        if (nums.length < 3) return;
+        rows.push({
+          start_pct: parseFloat(nums[0].value),
+          end_pct: parseFloat(nums[1].value),
+          hz: parseFloat(nums[2].value),
+        });
+      });
+      return rows;
+    }
+
+    function buildRatePolicyObject() {
+      const name = ((ppRateName && ppRateName.value) || 'unnamed').trim() || 'unnamed';
+      const segs = readRateSegRows().map((r) => ({
+        start: (Number.isFinite(r.start_pct) ? r.start_pct : 0) / 100,
+        end: (Number.isFinite(r.end_pct) ? r.end_pct : 0) / 100,
+        hz: Number.isFinite(r.hz) ? r.hz : 5,
+      }));
+      return {
+        name: name,
+        version: 1,
+        type: 'piecewise_progress',
+        axis: 'time_fraction',
+        segments: segs,
+      };
+    }
+
+    function refreshRatePreview() {
+      if (!ppRatePreview) return;
+      try {
+        ppRatePreview.value = JSON.stringify(buildRatePolicyObject(), null, 2);
+      } catch (e) {
+        ppRatePreview.value = String(e);
+      }
+    }
+
+    function addRateSegRow(seg) {
+      if (!ppRateSegBody) return;
+      const tr = document.createElement('tr');
+      const mk = (val, step) => {
+        const inp = document.createElement('input');
+        inp.type = 'number';
+        inp.step = step || '1';
+        inp.min = '0';
+        inp.value = String(val);
+        inp.addEventListener('input', refreshRatePreview);
+        return inp;
+      };
+      const td0 = document.createElement('td');
+      td0.appendChild(mk(seg.start_pct, '1'));
+      const td1 = document.createElement('td');
+      td1.appendChild(mk(seg.end_pct, '1'));
+      const td2 = document.createElement('td');
+      td2.appendChild(mk(seg.hz, '0.1'));
+      const td3 = document.createElement('td');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = '×';
+      btn.title = 'remove';
+      btn.addEventListener('click', () => {
+        tr.remove();
+        refreshRatePreview();
+      });
+      td3.appendChild(btn);
+      tr.appendChild(td0);
+      tr.appendChild(td1);
+      tr.appendChild(td2);
+      tr.appendChild(td3);
+      ppRateSegBody.appendChild(tr);
+    }
+
+    function setRateSegRows(segs) {
+      if (!ppRateSegBody) return;
+      ppRateSegBody.innerHTML = '';
+      (segs || []).forEach((s) => addRateSegRow(s));
+      refreshRatePreview();
+    }
+
+    function formatRatePolicySummary(policy) {
+      if (!policy || !policy.segments) return t('pp.rate_policy_idle');
+      const parts = (policy.segments || []).map((s) => {
+        const a = Math.round(Number(s.start) * 100);
+        const b = Math.round(Number(s.end) * 100);
+        return a + '-' + b + '%@' + s.hz + 'Hz';
+      });
+      return (policy.name || 'policy') + ': ' + parts.join(' · ');
+    }
+
+    async function refreshRatePolicySummary() {
+      if (!ppRatePolicySummary) return;
+      const path = (ppRatePolicy && ppRatePolicy.value || '').trim();
+      if (!path) {
+        ppRatePolicySummary.textContent = t('pp.rate_policy_idle');
+        return;
+      }
+      ppRatePolicySummary.textContent = t('pp.rate_policy_loading');
+      try {
+        const r = await fetch('/api/postprocess/rate-policy?path=' + encodeURIComponent(path), {
+          credentials: 'same-origin',
+        });
+        const j = await r.json();
+        if (!r.ok || !j.ok) {
+          ppRatePolicySummary.textContent = t('pp.rate_policy_bad', { error: j.error || ('HTTP ' + r.status) });
+          return;
+        }
+        ppRatePolicySummary.textContent = formatRatePolicySummary(j.policy);
+      } catch (e) {
+        ppRatePolicySummary.textContent = t('pp.rate_policy_bad', { error: String(e) });
+      }
+    }
+
+    function fillRatePolicySelect(candidates, preferred) {
+      if (!ppRatePolicySelect) return;
+      const list = candidates || [];
+      const prev = preferred || (ppRatePolicy && ppRatePolicy.value) || '';
+      ppRatePolicySelect.innerHTML = '';
+      const opt0 = document.createElement('option');
+      opt0.value = '';
+      opt0.textContent = list.length ? t('pp.rate_policy_select') : t('pp.rate_policy_none');
+      ppRatePolicySelect.appendChild(opt0);
+      list.forEach((p) => {
+        const o = document.createElement('option');
+        o.value = p;
+        const name = String(p).split(/[/\\\\]/).pop();
+        o.textContent = name;
+        o.title = p;
+        ppRatePolicySelect.appendChild(o);
+      });
+      if (prev && list.indexOf(prev) >= 0) ppRatePolicySelect.value = prev;
+    }
+
+    function syncRateSavePathFromName() {
+      if (!ppRateSavePath || !ppRateName) return;
+      const cur = (ppRateSavePath.value || '').trim();
+      if (cur && !/fixed_5hz|fine_middle|rate_policies/.test(cur) && cur.indexOf('.json') >= 0) {
+        return;
+      }
+      const name = ((ppRateName.value || 'rate_policy').trim() || 'rate_policy')
+        .replace(/[^\\w.-]+/g, '_');
+      const base = (ppRatePolicy && ppRatePolicy.value || '').trim();
+      let dir = 'configs/rate_policies';
+      if (base) {
+        const norm = base.replace(/\\\\/g, '/');
+        const i = norm.lastIndexOf('/');
+        if (i > 0) dir = norm.slice(0, i);
+      }
+      ppRateSavePath.value = dir + '/' + name + '.json';
+    }
+
+    // Seed piecewise editor with the fine-middle template.
+    setRateSegRows(defaultFineSegments());
+    if (ppRateName) {
+      ppRateName.addEventListener('input', () => {
+        refreshRatePreview();
+        syncRateSavePathFromName();
+      });
+    }
+    const btnPpRateAddSeg = document.getElementById('btnPpRateAddSeg');
+    if (btnPpRateAddSeg) {
+      btnPpRateAddSeg.addEventListener('click', () => {
+        const rows = readRateSegRows();
+        const last = rows.length ? rows[rows.length - 1] : { end_pct: 0 };
+        const start = Number.isFinite(last.end_pct) ? last.end_pct : 0;
+        addRateSegRow({ start_pct: start, end_pct: Math.min(100, start + 10), hz: 5 });
+        refreshRatePreview();
+      });
+    }
+    const btnPpRatePresetFine = document.getElementById('btnPpRatePresetFine');
+    if (btnPpRatePresetFine) {
+      btnPpRatePresetFine.addEventListener('click', () => {
+        if (ppRateName) ppRateName.value = 'fine_middle_v1';
+        setRateSegRows(defaultFineSegments());
+        syncRateSavePathFromName();
+      });
+    }
+    const btnPpRatePresetFixed = document.getElementById('btnPpRatePresetFixed');
+    if (btnPpRatePresetFixed) {
+      btnPpRatePresetFixed.addEventListener('click', () => {
+        if (ppRateName) ppRateName.value = 'fixed_5hz';
+        setRateSegRows(defaultFixedSegments());
+        syncRateSavePathFromName();
+      });
+    }
+    const btnPpRateSave = document.getElementById('btnPpRateSave');
+    if (btnPpRateSave) {
+      btnPpRateSave.addEventListener('click', async () => {
+        const path = (ppRateSavePath && ppRateSavePath.value || '').trim();
+        if (!path) {
+          setRateBuildHint(t('pp.rate_need_save_path'), true);
+          return;
+        }
+        const policy = buildRatePolicyObject();
+        setRateBuildHint(t('pp.rate_saving'));
+        try {
+          const r = await fetch('/api/postprocess/rate-policy/save', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: path, policy: policy }),
+          });
+          const j = await r.json();
+          if (!r.ok || !j.ok) {
+            setRateBuildHint(t('pp.rate_save_fail', { error: j.error || ('HTTP ' + r.status) }), true);
+            return;
+          }
+          setRateBuildHint(t('pp.rate_save_ok', { path: j.path || path }));
+          if (ppRatePolicy) {
+            ppRatePolicy.value = j.path || path;
+            savePpForm();
+            refreshRatePolicySummary();
+          }
+          if (j.path && ppRatePolicySelect) {
+            let found = false;
+            for (let i = 0; i < ppRatePolicySelect.options.length; i++) {
+              if (ppRatePolicySelect.options[i].value === j.path) { found = true; break; }
+            }
+            if (!found) {
+              const o = document.createElement('option');
+              o.value = j.path;
+              o.textContent = String(j.path).split(/[/\\\\]/).pop();
+              ppRatePolicySelect.appendChild(o);
+            }
+            ppRatePolicySelect.value = j.path;
+          }
+        } catch (e) {
+          setRateBuildHint(t('pp.rate_save_fail', { error: String(e) }), true);
+        }
+      });
+    }
+    const btnPpRateApply = document.getElementById('btnPpRateApply');
+    if (btnPpRateApply) {
+      btnPpRateApply.addEventListener('click', () => {
+        const path = (ppRateSavePath && ppRateSavePath.value || '').trim()
+          || (ppRatePolicy && ppRatePolicy.value || '').trim();
+        if (!path) {
+          setRateBuildHint(t('pp.rate_need_save_path'), true);
+          return;
+        }
+        if (ppRatePolicy) {
+          ppRatePolicy.value = path;
+          savePpForm();
+          refreshRatePreview();
+          refreshRatePolicySummary();
+        }
+        setRateBuildHint(t('pp.rate_apply_ok', { path: path }));
+      });
+    }
+    if (ppRatePolicySelect) {
+      ppRatePolicySelect.addEventListener('change', () => {
+        const v = (ppRatePolicySelect.value || '').trim();
+        if (v && ppRatePolicy) {
+          ppRatePolicy.value = v;
+          savePpForm();
+          refreshRatePolicySummary();
+        }
+      });
+    }
+    if (ppRatePolicy) {
+      ppRatePolicy.addEventListener('change', () => refreshRatePolicySummary());
+      ppRatePolicy.addEventListener('blur', () => refreshRatePolicySummary());
+    }
+
     function readPpForm() {
-      const hz = parseFloat(ppMasterHz.value);
       return {
         episode: (ppEpisode.value || '').trim(),
         align: ppAlign.value || 'asof',
         align_clock: (ppAlignClock && ppAlignClock.value) || 'wall',
         primary_camera: (ppPrimaryCamera && ppPrimaryCamera.value) || 'cam-middle',
         master: (ppMaster.value || '').trim() || '',
-        master_hz: Number.isFinite(hz) ? hz : 5,
+        rate_policy: (ppRatePolicy && ppRatePolicy.value || '').trim() || '',
         require: (ppRequire.value || '').trim(),
         max_match_dt: (ppMaxDt.value || '').trim() || '0.033',
         trim: ppTrim.value || 'both',
@@ -8167,7 +8552,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (src.align) ppAlign.value = src.align;
       if (ppAlignClock && src.align_clock) ppAlignClock.value = src.align_clock;
       // master / primary-camera filled after episode inspect (select list)
-      if (src.master_hz != null) ppMasterHz.value = src.master_hz;
+      if (ppRatePolicy && src.rate_policy) ppRatePolicy.value = src.rate_policy;
+      fillRatePolicySelect(src.rate_policy_candidates || (defaults && defaults.rate_policy_candidates) || [], src.rate_policy || '');
       if (src.require) ppRequire.value = src.require;
       if (src.max_match_dt) ppMaxDt.value = src.max_match_dt;
       if (src.trim) ppTrim.value = src.trim;
@@ -8203,9 +8589,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (ppBatchOverwrite && src.batch_overwrite != null) {
         ppBatchOverwrite.checked = !!src.batch_overwrite;
       }
+      syncRateSavePathFromName();
+      refreshRatePolicySummary();
     }
 
-    [ppAlign, ppAlignClock, ppPrimaryCamera, ppMaster, ppMasterHz, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppAllowInvalid, ppEpisode, ppPackInput, ppPackOutput, ppPackAllowInvalid, ppBatchRoot, ppBatchOverwrite].forEach((el) => {
+    [ppAlign, ppAlignClock, ppPrimaryCamera, ppMaster, ppRatePolicy, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppAllowInvalid, ppEpisode, ppPackInput, ppPackOutput, ppPackAllowInvalid, ppBatchRoot, ppBatchOverwrite].forEach((el) => {
       if (!el) return;
       el.addEventListener('change', savePpForm);
       el.addEventListener('blur', savePpForm);
@@ -8340,13 +8728,31 @@ PREVIEW_HTML = """<!DOCTYPE html>
     if (btnPpBrowseBatchRoot) {
       btnPpBrowseBatchRoot.addEventListener('click', () => openPathPicker({ target: 'batchRoot', pathKind: 'dir' }));
     }
+    const btnPpBrowseRatePolicy = document.getElementById('btnPpBrowseRatePolicy');
+    if (btnPpBrowseRatePolicy) {
+      btnPpBrowseRatePolicy.addEventListener('click', () => openPathPicker({
+        target: 'ratePolicy',
+        pathKind: 'file',
+        titleKey: 'pathPicker.titleRatePolicy',
+      }));
+    }
+    const btnPpBrowseRateSave = document.getElementById('btnPpBrowseRateSave');
+    if (btnPpBrowseRateSave) {
+      btnPpBrowseRateSave.addEventListener('click', () => openPathPicker({
+        target: 'rateSave',
+        pathKind: 'file',
+        titleKey: 'pathPicker.titleRateSave',
+      }));
+    }
 
     function setPpBusy(on, text) {
       ppBusy = !!on;
       ['btnPpExport', 'btnPpFilter', 'btnPpHik', 'btnPpRunAll', 'btnPpRawVideo', 'btnPpRefresh',
         'btnPpBrowseEpisode', 'btnPpBrowseCameraMap', 'btnPpPackHik',
         'btnPpBrowsePackInput', 'btnPpBrowsePackOutput',
-        'btnPpBatchRun', 'btnPpBrowseBatchRoot'].forEach((id) => {
+        'btnPpBatchRun', 'btnPpBrowseBatchRoot',
+        'btnPpBrowseRatePolicy', 'btnPpBrowseRateSave',
+        'btnPpRateSave', 'btnPpRateApply'].forEach((id) => {
         const b = document.getElementById(id);
         if (b) b.disabled = !!on;
       });
@@ -8542,6 +8948,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         ppHint.textContent = t('pp.need_master');
         return { ok: false, error: 'missing master' };
       }
+      if (!body.rate_policy) {
+        ppHint.textContent = t('pp.need_rate_policy');
+        return { ok: false, error: 'missing rate_policy' };
+      }
       savePpForm();
       setPpBusy(true, t('pp.running'));
       ppLog.textContent = 'running…\\n' + JSON.stringify(body, null, 2);
@@ -8659,6 +9069,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         // Prefer form master; server still falls back to per-episode suggested_master.
         // Empty master is allowed when episodes can suggest one.
       }
+      if (!form.rate_policy) {
+        if (ppBatchHint) ppBatchHint.textContent = t('pp.need_rate_policy');
+        return { ok: false, error: 'missing rate_policy' };
+      }
       const body = {
         input_root: inputRoot,
         steps: ['export-timeline', 'filter-timeline', 'export-hik-dataset'],
@@ -8666,7 +9080,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         align_clock: form.align_clock,
         primary_camera: form.primary_camera,
         master: form.master || 'cam-left',
-        master_hz: form.master_hz,
+        rate_policy: form.rate_policy || null,
         require: form.require,
         max_match_dt: form.max_match_dt,
         trim: form.trim,
@@ -10437,6 +10851,40 @@ def create_viz_app(
                 pass
         return {"ok": True, **_defaults(save_dir=save_dir)}
 
+    @app.get("/api/postprocess/rate-policy")
+    async def postprocess_rate_policy_get(path: str = "") -> dict[str, Any]:
+        from sensors_dcs.export.rate_policy import load_rate_policy
+
+        raw = (path or "").strip()
+        if not raw:
+            return {"ok": False, "error": "path is required"}
+        try:
+            policy = load_rate_policy(raw)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {
+            "ok": True,
+            "path": policy.source_path or raw,
+            "policy": {
+                **policy.to_dict(),
+                "source_path": policy.source_path,
+            },
+        }
+
+    @app.post("/api/postprocess/rate-policy/save")
+    async def postprocess_rate_policy_save(req: RatePolicySaveBody) -> dict[str, Any]:
+        from sensors_dcs.export.rate_policy import parse_rate_policy, save_rate_policy
+
+        raw = (req.path or "").strip()
+        if not raw:
+            return {"ok": False, "error": "path is required"}
+        try:
+            policy = parse_rate_policy(req.policy or {})
+            out = save_rate_policy(raw, policy)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": True, "path": str(out), "policy": policy.to_dict()}
+
     @app.get("/api/postprocess/episode")
     async def postprocess_episode(path: str = "") -> dict[str, Any]:
         """Inspect episode manifest.json → qualify + master candidate list."""
@@ -10486,6 +10934,7 @@ def create_viz_app(
                 align=req.align,
                 master=req.master,
                 master_hz=req.master_hz,
+                rate_policy=req.rate_policy,
                 align_clock=req.align_clock,
                 primary_camera=req.primary_camera,
                 require=req.require,
@@ -10544,6 +10993,7 @@ def create_viz_app(
                 align=req.align,
                 master=req.master,
                 master_hz=req.master_hz,
+                rate_policy=req.rate_policy,
                 align_clock=req.align_clock,
                 primary_camera=req.primary_camera,
                 require=req.require,

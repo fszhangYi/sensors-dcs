@@ -1,0 +1,9 @@
+{
+  "name": "fixed_5hz",
+  "version": 1,
+  "type": "piecewise_progress",
+  "axis": "time_fraction",
+  "segments": [
+    {"start": 0.0, "end": 1.0, "hz": 5}
+  ]
+}
