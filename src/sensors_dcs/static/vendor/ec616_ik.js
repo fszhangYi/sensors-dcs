@@ -1,6 +1,7 @@
 /**
  * Elite EC616 TCP IK (browser) — mirrors sensors.kinematics + sensors_dcs.arm_pose.
- * Machine joints (rad) → standard DH flange FK; TCP = flange @ Transl(0,0,0.18).
+ * Machine joints (rad) → standard DH flange FK; TCP = flange @ Transl(tcp_xyz).
+ * Default tcp_xyz = (0,0,0.18); override via Ec616Ik.setTcpXyz from DCS YAML /api/status.
  * Solver: damped Gauss–Newton on SE(3) residual (same weighting as ik_flange).
  */
 (function (global) {
@@ -18,9 +19,29 @@
     [0, L[4], 0, -PI2],
     [0, L[5], 0, 0],
   ];
-  const TCP_Z = 0.18;
+  // Flange→TCP translation (m); mutable via setTcpXyz.
+  let tcpXyz = [0.0, 0.0, 0.18];
+
   const SOFT_MIN = [-Math.PI * 2, -Math.PI * 2, (-156 * Math.PI) / 180, -Math.PI * 2, -Math.PI * 2, -Math.PI * 2];
   const SOFT_MAX = [Math.PI * 2, Math.PI * 2, (156 * Math.PI) / 180, Math.PI * 2, Math.PI * 2, Math.PI * 2];
+
+  function normalizeTcpXyz(raw) {
+    if (!raw || typeof raw.length !== 'number' || raw.length < 3) {
+      return [0.0, 0.0, 0.18];
+    }
+    const out = [Number(raw[0]), Number(raw[1]), Number(raw[2])];
+    if (!out.every(Number.isFinite)) return [0.0, 0.0, 0.18];
+    return out;
+  }
+
+  function setTcpXyz(raw) {
+    tcpXyz = normalizeTcpXyz(raw);
+    return tcpXyz.slice();
+  }
+
+  function getTcpXyz() {
+    return tcpXyz.slice();
+  }
 
   function mat4Identity() {
     return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
@@ -65,11 +86,17 @@
   }
 
   function tcpOffsetMat() {
-    return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, TCP_Z, 0, 0, 0, 1];
+    const x = tcpXyz[0];
+    const y = tcpXyz[1];
+    const z = tcpXyz[2];
+    return [1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z, 0, 0, 0, 1];
   }
 
   function invTcpOffsetMat() {
-    return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, -TCP_Z, 0, 0, 0, 1];
+    const x = tcpXyz[0];
+    const y = tcpXyz[1];
+    const z = tcpXyz[2];
+    return [1, 0, 0, -x, 0, 1, 0, -y, 0, 0, 1, -z, 0, 0, 0, 1];
   }
 
   function xyzrpyToMat(xyzrpy) {
@@ -354,6 +381,10 @@
   global.Ec616Ik = {
     xyzrpyToJoints,
     fkFlange,
-    TCP_Z,
+    setTcpXyz,
+    getTcpXyz,
+    get TCP_XYZ() { return getTcpXyz(); },
+    /** @deprecated use getTcpXyz()[2] */
+    get TCP_Z() { return tcpXyz[2]; },
   };
 })(typeof window !== 'undefined' ? window : globalThis);

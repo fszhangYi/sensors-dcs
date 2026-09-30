@@ -194,6 +194,8 @@ class DcsConfig(BaseModel):
     home_joints_rad: list[float] | None = None
     # Deprecated: ignored for Home motion (Home uses arm_abs_ramp t_min/t_max/v_norm).
     home_duration_s: float = 20.0
+    # Flange→TCP translation (m). None → (0, 0, 0.18). Online FK/IK use this.
+    tcp_xyz: list[float] | None = None
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     record: RecordConfig = Field(default_factory=RecordConfig)
     gello_arm_sync: GelloArmSyncConfig = Field(default_factory=GelloArmSyncConfig)
@@ -233,6 +235,26 @@ class DcsConfig(BaseModel):
         if f != f or f in (float("inf"), float("-inf")):
             raise ValueError("home_duration_s must be finite")
         return max(0.1, min(30.0, f))
+
+    @field_validator("tcp_xyz", mode="before")
+    @classmethod
+    def _tcp_xyz(cls, v: Any) -> list[float] | None:
+        if v is None or v == "":
+            return None
+        if not isinstance(v, (list, tuple)):
+            raise ValueError("tcp_xyz must be a list of 3 floats (meters)")
+        if len(v) != 3:
+            raise ValueError("tcp_xyz must have exactly 3 values")
+        out: list[float] = []
+        for i, x in enumerate(v):
+            try:
+                f = float(x)
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"tcp_xyz[{i}] is not a float") from e
+            if f != f or f in (float("inf"), float("-inf")):
+                raise ValueError(f"tcp_xyz[{i}] is not finite")
+            out.append(f)
+        return out
 
     @field_validator("agents")
     @classmethod
@@ -309,12 +331,17 @@ def load_dcs_config(path: str | Path) -> DcsConfig:
 
 
 def config_summary(cfg: DcsConfig) -> dict[str, Any]:
+    from sensors_dcs.arm_pose import DEFAULT_TCP_XYZ, normalize_tcp_xyz
+
+    tcp = list(normalize_tcp_xyz(cfg.tcp_xyz))
     return {
         "site": cfg.site,
         "version": cfg.version,
         "dry_run": cfg.dry_run,
         "home_joints_rad": list(cfg.home_joints_rad) if cfg.home_joints_rad else None,
         "home_duration_s": float(cfg.home_duration_s),
+        "tcp_xyz": tcp,
+        "tcp_xyz_default": list(DEFAULT_TCP_XYZ),
         "sensors_config": cfg.sensors_config,
         "runtime": cfg.runtime.model_dump(),
         "record": cfg.record.model_dump(),

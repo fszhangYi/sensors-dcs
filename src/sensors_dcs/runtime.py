@@ -51,6 +51,10 @@ class Orchestrator:
 
     def __init__(self, cfg: DcsConfig) -> None:
         self.cfg = cfg
+        from sensors_dcs.arm_pose import set_tcp_xyz
+
+        # Online FK/IK flange→TCP offset (YAML ``tcp_xyz``; default 0,0,0.18).
+        self._tcp_xyz = list(set_tcp_xyz(getattr(cfg, "tcp_xyz", None)))
         dry = cfg.dry_run
         self.manager = SensorManager.from_yaml(cfg.sensors_config, dry_run=dry)
         self.agents: dict[str, BaseAgent] = {}

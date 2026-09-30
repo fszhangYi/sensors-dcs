@@ -87,10 +87,20 @@ def default_rate_policy_path() -> str:
     return cands[0] if cands else ""
 
 
-def postprocess_defaults(*, save_dir: str | Path | None = None) -> dict[str, Any]:
+def postprocess_defaults(
+    *,
+    save_dir: str | Path | None = None,
+    tcp_xyz: list[float] | tuple[float, float, float] | None = None,
+) -> dict[str, Any]:
+    from sensors_dcs.arm_pose import get_tcp_xyz, normalize_tcp_xyz
+
     maps = default_camera_map_candidates()
     rate_cands = default_rate_policy_candidates()
     rate_default = default_rate_policy_path()
+    try:
+        tcp = list(normalize_tcp_xyz(tcp_xyz if tcp_xyz is not None else get_tcp_xyz()))
+    except ValueError:
+        tcp = list(get_tcp_xyz())
     return {
         "align": DEFAULT_ALIGN,
         "master": DEFAULT_MASTER,
@@ -106,10 +116,22 @@ def postprocess_defaults(*, save_dir: str | Path | None = None) -> dict[str, Any
         "camera_map": maps[0] if maps else "",
         "camera_map_candidates": maps,
         "allow_invalid": False,
+        "tcp_xyz": tcp,
         "steps": list(DEFAULT_STEPS),
         "episodes": list_episodes(save_dir) if save_dir else [],
         "save_dir": str(Path(save_dir).expanduser().resolve()) if save_dir else None,
     }
+
+
+def resolve_export_tcp_xyz(
+    tcp_xyz: list[float] | tuple[float, float, float] | None = None,
+) -> tuple[float, float, float]:
+    """UI/CLI override, else active DCS YAML ``tcp_xyz`` (via arm_pose)."""
+    from sensors_dcs.arm_pose import get_tcp_xyz, normalize_tcp_xyz
+
+    if tcp_xyz is None:
+        return get_tcp_xyz()
+    return normalize_tcp_xyz(tcp_xyz)
 
 
 def list_episodes(save_dir: str | Path | None) -> list[dict[str, Any]]:
@@ -461,6 +483,7 @@ def run_postprocess(
     materialize: bool = True,
     camera_map: str | None = None,
     allow_invalid: bool = False,
+    tcp_xyz: list[float] | tuple[float, float, float] | None = None,
 ) -> dict[str, Any]:
     """Run selected postprocess steps sequentially. Stops on first failure."""
     from sensors_dcs.export.filter import filter_episode_timeline
@@ -493,6 +516,10 @@ def run_postprocess(
 
     cam_map = (camera_map or "").strip() or None
     rate_path = (rate_policy or "").strip() or None
+    try:
+        export_tcp = resolve_export_tcp_xyz(tcp_xyz)
+    except ValueError as e:
+        return {"ok": False, "error": str(e), "episode": str(ep), "results": []}
     # Prefer rate-policy JSON; fall back to legacy uniform master_hz.
     use_master_hz = None if rate_path else (
         float(master_hz) if master_hz is not None else None
@@ -533,7 +560,9 @@ def run_postprocess(
                     ep,
                     camera_map_yaml=cam_map,
                     allow_invalid=allow_invalid,
+                    tcp_xyz=export_tcp,
                 )
+                log_lines.append(f"tcp_xyz={list(export_tcp)}")
             results.append({"step": step, "ok": True, "meta": meta})
             log_lines.append(f"ok {step}")
             if step == "filter-timeline" and isinstance(meta, dict):
@@ -627,6 +656,7 @@ def run_postprocess_root(
     camera_map: str | None = None,
     allow_invalid: bool = False,
     overwrite: bool = True,
+    tcp_xyz: list[float] | tuple[float, float, float] | None = None,
 ) -> dict[str, Any]:
     """Run the three-step postprocess on every ``episode_*`` under ``input_root``.
 
@@ -746,6 +776,7 @@ def run_postprocess_root(
                 materialize=materialize,
                 camera_map=camera_map,
                 allow_invalid=allow_invalid,
+                tcp_xyz=tcp_xyz,
             )
         except Exception as e:  # noqa: BLE001
             item["status"] = "failed"

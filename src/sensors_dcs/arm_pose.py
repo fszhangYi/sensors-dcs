@@ -18,6 +18,51 @@ ensure_sensors_import()
 # Match hik_dataset / data_postprocess default tool offset (meters).
 DEFAULT_TCP_XYZ: tuple[float, float, float] = (0.0, 0.0, 0.18)
 
+# Process-wide active offset (set from DCS YAML ``tcp_xyz`` at Orchestrator boot).
+_active_tcp_xyz: tuple[float, float, float] = DEFAULT_TCP_XYZ
+
+
+def normalize_tcp_xyz(raw: Any | None) -> tuple[float, float, float]:
+    """Parse ``[x,y,z]`` meters; ``None``/empty → ``DEFAULT_TCP_XYZ``."""
+    if raw is None or raw == "":
+        return DEFAULT_TCP_XYZ
+    if isinstance(raw, (list, tuple)):
+        if len(raw) != 3:
+            raise ValueError("tcp_xyz must have exactly 3 floats (meters)")
+        out: list[float] = []
+        for i, x in enumerate(raw):
+            try:
+                f = float(x)
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"tcp_xyz[{i}] must be a finite float") from e
+            if not math.isfinite(f):
+                raise ValueError(f"tcp_xyz[{i}] must be a finite float")
+            out.append(f)
+        return (out[0], out[1], out[2])
+    raise ValueError("tcp_xyz must be a list of 3 floats (meters)")
+
+
+def get_tcp_xyz() -> tuple[float, float, float]:
+    """Current flange→TCP translation used by online FK/IK."""
+    return _active_tcp_xyz
+
+
+def set_tcp_xyz(raw: Any | None) -> tuple[float, float, float]:
+    """Install process-wide TCP offset (call once at Orchestrator boot)."""
+    global _active_tcp_xyz
+    _active_tcp_xyz = normalize_tcp_xyz(raw)
+    return _active_tcp_xyz
+
+
+def resolve_tcp_xyz(
+    tcp_xyz: tuple[float, float, float] | Sequence[float] | None = None,
+) -> tuple[float, float, float]:
+    """Explicit override, else active configured offset."""
+    if tcp_xyz is None:
+        return get_tcp_xyz()
+    return normalize_tcp_xyz(tcp_xyz)
+
+
 _fk_fn = None
 
 
@@ -242,9 +287,10 @@ def clip_tcp_xyzrpy(
 def joints_rad_to_xyzrpy(
     joints_rad: Sequence[float] | None,
     *,
-    tcp_xyz: tuple[float, float, float] = DEFAULT_TCP_XYZ,
+    tcp_xyz: tuple[float, float, float] | Sequence[float] | None = None,
 ) -> list[float] | None:
     """Return ``[x,y,z,rx,ry,rz]`` (m / rad) or ``None`` if joints unusable."""
+    offset = resolve_tcp_xyz(tcp_xyz)
     if joints_rad is None:
         return None
     try:
@@ -254,7 +300,7 @@ def joints_rad_to_xyzrpy(
     if len(j) < 6 or any(not math.isfinite(x) for x in j):
         return None
     try:
-        T = np.asarray(_get_fk()(j), dtype=np.float64) @ _tcp_matrix(tcp_xyz)
+        T = np.asarray(_get_fk()(j), dtype=np.float64) @ _tcp_matrix(offset)
         out = _pose_to_xyzrpy(T)
     except Exception:  # noqa: BLE001
         return None
@@ -267,7 +313,7 @@ def xyzrpy_to_joints_rad(
     xyzrpy: Sequence[float] | None,
     *,
     q_seed_rad: Sequence[float],
-    tcp_xyz: tuple[float, float, float] = DEFAULT_TCP_XYZ,
+    tcp_xyz: tuple[float, float, float] | Sequence[float] | None = None,
     enforce_teach_soft_limits: bool = True,
     # Infer control tolerances (default ik_flange 1e-5m / 5e-4rad is far too tight).
     position_tolerance_m: float = 2e-3,
@@ -280,6 +326,7 @@ def xyzrpy_to_joints_rad(
 
     ``next_state`` from pi05 serve is Cartesian TCP pose, not joint angles.
     """
+    offset = resolve_tcp_xyz(tcp_xyz)
     if xyzrpy is None:
         return {"ok": False, "error": "xyzrpy is None", "joints_rad": None}
     try:
@@ -290,7 +337,7 @@ def xyzrpy_to_joints_rad(
         return {"ok": False, "error": "q_seed_rad must be 6 finite floats", "joints_rad": None}
     try:
         T_tcp = _xyzrpy_to_matrix(xyzrpy)
-        T_flange = T_tcp @ np.linalg.inv(_tcp_matrix(tcp_xyz))
+        T_flange = T_tcp @ np.linalg.inv(_tcp_matrix(offset))
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"invalid xyzrpy: {e}", "joints_rad": None}
 
@@ -355,7 +402,7 @@ def xyzrpy_to_joints_rad(
         return {"ok": False, "error": "IK returned non-finite joints", "joints_rad": None}
 
     # Final FK check in TCP frame (same path as joints_rad_to_xyzrpy).
-    achieved = joints_rad_to_xyzrpy(joints, tcp_xyz=tcp_xyz)
+    achieved = joints_rad_to_xyzrpy(joints, tcp_xyz=offset)
     pos_err = None
     if achieved is not None:
         tgt = [float(x) for x in list(xyzrpy)[:6]]
@@ -382,10 +429,11 @@ def xyzrpy_to_joints_rad(
 
 def cartesian_payload(joints_rad: Sequence[float] | None) -> dict[str, Any]:
     """Compact fields for arm agent / viz payloads."""
-    xyzrpy = joints_rad_to_xyzrpy(joints_rad)
+    offset = get_tcp_xyz()
+    xyzrpy = joints_rad_to_xyzrpy(joints_rad, tcp_xyz=offset)
     return {
         "cartesian_xyzrpy": xyzrpy,
-        "cartesian_tcp_xyz": list(DEFAULT_TCP_XYZ),
+        "cartesian_tcp_xyz": list(offset),
         "cartesian_frame": "base_tcp" if xyzrpy is not None else None,
     }
 
@@ -414,7 +462,7 @@ def cartesian_linear_joint_path(
     qg: Sequence[float],
     n: int,
     *,
-    tcp_xyz: tuple[float, float, float] = DEFAULT_TCP_XYZ,
+    tcp_xyz: tuple[float, float, float] | Sequence[float] | None = None,
 ) -> dict[str, Any]:
     """Build a joint path whose TCP xyz moves in a straight line (FK → lerp → IK).
 
@@ -422,6 +470,7 @@ def cartesian_linear_joint_path(
     - Intermediate TCP: linear xyz + SLERP orientation.
     - Each waypoint IK-seeded by the previous joints; last point is exactly ``qg``.
     """
+    offset = resolve_tcp_xyz(tcp_xyz)
     n = max(1, int(n))
     try:
         q_start = [float(x) for x in list(qa)[:6]]
@@ -433,8 +482,8 @@ def cartesian_linear_joint_path(
     if any(not math.isfinite(x) for x in q_start + q_goal):
         return {"ok": False, "error": "qa/qg must be finite", "joints_path": None}
 
-    pose_a = joints_rad_to_xyzrpy(q_start, tcp_xyz=tcp_xyz)
-    pose_g = joints_rad_to_xyzrpy(q_goal, tcp_xyz=tcp_xyz)
+    pose_a = joints_rad_to_xyzrpy(q_start, tcp_xyz=offset)
+    pose_g = joints_rad_to_xyzrpy(q_goal, tcp_xyz=offset)
     if pose_a is None or pose_g is None:
         return {
             "ok": False,
@@ -458,7 +507,7 @@ def cartesian_linear_joint_path(
         ik = xyzrpy_to_joints_rad(
             xyzrpy,
             q_seed_rad=seed,
-            tcp_xyz=tcp_xyz,
+            tcp_xyz=offset,
             enforce_teach_soft_limits=False,
             soft_limit_retry=False,
             max_nfev=120,

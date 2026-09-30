@@ -77,6 +77,8 @@ class PostprocessBody(BaseModel):
     materialize: bool = True
     camera_map: str | None = None
     allow_invalid: bool = False
+    # Flange→TCP (m) for export-hik-dataset FK; None → process YAML/active tcp_xyz.
+    tcp_xyz: list[float] | None = None
 
 
 class RatePolicySaveBody(BaseModel):
@@ -127,6 +129,7 @@ class PostprocessRootBody(BaseModel):
     camera_map: str | None = None
     allow_invalid: bool = False
     overwrite: bool = True
+    tcp_xyz: list[float] | None = None
 
 
 class AuthLoginBody(BaseModel):
@@ -3310,11 +3313,21 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
         <section class="pp-card">
           <h2 data-i18n="pp.step3">3 · export-hik-dataset</h2>
-          <p class="pp-hint" data-i18n="pp.step3_hint">--camera-map …\\hik_camera_map.yaml；若尚未对齐，请先跑 Step1（rate-policy 见上方）或一键三步</p>
+          <p class="pp-hint" data-i18n="pp.step3_hint">--camera-map …\\hik_camera_map.yaml；若尚未对齐，请先跑 Step1（rate-policy 见上方）或一键三步。TCP 默认同步 DCS YAML tcp_xyz，可在此覆盖。</p>
           <div class="pp-row">
             <label for="ppCameraMap">camera-map</label>
             <input type="text" class="wide" id="ppCameraMap" data-i18n-placeholder="pp.camera_map_ph" placeholder="路径到 hik_camera_map.yaml" />
             <button type="button" id="btnPpBrowseCameraMap" data-i18n="pp.browse">浏览…</button>
+          </div>
+          <div class="pp-row" data-i18n-title="pp.tcp_xyz_hint" title="法兰→TCP 平移（米）；默认来自启动 YAML tcp_xyz；Step3 / 一键三步 / 快速采集 / 批量导出共用">
+            <label data-i18n="pp.tcp_xyz">tcp_xyz</label>
+            <div class="inf-tcp-clip" id="ppTcpXyz">
+              <label><span>x</span><input type="number" id="ppTcpX" step="0.001" value="0" /></label>
+              <label><span>y</span><input type="number" id="ppTcpY" step="0.001" value="0" /></label>
+              <label><span>z</span><input type="number" id="ppTcpZ" step="0.001" value="0.18" /></label>
+              <span class="arm-abs-unit" data-i18n="pp.tcp_xyz_unit">m</span>
+              <button type="button" id="btnPpTcpResetYaml" data-i18n="pp.tcp_xyz_reset" data-i18n-title="pp.tcp_xyz_reset_tip" title="恢复为当前 DCS YAML / 进程 tcp_xyz">同步 YAML</button>
+            </div>
           </div>
           <div class="pp-actions">
             <button type="button" id="btnPpHik" data-i18n="pp.run3">运行 Step 3</button>
@@ -7061,6 +7074,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const ppTrim = document.getElementById('ppTrim');
     const ppMaterialize = document.getElementById('ppMaterialize');
     const ppCameraMap = document.getElementById('ppCameraMap');
+    const ppTcpX = document.getElementById('ppTcpX');
+    const ppTcpY = document.getElementById('ppTcpY');
+    const ppTcpZ = document.getElementById('ppTcpZ');
+    const btnPpTcpResetYaml = document.getElementById('btnPpTcpResetYaml');
+    let ppTcpYamlDefault = [0, 0, 0.18];
     const ppAllowInvalid = document.getElementById('ppAllowInvalid');
     const ppHint = document.getElementById('ppHint');
     const ppLog = document.getElementById('ppLog');
@@ -7282,6 +7300,19 @@ PREVIEW_HTML = """<!DOCTYPE html>
         }, event.origin);
       } catch (e) {}
     });
+
+    function applyTcpXyzFromStatus(info) {
+      // Sync browser Ec616Ik TCP offset with DCS YAML tcp_xyz (via /api/status.config).
+      try {
+        const cfg = info && info.config;
+        const xyz = cfg && cfg.tcp_xyz;
+        if (!xyz || typeof xyz.length !== 'number' || xyz.length < 3) return;
+        window.__tcpXyz = [Number(xyz[0]), Number(xyz[1]), Number(xyz[2])];
+        if (window.Ec616Ik && typeof window.Ec616Ik.setTcpXyz === 'function') {
+          window.Ec616Ik.setTcpXyz(window.__tcpXyz);
+        }
+      } catch (e) {}
+    }
 
     function applyCollectGate(ok, info) {
       collectOk = !!ok;
@@ -8519,6 +8550,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     fetch('/api/status', { credentials: 'same-origin' }).then((r) => r.json()).then((j) => {
       const ok = j.collect_ok !== false && !j.boot_error;
       applyCollectGate(ok, j);
+      applyTcpXyzFromStatus(j);
     }).catch(() => {});
     refreshSettingsAuth().catch(() => {});
     if (sensorsEmbedFrame) sensorsEmbedFrame.title = t('sensors.title');
@@ -9382,12 +9414,30 @@ PREVIEW_HTML = """<!DOCTYPE html>
         materialize: !!ppMaterialize.checked,
         camera_map: (ppCameraMap.value || '').trim() || null,
         allow_invalid: !!ppAllowInvalid.checked,
+        tcp_xyz: getPpTcpXyz(),
         pack_input: (ppPackInput && ppPackInput.value || '').trim() || '',
         pack_output: (ppPackOutput && ppPackOutput.value || '').trim() || '',
         pack_allow_invalid: !!(ppPackAllowInvalid && ppPackAllowInvalid.checked),
         batch_root: (ppBatchRoot && ppBatchRoot.value || '').trim() || '',
         batch_overwrite: !(ppBatchOverwrite && ppBatchOverwrite.checked === false),
       };
+    }
+
+    function getPpTcpXyz() {
+      const x = Number(ppTcpX && ppTcpX.value);
+      const y = Number(ppTcpY && ppTcpY.value);
+      const z = Number(ppTcpZ && ppTcpZ.value);
+      if (![x, y, z].every(Number.isFinite)) return null;
+      return [x, y, z];
+    }
+
+    function applyPpTcpXyz(xyz) {
+      if (!xyz || typeof xyz.length !== 'number' || xyz.length < 3) return;
+      const vals = [Number(xyz[0]), Number(xyz[1]), Number(xyz[2])];
+      if (!vals.every(Number.isFinite)) return;
+      if (ppTcpX) ppTcpX.value = String(vals[0]);
+      if (ppTcpY) ppTcpY.value = String(vals[1]);
+      if (ppTcpZ) ppTcpZ.value = String(vals[2]);
     }
 
     function savePpForm() {
@@ -9475,6 +9525,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
       if (map) ppCameraMap.value = map;
       else if (defMap) ppCameraMap.value = defMap;
+      const yamlTcp = (defaults && defaults.tcp_xyz) || null;
+      if (yamlTcp && yamlTcp.length >= 3) {
+        ppTcpYamlDefault = [Number(yamlTcp[0]), Number(yamlTcp[1]), Number(yamlTcp[2])];
+      }
+      // Prefer saved override; else seed from YAML defaults.
+      if (src.tcp_xyz && src.tcp_xyz.length >= 3) applyPpTcpXyz(src.tcp_xyz);
+      else applyPpTcpXyz(ppTcpYamlDefault);
       if (ppPackInput && src.pack_input) ppPackInput.value = src.pack_input;
       if (ppPackOutput && src.pack_output) ppPackOutput.value = src.pack_output;
       if (ppPackAllowInvalid && src.pack_allow_invalid != null) {
@@ -9488,11 +9545,29 @@ PREVIEW_HTML = """<!DOCTYPE html>
       refreshRatePolicySummary();
     }
 
-    [ppAlign, ppAlignClock, ppPrimaryCamera, ppMaster, ppRatePolicy, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppAllowInvalid, ppEpisode, ppPackInput, ppPackOutput, ppPackAllowInvalid, ppBatchRoot, ppBatchOverwrite].forEach((el) => {
+    [ppAlign, ppAlignClock, ppPrimaryCamera, ppMaster, ppRatePolicy, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppTcpX, ppTcpY, ppTcpZ, ppAllowInvalid, ppEpisode, ppPackInput, ppPackOutput, ppPackAllowInvalid, ppBatchRoot, ppBatchOverwrite].forEach((el) => {
       if (!el) return;
       el.addEventListener('change', savePpForm);
       el.addEventListener('blur', savePpForm);
     });
+    if (btnPpTcpResetYaml) {
+      btnPpTcpResetYaml.addEventListener('click', async () => {
+        try {
+          const j = await fetch('/api/postprocess/defaults').then((r) => r.json());
+          if (j && j.ok && j.tcp_xyz) {
+            ppTcpYamlDefault = [Number(j.tcp_xyz[0]), Number(j.tcp_xyz[1]), Number(j.tcp_xyz[2])];
+            applyPpTcpXyz(ppTcpYamlDefault);
+            savePpForm();
+          } else {
+            applyPpTcpXyz(ppTcpYamlDefault);
+            savePpForm();
+          }
+        } catch (e) {
+          applyPpTcpXyz(ppTcpYamlDefault);
+          savePpForm();
+        }
+      });
+    }
 
     function fillEpisodeSelect(episodes) {
       const cur = ppEpisode.value;
@@ -9848,6 +9923,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         ppHint.textContent = t('pp.need_rate_policy');
         return { ok: false, error: 'missing rate_policy' };
       }
+      if (!body.tcp_xyz) {
+        ppHint.textContent = t('pp.tcp_xyz_bad');
+        return { ok: false, error: 'bad tcp_xyz' };
+      }
       savePpForm();
       setPpBusy(true, t('pp.running'));
       ppLog.textContent = 'running…\\n' + JSON.stringify(body, null, 2);
@@ -9984,7 +10063,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
         camera_map: form.camera_map,
         allow_invalid: form.allow_invalid,
         overwrite: !(ppBatchOverwrite && ppBatchOverwrite.checked === false),
+        tcp_xyz: form.tcp_xyz,
       };
+      if (!body.tcp_xyz) {
+        if (ppBatchHint) ppBatchHint.textContent = t('pp.tcp_xyz_bad');
+        return { ok: false, error: 'bad tcp_xyz' };
+      }
       if (!body.camera_map) {
         if (ppBatchHint) ppBatchHint.textContent = t('pp.batch_need_camera_map');
         return { ok: false, error: 'missing camera_map' };
@@ -11737,6 +11821,7 @@ def create_viz_app(
 
     @app.get("/api/postprocess/defaults")
     async def postprocess_defaults() -> dict[str, Any]:
+        from sensors_dcs.arm_pose import get_tcp_xyz
         from sensors_dcs.postprocess_service import postprocess_defaults as _defaults
 
         save_dir = postprocess_save_dir
@@ -11745,7 +11830,7 @@ def create_viz_app(
                 save_dir = recorder.status().get("save_dir") or save_dir
             except Exception:  # noqa: BLE001
                 pass
-        return {"ok": True, **_defaults(save_dir=save_dir)}
+        return {"ok": True, **_defaults(save_dir=save_dir, tcp_xyz=list(get_tcp_xyz()))}
 
     @app.get("/api/postprocess/rate-policy")
     async def postprocess_rate_policy_get(path: str = "") -> dict[str, Any]:
@@ -11846,6 +11931,7 @@ def create_viz_app(
                 materialize=req.materialize,
                 camera_map=req.camera_map,
                 allow_invalid=req.allow_invalid,
+                tcp_xyz=req.tcp_xyz,
             )
         finally:
             _pp_lock.release()
@@ -11906,6 +11992,7 @@ def create_viz_app(
                 camera_map=req.camera_map,
                 allow_invalid=req.allow_invalid,
                 overwrite=req.overwrite,
+                tcp_xyz=req.tcp_xyz,
             )
         finally:
             _pp_lock.release()

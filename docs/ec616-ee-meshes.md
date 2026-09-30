@@ -96,4 +96,6 @@ curl -s 'http://127.0.0.1:6008/assets/models/ec616/ec616.urdf?v=ee-full-1' | rg 
 
 - 不驱动真实 KWR75 / AG95 硬件读写  
 - **不做**夹爪开合关节动画（AG95 STEP 为整机实体；曾尝试示意垫块，已撤回）  
-- 不自动修改 `DEFAULT_TCP_XYZ` / `--tcp-z`（力传感器加厚后若要对齐真 TCP，需单独改配置）
+- 不自动修改 `DEFAULT_TCP_XYZ` / `--tcp-z`（力传感器加厚后若要对齐真 TCP，需单独改配置）  
+  - **在线** FK/IK：DCS YAML 顶层 `tcp_xyz: [x, y, z]`（米；省略则 `(0,0,0.18)`），启动时注入 `arm_pose.set_tcp_xyz`；页面经 `/api/status` 同步到浏览器 `Ec616Ik.setTcpXyz`  
+  - **离线** hik 导出：后处理 Step 3 提供 `tcp_xyz` 输入，**默认**与当前进程 YAML 一致（`/api/postprocess/defaults`）；「同步 YAML」可拉回；一键三步 / 快速采集 / 批量导出共用。CLI 仍可用 `--tcp-z` / API `tcp_xyz` 覆盖。
