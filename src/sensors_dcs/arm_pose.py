@@ -139,6 +139,106 @@ def normalize_recv_state_format(fmt: str | None) -> str:
     return v
 
 
+# TCP workspace box: -1 on a bound = that side unrestricted.
+TCP_CLIP_KEYS = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
+TCP_CLIP_FREE = -1.0
+
+
+def tcp_clip_bound_is_free(v: float) -> bool:
+    """True when bound is the sentinel ``-1`` (no limit on that side)."""
+    return float(v) == TCP_CLIP_FREE
+
+
+def default_tcp_clip() -> dict[str, float]:
+    return {k: TCP_CLIP_FREE for k in TCP_CLIP_KEYS}
+
+
+def normalize_tcp_clip(bounds: Any | None) -> dict[str, float]:
+    """Parse ``tcp_clip`` dict; missing/None → all ``-1``. Raises on bad values / lo>hi."""
+    out = default_tcp_clip()
+    if bounds is None:
+        return out
+    if not isinstance(bounds, dict):
+        raise ValueError("tcp_clip must be an object with x_min…z_max")
+    for k in TCP_CLIP_KEYS:
+        if k not in bounds or bounds[k] is None:
+            continue
+        try:
+            v = float(bounds[k])
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"tcp_clip.{k} must be a finite float") from e
+        if not math.isfinite(v):
+            raise ValueError(f"tcp_clip.{k} must be a finite float")
+        out[k] = v
+    for axis, lo_k, hi_k in (
+        ("x", "x_min", "x_max"),
+        ("y", "y_min", "y_max"),
+        ("z", "z_min", "z_max"),
+    ):
+        lo, hi = out[lo_k], out[hi_k]
+        if not tcp_clip_bound_is_free(lo) and not tcp_clip_bound_is_free(hi) and lo > hi:
+            raise ValueError(f"tcp_clip.{axis}_min ({lo}) > {axis}_max ({hi})")
+    return out
+
+
+def tcp_clip_is_active(bounds: dict[str, float] | None) -> bool:
+    """True if any bound is not the ``-1`` sentinel."""
+    if not bounds:
+        return False
+    return any(not tcp_clip_bound_is_free(float(bounds.get(k, TCP_CLIP_FREE))) for k in TCP_CLIP_KEYS)
+
+
+def clip_tcp_xyzrpy(
+    xyzrpy: Sequence[float],
+    bounds: dict[str, float] | None,
+) -> dict[str, Any]:
+    """Clip TCP ``x,y,z`` to box; leave rpy unchanged.
+
+    Returns ``{ok, goal_xyzrpy, goal_xyzrpy_raw, applied, error?}``.
+    ``bounds`` should already be normalized (or None → no-op).
+    """
+    try:
+        raw = [float(x) for x in list(xyzrpy)[:6]]
+    except (TypeError, ValueError):
+        return {
+            "ok": False,
+            "error": "xyzrpy must be 6 finite floats",
+            "goal_xyzrpy": None,
+            "goal_xyzrpy_raw": None,
+            "applied": False,
+        }
+    if len(raw) < 6 or any(not math.isfinite(v) for v in raw):
+        return {
+            "ok": False,
+            "error": "xyzrpy must be 6 finite floats",
+            "goal_xyzrpy": None,
+            "goal_xyzrpy_raw": None,
+            "applied": False,
+        }
+    b = bounds if isinstance(bounds, dict) else default_tcp_clip()
+    clipped = list(raw)
+    applied = False
+    for i, (lo_k, hi_k) in enumerate(
+        (("x_min", "x_max"), ("y_min", "y_max"), ("z_min", "z_max"))
+    ):
+        lo = float(b.get(lo_k, TCP_CLIP_FREE))
+        hi = float(b.get(hi_k, TCP_CLIP_FREE))
+        v = clipped[i]
+        if not tcp_clip_bound_is_free(lo) and v < lo:
+            clipped[i] = lo
+            applied = True
+        if not tcp_clip_bound_is_free(hi) and clipped[i] > hi:
+            clipped[i] = hi
+            applied = True
+    return {
+        "ok": True,
+        "error": None,
+        "goal_xyzrpy": clipped,
+        "goal_xyzrpy_raw": raw,
+        "applied": applied,
+    }
+
+
 def joints_rad_to_xyzrpy(
     joints_rad: Sequence[float] | None,
     *,

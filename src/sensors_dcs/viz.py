@@ -206,6 +206,7 @@ class Pi05StepBody(BaseModel):
     prompt: str | None = None
     robot_state_format: str | None = None
     next_state_format: str | None = None
+    tcp_clip: dict[str, float] | None = None
 
 
 class Pi05RunBody(BaseModel):
@@ -1871,6 +1872,32 @@ PREVIEW_HTML = """<!DOCTYPE html>
       width: 7.5rem;
       flex: 0 0 auto;
     }
+    .inf-tcp-clip {
+      display: inline-flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.35rem 0.55rem;
+    }
+    .inf-tcp-clip label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.2rem;
+      margin: 0;
+      font-size: var(--inf-fs);
+      color: var(--muted);
+    }
+    .inf-tcp-clip input[type="number"] {
+      width: 4.25rem;
+      flex: 0 0 auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: var(--inf-fs);
+      height: var(--inf-ctrl-h);
+      padding: 0 0.3rem;
+    }
+    .inf-tcp-clip .arm-abs-unit {
+      color: var(--muted);
+      font-size: calc(var(--inf-fs) * 0.92);
+    }
     #infPi05Host { width: 7.5rem; flex: 0 0 auto; }
     #infPi05Port { width: 4.75rem; flex: 0 0 auto; }
     #infPi05Prompt { flex: 1 1 8rem; min-width: 6rem; }
@@ -2791,6 +2818,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <option value="joints">joints</option>
             <option value="delta_pose">delta_pose</option>
           </select>
+        </div>
+        <div class="inf-pi05-row" data-i18n-title="infer.tcp_clip_hint" title="单步/LOOP：next_state→绝对 pose 后对 xyz 裁剪；-1=该侧不限制；裁剪后再 IK，作为插值终点">
+          <span data-i18n="infer.tcp_clip">TCP 盒子</span>
+          <div class="inf-tcp-clip" id="infTcpClip">
+            <label><span>x<sub>min</sub></span><input type="number" id="infTcpXMin" step="0.001" value="-1" /></label>
+            <label><span>x<sub>max</sub></span><input type="number" id="infTcpXMax" step="0.001" value="-1" /></label>
+            <label><span>y<sub>min</sub></span><input type="number" id="infTcpYMin" step="0.001" value="-1" /></label>
+            <label><span>y<sub>max</sub></span><input type="number" id="infTcpYMax" step="0.001" value="-1" /></label>
+            <label><span>z<sub>min</sub></span><input type="number" id="infTcpZMin" step="0.001" value="-1" /></label>
+            <label><span>z<sub>max</sub></span><input type="number" id="infTcpZMax" step="0.001" value="-1" /></label>
+            <span class="arm-abs-unit" data-i18n="infer.tcp_clip_unit">m</span>
+          </div>
         </div>
       </section>
       <section class="inf-pi05-sec" aria-labelledby="infSecArm">
@@ -4154,6 +4193,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const infArmJoints = document.getElementById('infArmJoints');
     const infSendFmt = document.getElementById('infSendFmt');
     const infRecvFmt = document.getElementById('infRecvFmt');
+    const infTcpXMin = document.getElementById('infTcpXMin');
+    const infTcpXMax = document.getElementById('infTcpXMax');
+    const infTcpYMin = document.getElementById('infTcpYMin');
+    const infTcpYMax = document.getElementById('infTcpYMax');
+    const infTcpZMin = document.getElementById('infTcpZMin');
+    const infTcpZMax = document.getElementById('infTcpZMax');
+    const infTcpClipInputs = [
+      infTcpXMin, infTcpXMax, infTcpYMin, infTcpYMax, infTcpZMin, infTcpZMax,
+    ];
     let pi05LastRawText = '{}';
     const infArmSend = document.getElementById('infArmSend');
     const infArmTMin = document.getElementById('infArmTMin');
@@ -4251,6 +4299,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (infRecvFmt && (j.next_state_format === 'pose' || j.next_state_format === 'joints' || j.next_state_format === 'delta_pose')) {
           infRecvFmt.value = j.next_state_format;
         }
+        if (j.tcp_clip && typeof j.tcp_clip === 'object') {
+          applyInfTcpClipToInputs(j.tcp_clip);
+        }
       } catch (e) {}
     }
     function savePi05Form() {
@@ -4261,6 +4312,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           prompt: (infPi05Prompt && infPi05Prompt.value) || '',
           robot_state_format: getInfSendFmt(),
           next_state_format: getInfRecvFmt(),
+          tcp_clip: getInfTcpClip(),
         }));
       } catch (e) {}
     }
@@ -4273,10 +4325,53 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (v === 'joints' || v === 'delta_pose') return v;
       return 'pose';
     }
+    function readTcpClipBound(el) {
+      const v = Number(el && el.value);
+      return Number.isFinite(v) ? v : -1;
+    }
+    function getInfTcpClip() {
+      return {
+        x_min: readTcpClipBound(infTcpXMin),
+        x_max: readTcpClipBound(infTcpXMax),
+        y_min: readTcpClipBound(infTcpYMin),
+        y_max: readTcpClipBound(infTcpYMax),
+        z_min: readTcpClipBound(infTcpZMin),
+        z_max: readTcpClipBound(infTcpZMax),
+      };
+    }
+    function applyInfTcpClipToInputs(clip) {
+      if (!clip || typeof clip !== 'object') return;
+      const pairs = [
+        [infTcpXMin, 'x_min'], [infTcpXMax, 'x_max'],
+        [infTcpYMin, 'y_min'], [infTcpYMax, 'y_max'],
+        [infTcpZMin, 'z_min'], [infTcpZMax, 'z_max'],
+      ];
+      pairs.forEach(([el, k]) => {
+        if (!el || clip[k] == null) return;
+        const v = Number(clip[k]);
+        if (Number.isFinite(v)) el.value = String(v);
+      });
+    }
+    function syncInfTcpClipInputs() {
+      const c = getInfTcpClip();
+      const axes = [
+        ['x', c.x_min, c.x_max],
+        ['y', c.y_min, c.y_max],
+        ['z', c.z_min, c.z_max],
+      ];
+      for (let i = 0; i < axes.length; i++) {
+        const lo = axes[i][1];
+        const hi = axes[i][2];
+        if (lo !== -1 && hi !== -1 && lo > hi) return false;
+      }
+      applyInfTcpClipToInputs(c);
+      return true;
+    }
     function currentWireFormats() {
       return {
         robot_state_format: getInfSendFmt(),
         next_state_format: getInfRecvFmt(),
+        tcp_clip: getInfTcpClip(),
       };
     }
     function applyInfPoseGoalFromPayload(p) {
@@ -4292,9 +4387,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
         goal = p.next_state;
       }
       if (!goal) return;
+      const clipped = !!p.tcp_clip_applied;
       window.__pi05NextState = goal;
+      window.__pi05GoalClipped = clipped;
       if (typeof window.__setInfPoseGoal === 'function') {
-        window.__setInfPoseGoal(goal);
+        window.__setInfPoseGoal(goal, { clipped: clipped });
       }
     }
     function formatPi05Out(p) {
@@ -4312,6 +4409,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
         robot_state: p.robot_state,
         next_state: p.next_state,
         goal_xyzrpy: p.goal_xyzrpy,
+        goal_xyzrpy_raw: p.goal_xyzrpy_raw,
+        tcp_clip_applied: p.tcp_clip_applied,
+        tcp_clip: p.tcp_clip,
         next_joints_rad: p.next_joints_rad,
         ik_ok: p.ik_ok,
         ik_error: p.ik_error,
@@ -4449,7 +4549,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       let xyz = null;
       if (Array.isArray(r.goal_xyzrpy) && r.goal_xyzrpy.length >= 6) {
         xyz = r.goal_xyzrpy;
-      } else if (r.next_state_format === 'joints' && Array.isArray(r.next_state) && r.next_state.length >= 6) {
+      } else if (r.next_state_format === 'joints' && Array.isArray(r.next_state) && r.next_state.length >= 6
+        && !r.tcp_clip_applied) {
         const ok = fillInfArmJointsFromStep({
           next_joints_rad: r.next_state.slice(0, 6),
           ik_ok: true,
@@ -5038,13 +5139,22 @@ PREVIEW_HTML = """<!DOCTYPE html>
       // Pick only via screen-space test on the visible amber dot (see tcpPointerOver).
       tcpMarker.raycast = function() {};
       scene.add(tcpMarker);
-      // Current server goal — small red/pink (latest)
+      // Current server goal — small red/pink (latest); blinks when TCP-box clipped
       const goalMarker = new THREE.Mesh(
         new THREE.SphereGeometry(0.006, 12, 12),
-        new THREE.MeshBasicMaterial({ color: 0xff5c8a }),
+        new THREE.MeshBasicMaterial({
+          color: 0xff5c8a,
+          transparent: true,
+          opacity: 1,
+          depthWrite: false,
+        }),
       );
       goalMarker.visible = false;
       scene.add(goalMarker);
+      let goalClipped = false;
+      const GOAL_CLIP_BLINK_PERIOD_S = 2.0; // slow pulse when clipped
+      const GOAL_CLIP_OPACITY_MIN = 0.22;
+      const GOAL_CLIP_OPACITY_MAX = 1.0;
       // Configured Home TCP — small blue (synced with YAML / 设为 home)
       const homeMarker = new THREE.Mesh(
         new THREE.SphereGeometry(0.0055, 12, 12),
@@ -5238,18 +5348,25 @@ PREVIEW_HTML = """<!DOCTYPE html>
         refreshHud(xyz, lastGoal);
         return true;
       }
-      function setGoalPose(nextState) {
+      function setGoalPose(nextState, opts) {
+        const clipped = !!(opts && (opts.clipped === true || opts.tcp_clip_applied === true));
         const xyz = parseXyz(nextState);
         if (!xyz) {
           goalMarker.visible = false;
+          goalClipped = false;
+          if (goalMarker.material) goalMarker.material.opacity = 1;
           lastGoal = null;
           lastGoalKey = '';
+          window.__pi05GoalClipped = false;
           refreshHud(parseXyz(window.__armReadCartesian), null);
           return false;
         }
         const p = robotToThree(xyz.x, xyz.y, xyz.z);
         goalMarker.position.set(p.x, p.y, p.z);
         goalMarker.visible = true;
+        goalClipped = clipped;
+        window.__pi05GoalClipped = clipped;
+        if (!clipped && goalMarker.material) goalMarker.material.opacity = 1;
         lastGoal = xyz;
         window.__pi05GoalCartesian = [xyz.x, xyz.y, xyz.z];
         const key = [xyz.x, xyz.y, xyz.z].map((v) => v.toFixed(5)).join(',');
@@ -5702,6 +5819,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
         }
         const q = jointsForEc616Viz();
         if (q) setEc616JointsFromMachineRad(q);
+        if (goalMarker.visible && goalMarker.material) {
+          if (goalClipped) {
+            const phase = (now / 1000) * (Math.PI * 2 / GOAL_CLIP_BLINK_PERIOD_S);
+            const u = 0.5 + 0.5 * Math.sin(phase);
+            goalMarker.material.opacity =
+              GOAL_CLIP_OPACITY_MIN + (GOAL_CLIP_OPACITY_MAX - GOAL_CLIP_OPACITY_MIN) * u;
+          } else {
+            goalMarker.material.opacity = 1;
+          }
+        }
         renderer.render(scene, camera);
         requestAnimationFrame(tick);
       }
@@ -5756,7 +5883,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       else if (window.__armHome && window.__armHome.home_cartesian_xyzrpy) {
         setTcpPose(window.__armHome.home_cartesian_xyzrpy);
       } else refreshHud(null, null);
-      if (window.__pi05NextState) setGoalPose(window.__pi05NextState);
+      if (window.__pi05NextState) {
+        setGoalPose(window.__pi05NextState, { clipped: !!window.__pi05GoalClipped });
+      }
       if (window.__armHome && window.__armHome.home_cartesian_xyzrpy) {
         setHomePose(window.__armHome.home_cartesian_xyzrpy);
       }
@@ -5782,6 +5911,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
       // Optional override (orchestration infer modules) wins over control-page box.
       const hasOverride = !!(stepOpts && Object.prototype.hasOwnProperty.call(stepOpts, 'prompt'));
       const prompt = hasOverride ? String(stepOpts.prompt ?? '') : currentPi05Prompt();
+      if (!syncInfTcpClipInputs()) {
+        const err = t('infer.tcp_clip_bad');
+        if (infPi05Hint) infPi05Hint.textContent = err;
+        return { ok: false, error: err, ik_ok: false, ik_error: err };
+      }
       // Always push a prompt with the step so serve never sees a stale "".
       const r = await postPi05('/api/pi05/step', Object.assign({
         prompt: prompt,
@@ -6541,6 +6675,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
         } catch (e) {}
       });
     }
+    try {
+      const rawClip = localStorage.getItem('dcs.inf.tcpClip');
+      if (rawClip) applyInfTcpClipToInputs(JSON.parse(rawClip));
+    } catch (e) {}
+    infTcpClipInputs.forEach((el) => {
+      if (!el) return;
+      el.addEventListener('change', () => {
+        syncInfTcpClipInputs();
+        savePi05Form();
+        try {
+          localStorage.setItem('dcs.inf.tcpClip', JSON.stringify(getInfTcpClip()));
+        } catch (e) {}
+      });
+    });
     if (infLoopRounds) {
       try {
         const lsR = localStorage.getItem('dcs.inf.loopRounds');
@@ -11939,6 +12087,7 @@ def create_viz_app(
             prompt=body.prompt,
             robot_state_format=body.robot_state_format,
             next_state_format=body.next_state_format,
+            tcp_clip=body.tcp_clip,
         )
 
     @app.get("/api/pi05/delta-pose-offset")

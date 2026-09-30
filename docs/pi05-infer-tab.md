@@ -305,3 +305,4 @@ Disconnect → idle
 | FK pose | `sensors-dcs/src/sensors_dcs/arm_pose.py` |
 | Agent 工厂 | `sensors-dcs/src/sensors_dcs/agents/__init__.py`、`config.py` |
 | 摇操对照（后续控臂勿混进首版） | `docs/gello-arm-teleop.md` |
+| TCP 工作空间盒子 clip（单步/LOOP） | `docs/tcp-workspace-clip.md` |

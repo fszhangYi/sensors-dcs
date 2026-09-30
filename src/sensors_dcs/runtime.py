@@ -420,12 +420,15 @@ class Orchestrator:
         prompt: str | None = None,
         robot_state_format: str | None = None,
         next_state_format: str | None = None,
+        tcp_clip: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         from sensors_dcs.arm_pose import (
             DEFAULT_RECV_STATE_FORMAT,
             DEFAULT_SEND_STATE_FORMAT,
+            default_tcp_clip,
             normalize_recv_state_format,
             normalize_send_state_format,
+            normalize_tcp_clip,
         )
 
         agent = self._pi05_agent(agent_id)
@@ -438,6 +441,7 @@ class Orchestrator:
             recv_fmt = normalize_recv_state_format(
                 next_state_format or DEFAULT_RECV_STATE_FORMAT
             )
+            clip_bounds = normalize_tcp_clip(tcp_clip)
         except ValueError as e:
             return {
                 "ok": False,
@@ -449,6 +453,9 @@ class Orchestrator:
                 "ik_ok": False,
                 "ik_error": str(e),
                 "goal_xyzrpy": None,
+                "goal_xyzrpy_raw": None,
+                "tcp_clip": default_tcp_clip() if tcp_clip is None else tcp_clip,
+                "tcp_clip_applied": False,
                 "next_grip": None,
                 "grip_ok": False,
                 "grip_error": str(e),
@@ -463,6 +470,7 @@ class Orchestrator:
         out = agent.step(robot_state_format=send_fmt)
         out["robot_state_format"] = send_fmt
         out["next_state_format"] = recv_fmt
+        out["tcp_clip"] = clip_bounds
         if out.get("ok"):
             ns = out.get("next_state")
             lat = out.get("latency_ms")
@@ -471,11 +479,13 @@ class Orchestrator:
                 f"next_state={ns}  term={out.get('term_flag')} reject={out.get('reject_flag')}",
                 flush=True,
             )
-            decoded = self._decode_next_state(ns, recv_fmt)
+            decoded = self._decode_next_state(ns, recv_fmt, tcp_clip=clip_bounds)
             out["next_joints_rad"] = decoded.get("joints_rad")
             out["ik_ok"] = bool(decoded.get("ok"))
             out["ik_error"] = decoded.get("error")
             out["goal_xyzrpy"] = decoded.get("goal_xyzrpy")
+            out["goal_xyzrpy_raw"] = decoded.get("goal_xyzrpy_raw")
+            out["tcp_clip_applied"] = bool(decoded.get("tcp_clip_applied"))
             agent.note_wire_meta(
                 goal_xyzrpy=decoded.get("goal_xyzrpy"),
                 robot_state_format=send_fmt,
@@ -519,6 +529,8 @@ class Orchestrator:
             out.setdefault("ik_ok", False)
             out.setdefault("ik_error", out.get("error"))
             out.setdefault("goal_xyzrpy", None)
+            out.setdefault("goal_xyzrpy_raw", None)
+            out.setdefault("tcp_clip_applied", False)
             out.setdefault("next_grip", None)
             out.setdefault("grip_ok", False)
             out.setdefault("grip_deferred", False)
@@ -549,14 +561,22 @@ class Orchestrator:
             return None
         return out
 
-    def _decode_next_state(self, next_state: Any, recv_fmt: str) -> dict[str, Any]:
+    def _decode_next_state(
+        self,
+        next_state: Any,
+        recv_fmt: str,
+        *,
+        tcp_clip: dict[str, float] | None = None,
+    ) -> dict[str, Any]:
         """Decode serve ``next_state`` → joints + absolute TCP goal for HUD."""
         from sensors_dcs.arm_pose import (
             compose_delta_xyzrpy,
+            default_tcp_clip,
             joints_rad_to_xyzrpy,
             normalize_recv_state_format,
         )
 
+        clip_bounds = tcp_clip if isinstance(tcp_clip, dict) else default_tcp_clip()
         fmt = normalize_recv_state_format(recv_fmt)
         if not isinstance(next_state, (list, tuple)) or len(next_state) < 6:
             return {
@@ -564,6 +584,8 @@ class Orchestrator:
                 "error": "next_state missing 6-d core",
                 "joints_rad": None,
                 "goal_xyzrpy": None,
+                "goal_xyzrpy_raw": None,
+                "tcp_clip_applied": False,
             }
 
         if fmt == "joints":
@@ -575,6 +597,8 @@ class Orchestrator:
                     "error": "next_state joints not numeric",
                     "joints_rad": None,
                     "goal_xyzrpy": None,
+                    "goal_xyzrpy_raw": None,
+                    "tcp_clip_applied": False,
                 }
             if any(x != x or abs(x) == float("inf") for x in joints):
                 return {
@@ -582,6 +606,8 @@ class Orchestrator:
                     "error": "next_state joints non-finite",
                     "joints_rad": None,
                     "goal_xyzrpy": None,
+                    "goal_xyzrpy_raw": None,
+                    "tcp_clip_applied": False,
                 }
             goal = joints_rad_to_xyzrpy(joints)
             decoded = {
@@ -590,7 +616,7 @@ class Orchestrator:
                 "joints_rad": joints,
                 "goal_xyzrpy": goal,
             }
-            return self._finish_decoded_goal(decoded, recv_fmt=fmt)
+            return self._finish_decoded_goal(decoded, recv_fmt=fmt, tcp_clip=clip_bounds)
 
         if fmt == "delta_pose":
             cur = self._current_tcp_xyzrpy()
@@ -600,6 +626,8 @@ class Orchestrator:
                     "error": "no live TCP pose to compose delta_pose",
                     "joints_rad": None,
                     "goal_xyzrpy": None,
+                    "goal_xyzrpy_raw": None,
+                    "tcp_clip_applied": False,
                 }
             try:
                 abs_pose = compose_delta_xyzrpy(cur, list(next_state)[:6])
@@ -609,8 +637,9 @@ class Orchestrator:
                     "error": f"delta_pose compose failed: {e}",
                     "joints_rad": None,
                     "goal_xyzrpy": None,
+                    "goal_xyzrpy_raw": None,
+                    "tcp_clip_applied": False,
                 }
-            # IK once in _apply, after optional reinforce offset (zeros included).
             return self._finish_decoded_goal(
                 {
                     "ok": True,
@@ -619,6 +648,7 @@ class Orchestrator:
                     "goal_xyzrpy": [float(x) for x in abs_pose[:6]],
                 },
                 recv_fmt=fmt,
+                tcp_clip=clip_bounds,
             )
 
         # pose (absolute TCP): no IK until offset is composed (identity if zero).
@@ -630,6 +660,8 @@ class Orchestrator:
                 "error": "next_state pose not numeric",
                 "joints_rad": None,
                 "goal_xyzrpy": None,
+                "goal_xyzrpy_raw": None,
+                "tcp_clip_applied": False,
             }
         if any(x != x or abs(x) == float("inf") for x in goal):
             return {
@@ -637,6 +669,8 @@ class Orchestrator:
                 "error": "next_state pose non-finite",
                 "joints_rad": None,
                 "goal_xyzrpy": None,
+                "goal_xyzrpy_raw": None,
+                "tcp_clip_applied": False,
             }
         return self._finish_decoded_goal(
             {
@@ -646,6 +680,7 @@ class Orchestrator:
                 "goal_xyzrpy": goal,
             },
             recv_fmt=fmt,
+            tcp_clip=clip_bounds,
         )
 
     def _finish_decoded_goal(
@@ -653,14 +688,43 @@ class Orchestrator:
         decoded: dict[str, Any],
         *,
         recv_fmt: str,
+        tcp_clip: dict[str, float] | None = None,
     ) -> dict[str, Any]:
-        """IK a decoded absolute TCP goal. Gello bias is not applied here."""
-        from sensors_dcs.arm_pose import joints_rad_to_xyzrpy
+        """Clip absolute TCP xyz (optional), then IK. Gello bias is not applied here."""
+        from sensors_dcs.arm_pose import (
+            clip_tcp_xyzrpy,
+            default_tcp_clip,
+            joints_rad_to_xyzrpy,
+            tcp_clip_is_active,
+        )
 
         if not decoded.get("ok"):
+            decoded.setdefault("goal_xyzrpy_raw", None)
+            decoded.setdefault("tcp_clip_applied", False)
             return decoded
-        if recv_fmt == "joints" and decoded.get("joints_rad") is not None:
-            return decoded
+
+        bounds = tcp_clip if isinstance(tcp_clip, dict) else default_tcp_clip()
+        active = tcp_clip_is_active(bounds)
+
+        # joints passthrough only when workspace clip is fully off.
+        if (
+            recv_fmt == "joints"
+            and decoded.get("joints_rad") is not None
+            and not active
+        ):
+            goal = decoded.get("goal_xyzrpy")
+            if goal is None:
+                joints = decoded.get("joints_rad")
+                if isinstance(joints, (list, tuple)) and len(joints) >= 6:
+                    goal = joints_rad_to_xyzrpy(list(joints)[:6])
+                    decoded["goal_xyzrpy"] = goal
+            raw = [float(x) for x in list(goal)[:6]] if goal is not None else None
+            return {
+                **decoded,
+                "goal_xyzrpy_raw": raw,
+                "tcp_clip_applied": False,
+            }
+
         goal = decoded.get("goal_xyzrpy")
         if goal is None and recv_fmt == "joints":
             joints = decoded.get("joints_rad")
@@ -672,10 +736,29 @@ class Orchestrator:
                 "ok": False,
                 "error": decoded.get("error") or "cannot IK without abs TCP goal",
                 "joints_rad": None,
+                "goal_xyzrpy_raw": None,
+                "tcp_clip_applied": False,
             }
-        ik = self._xyzrpy_to_joints([float(x) for x in list(goal)[:6]])
-        if ik.get("ok"):
-            ik["goal_xyzrpy"] = [float(x) for x in list(goal)[:6]]
+
+        clipped = clip_tcp_xyzrpy(goal, bounds)
+        if not clipped.get("ok"):
+            return {
+                **decoded,
+                "ok": False,
+                "error": clipped.get("error") or "tcp clip failed",
+                "joints_rad": None,
+                "goal_xyzrpy": None,
+                "goal_xyzrpy_raw": clipped.get("goal_xyzrpy_raw"),
+                "tcp_clip_applied": False,
+            }
+        goal_clipped = [float(x) for x in list(clipped["goal_xyzrpy"])[:6]]
+        raw = [float(x) for x in list(clipped["goal_xyzrpy_raw"])[:6]]
+        applied = bool(clipped.get("applied"))
+
+        ik = self._xyzrpy_to_joints(goal_clipped)
+        ik["goal_xyzrpy"] = goal_clipped
+        ik["goal_xyzrpy_raw"] = raw
+        ik["tcp_clip_applied"] = applied
         return ik
 
     def joints_plus_gello_bias(self, joints6: list[float]) -> list[float]:

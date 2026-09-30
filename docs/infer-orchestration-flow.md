@@ -48,7 +48,7 @@
 | abs / jerk | `clampArmAbsTiming`、`sendInfArmJointsOnce`、`/api/arm/command` | 模块参数注入 body |
 | IK | `/api/arm/ik` 或前端 `Ec616Ik` | pose→joints；种子用当前 Read |
 | 到位等待 | `waitInfArmArrive` | 需抽成与 LOOP gen **解耦** 的通用 wait（见 §5.3） |
-| LOOP 步进 | `runInfPi05StepOnce`、`fillInfArmJointsFromStep`、chunk-skip | infer 模式调用同一套 |
+| LOOP 步进 | `runInfPi05StepOnce`、`fillInfArmJointsFromStep`、chunk-skip | infer 模式调用同一套；TCP 工作空间盒子随 step 传入（见 [tcp-workspace-clip.md](tcp-workspace-clip.md)） |
 | LOOP 暂停 | `pi05LoopPaused` / `waitWhileLoopPaused` | infer **终止条件触发**（goal 假装为 loop 末点）后进入等价暂停；编排 run 另有 `flowPaused` 或复用同一 flag（见开放问题 Q1） |
 | Gripper | `/api/gripper/command` `position_norm` | pose 第 7 维 = gripper 开度 |
 | Pose 格式 | `[x,y,z,rx,ry,rz]` + `grip∈[0,1]` | 与 pi05 `robot_state[7]` / Read Cartesian 一致 |

@@ -51,6 +51,63 @@ def test_decode_joints_passthrough(monkeypatch) -> None:
     )
     assert out["ok"] is True
     assert out["joints_rad"] == [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+    assert out.get("tcp_clip_applied") is False
+
+
+def test_decode_pose_clips_xyz(monkeypatch) -> None:
+    from sensors_dcs.arm_pose import normalize_tcp_clip
+
+    rt = Orchestrator.__new__(Orchestrator)
+    rt.agents = {}
+    captured = {}
+
+    def _ik(xyz):
+        captured["xyz"] = list(xyz)
+        return {"ok": True, "joints_rad": [0.0] * 6, "error": None}
+
+    monkeypatch.setattr(rt, "_xyzrpy_to_joints", _ik)
+    bounds = normalize_tcp_clip({"x_max": 0.3, "z_min": 0.1})
+    out = Orchestrator._decode_next_state(
+        rt,
+        [1.0, 0.0, 0.0, 0.1, 0.2, 0.3, 0.5],
+        "pose",
+        tcp_clip=bounds,
+    )
+    assert out["ok"] is True
+    assert out["tcp_clip_applied"] is True
+    assert out["goal_xyzrpy_raw"][:3] == pytest.approx([1.0, 0.0, 0.0])
+    assert out["goal_xyzrpy"][:3] == pytest.approx([0.3, 0.0, 0.1])
+    assert out["goal_xyzrpy"][3:] == pytest.approx([0.1, 0.2, 0.3])
+    assert captured["xyz"][:3] == pytest.approx([0.3, 0.0, 0.1])
+
+
+def test_decode_joints_with_clip_re_iks(monkeypatch) -> None:
+    from sensors_dcs.arm_pose import normalize_tcp_clip
+
+    rt = Orchestrator.__new__(Orchestrator)
+    rt.agents = {}
+    monkeypatch.setattr(
+        "sensors_dcs.arm_pose.joints_rad_to_xyzrpy",
+        lambda joints, **kw: [0.9, 0.0, 0.5, 0.0, 0.0, 0.0],
+    )
+    captured = {}
+
+    def _ik(xyz):
+        captured["xyz"] = list(xyz)
+        return {"ok": True, "joints_rad": [2.0] * 6, "error": None}
+
+    monkeypatch.setattr(rt, "_xyzrpy_to_joints", _ik)
+    bounds = normalize_tcp_clip({"x_max": 0.4})
+    out = Orchestrator._decode_next_state(
+        rt,
+        [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
+        "joints",
+        tcp_clip=bounds,
+    )
+    assert out["ok"] is True
+    assert out["joints_rad"] == [2.0] * 6
+    assert out["tcp_clip_applied"] is True
+    assert captured["xyz"][0] == pytest.approx(0.4)
 
 
 def test_decode_delta_composes(monkeypatch) -> None:

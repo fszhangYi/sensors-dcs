@@ -67,11 +67,13 @@ def test_pi05_step_defers_gripper(monkeypatch) -> None:
     monkeypatch.setattr(
         rt,
         "_decode_next_state",
-        lambda ns, fmt: {
+        lambda ns, fmt, **kwargs: {
             "ok": True,
             "joints_rad": [0.0] * 6,
             "error": None,
             "goal_xyzrpy": list(ns)[:6],
+            "goal_xyzrpy_raw": list(ns)[:6],
+            "tcp_clip_applied": False,
         },
     )
 
