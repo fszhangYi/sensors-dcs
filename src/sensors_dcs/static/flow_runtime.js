@@ -361,8 +361,14 @@
           setMod(mod.id, 'failed', err);
           return { ok: false, error: err };
         }
-        if (last.term_flag || last.reject_flag) {
-          const err = last.reject_flag ? 'reject_flag' : 'term_flag';
+        const termTh = (typeof window.__getInfTermThreshold === 'function')
+          ? Number(window.__getInfTermThreshold())
+          : 0.5;
+        const termVal = (last.term_flag != null) ? Number(last.term_flag) : 0;
+        const rejVal = (last.reject_flag != null) ? Number(last.reject_flag) : 0;
+        if ((Number.isFinite(termVal) && termVal > (Number.isFinite(termTh) ? termTh : 0.5))
+            || (Number.isFinite(rejVal) && rejVal !== 0)) {
+          const err = (Number.isFinite(rejVal) && rejVal !== 0) ? 'reject_flag' : 'term_flag';
           setMod(mod.id, 'failed', err);
           return { ok: false, error: err };
         }

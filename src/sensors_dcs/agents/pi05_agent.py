@@ -49,7 +49,7 @@ def pack_serve_request(
 
 
 def unpack_serve_response(sock: socket.socket) -> dict[str, Any] | None:
-    """Parse server→client reply. term_flag is float32 (matches serve.py send)."""
+    """Parse server→client reply. term_flag is float32 (``>f`` / ``>1f``); reject is uint32."""
     raw = _recv_exact(sock, 28)
     if raw is None:
         return None
@@ -109,6 +109,7 @@ class Pi05ClientAgent(BaseAgent):
         host: str = "127.0.0.1",
         port: int = 5000,
         prompt: str = "",
+        term_threshold: float = 0.5,
         camera_map: dict[str, str] | None = None,
         arm_agent_id: str | None = None,
         gripper_agent_id: str | None = None,
@@ -123,6 +124,7 @@ class Pi05ClientAgent(BaseAgent):
         self._host = str(host or "127.0.0.1")
         self._port = int(port)
         self._prompt = str(prompt or "")
+        self._term_threshold = float(term_threshold)
         self._camera_map = dict(
             camera_map
             or {
@@ -161,6 +163,7 @@ class Pi05ClientAgent(BaseAgent):
                 "host": self._host,
                 "port": self._port,
                 "prompt": self._prompt,
+                "term_threshold": self._term_threshold,
                 "step": self._step,
                 "latency_ms": self._last_latency_ms,
                 "robot_state": list(self._last_robot_state) if self._last_robot_state else None,

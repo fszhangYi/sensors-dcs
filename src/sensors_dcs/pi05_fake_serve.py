@@ -11,7 +11,7 @@ Client → server (per step):
 
 Server → client:
   28B next_state = 7×float32
-  4B  term_flag  = float32
+  4B  term_flag  = float32  (``>f`` / ``>1f``; not ``>I``)
   4B  reject_flag = uint32
   4B  text_len + UTF-8 status text
 

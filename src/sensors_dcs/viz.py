@@ -2771,6 +2771,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <span class="inf-flag-lab" data-i18n="infer.flag_reject">reject</span>
             <span class="inf-flag-val" id="infFlagRejectVal" data-i18n="infer.flag_idle">—</span>
           </span>
+          <label class="inf-loop-rounds" for="infTermThreshold"
+            data-i18n-title="infer.term_threshold_tip"
+            title="term_flag &gt; 阈值则视为终止（YAML term_threshold，缺省 0.5；可在此改，写入本机）">
+            <span data-i18n="infer.term_threshold">term 阈值</span>
+            <input type="number" id="infTermThreshold" min="0" max="1" step="0.05" value="0.5" />
+          </label>
         </div>
         <div class="inf-pi05-row">
           <label for="infPi05Host" data-i18n="infer.host">Host</label>
@@ -4199,6 +4205,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const infFlagRejectDot = document.getElementById('infFlagRejectDot');
     const infFlagRejectVal = document.getElementById('infFlagRejectVal');
     const infFlagReject = document.getElementById('infFlagReject');
+    const infTermThreshold = document.getElementById('infTermThreshold');
     const infPi05RawBtn = document.getElementById('infPi05RawBtn');
     const infPi05RawModal = document.getElementById('infPi05RawModal');
     const infPi05RawBody = document.getElementById('infPi05RawBody');
@@ -4216,6 +4223,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       infTcpXMin, infTcpXMax, infTcpYMin, infTcpYMax, infTcpZMin, infTcpZMax,
     ];
     let pi05LastRawText = '{}';
+    let pi05LastFlagPayload = null;
     const infArmSend = document.getElementById('infArmSend');
     const infArmTMin = document.getElementById('infArmTMin');
     const infArmTMax = document.getElementById('infArmTMax');
@@ -4315,6 +4323,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (j.tcp_clip && typeof j.tcp_clip === 'object') {
           applyInfTcpClipToInputs(j.tcp_clip);
         }
+        if (j.term_threshold != null && infTermThreshold) {
+          const th = Number(j.term_threshold);
+          if (Number.isFinite(th)) {
+            infTermThreshold.value = String(th);
+            infTermThreshold.dataset.dirty = '1';
+          }
+        }
       } catch (e) {}
     }
     function savePi05Form() {
@@ -4326,9 +4341,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
           robot_state_format: getInfSendFmt(),
           next_state_format: getInfRecvFmt(),
           tcp_clip: getInfTcpClip(),
+          term_threshold: getInfTermThreshold(),
         }));
       } catch (e) {}
     }
+    function getInfTermThreshold() {
+      const v = Number(infTermThreshold && infTermThreshold.value);
+      return Number.isFinite(v) ? v : 0.5;
+    }
+    window.__getInfTermThreshold = getInfTermThreshold;
     function getInfSendFmt() {
       const v = (infSendFmt && infSendFmt.value) || 'pose';
       return (v === 'joints') ? 'joints' : 'pose';
@@ -4452,20 +4473,28 @@ PREVIEW_HTML = """<!DOCTYPE html>
       el.classList.add(kind || 'st-idle');
     }
     function updatePi05Flags(p) {
-      const term = (p && p.term_flag != null) ? Number(p.term_flag) : null;
-      const rej = (p && p.reject_flag != null) ? Number(p.reject_flag) : null;
+      if (p && (p.term_flag != null || p.reject_flag != null)) {
+        pi05LastFlagPayload = {
+          term_flag: p.term_flag,
+          reject_flag: p.reject_flag,
+        };
+      }
+      const src = p || pi05LastFlagPayload || {};
+      const term = (src.term_flag != null) ? Number(src.term_flag) : null;
+      const rej = (src.reject_flag != null) ? Number(src.reject_flag) : null;
+      const termTh = getInfTermThreshold();
       if (term == null || !Number.isFinite(term)) {
         setInfDot(infFlagTermDot, 'st-idle');
         if (infFlagTermVal) infFlagTermVal.textContent = t('infer.flag_idle');
         if (infFlagTerm) infFlagTerm.title = 'term_flag';
-      } else if (term > 0.5) {
+      } else if (term > termTh) {
         setInfDot(infFlagTermDot, 'st-warn');
         if (infFlagTermVal) infFlagTermVal.textContent = t('infer.flag_term_on');
-        if (infFlagTerm) infFlagTerm.title = 'term_flag=' + term;
+        if (infFlagTerm) infFlagTerm.title = 'term_flag=' + term + ' (th=' + termTh + ')';
       } else {
         setInfDot(infFlagTermDot, 'st-ok');
         if (infFlagTermVal) infFlagTermVal.textContent = t('infer.flag_term_off');
-        if (infFlagTerm) infFlagTerm.title = 'term_flag=' + term;
+        if (infFlagTerm) infFlagTerm.title = 'term_flag=' + term + ' (th=' + termTh + ')';
       }
       if (rej == null || !Number.isFinite(rej)) {
         setInfDot(infFlagRejectDot, 'st-idle');
@@ -4789,6 +4818,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
       ) {
         infPi05Prompt.value = p.prompt;
       }
+      if (
+        p && p.term_threshold != null
+        && infTermThreshold
+        && document.activeElement !== infTermThreshold
+        && !infTermThreshold.dataset.dirty
+      ) {
+        const th = Number(p.term_threshold);
+        if (Number.isFinite(th)) infTermThreshold.value = String(th);
+      }
       updatePi05Flags(p);
       try {
         applyInfPoseGoalFromPayload(p);
@@ -4879,6 +4917,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
     if (infPi05Port) {
       infPi05Port.addEventListener('input', markPi05EndpointDirty);
       infPi05Port.addEventListener('change', markPi05EndpointDirty);
+    }
+    if (infTermThreshold) {
+      const markTermThDirty = () => {
+        infTermThreshold.dataset.dirty = '1';
+        const v = Number(infTermThreshold.value);
+        if (!Number.isFinite(v)) infTermThreshold.value = '0.5';
+        savePi05Form();
+        updatePi05Flags(pi05LastFlagPayload);
+      };
+      infTermThreshold.addEventListener('input', markTermThDirty);
+      infTermThreshold.addEventListener('change', markTermThDirty);
     }
     if (infPi05Connect) {
       infPi05Connect.addEventListener('click', async () => {
@@ -6468,7 +6517,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
               }
               const termEarly = (stepRes.term_flag != null) ? Number(stepRes.term_flag) : 0;
               const rejEarly = (stepRes.reject_flag != null) ? Number(stepRes.reject_flag) : 0;
-              if (Number.isFinite(termEarly) && termEarly > 0.5) {
+              const termTh = getInfTermThreshold();
+              if (Number.isFinite(termEarly) && termEarly > termTh) {
                 return { ok: true, reason: 'term', steps: n };
               }
               if (Number.isFinite(rejEarly) && rejEarly !== 0) {

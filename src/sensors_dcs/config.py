@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any, Literal
 
@@ -28,6 +29,8 @@ class AgentConfig(BaseModel):
     host: str | None = None
     port: int | None = None
     prompt: str | None = None
+    # Infer UI/LOOP: treat term_flag as terminate when term_flag > term_threshold
+    term_threshold: float = 0.5
     camera_map: dict[str, str] | None = None
     arm_agent_id: str | None = None
     gripper_agent_id: str | None = None
@@ -40,6 +43,13 @@ class AgentConfig(BaseModel):
         if v <= 0:
             raise ValueError("hz must be > 0")
         return v
+
+    @field_validator("term_threshold")
+    @classmethod
+    def _term_threshold_finite(cls, v: float) -> float:
+        if not math.isfinite(float(v)):
+            raise ValueError("term_threshold must be finite")
+        return float(v)
 
     @model_validator(mode="after")
     def _sensor_id_unless_pi05(self) -> AgentConfig:

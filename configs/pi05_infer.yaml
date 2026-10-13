@@ -51,6 +51,8 @@ agents:
     host: "127.0.0.1"
     port: 5000
     prompt: ""
+    # Infer UI/LOOP: terminate when term_flag > term_threshold (UI can override; localStorage)
+    term_threshold: 0.5
     camera_map:
       top: cam-middle
       chest: cam-left

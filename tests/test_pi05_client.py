@@ -52,7 +52,7 @@ def test_pack_unpack_serve_roundtrip() -> None:
             assert abs(rs[0] - 0.1) < 1e-5
             next_state = [1.0, 2.0, 3.0, 0.1, 0.2, 0.3, 0.9]
             conn.sendall(struct.pack(">7f", *next_state))
-            conn.sendall(struct.pack(">f", 0.0))
+            conn.sendall(struct.pack(">f", 1.0))  # term_flag float32 (client expects >f)
             conn.sendall(struct.pack(">I", 0))
             msg = b"ok"
             conn.sendall(struct.pack(">I", len(msg)) + msg)
@@ -70,6 +70,7 @@ def test_pack_unpack_serve_roundtrip() -> None:
     assert resp is not None
     assert abs(resp["next_state"][0] - 1.0) < 1e-5
     assert resp["server_text"] == "ok"
+    assert abs(resp["term_flag"] - 1.0) < 1e-5
     assert resp["reject_flag"] == 0
 
 
@@ -116,6 +117,45 @@ def test_pi05_agent_config_optional_sensor(tmp_path: Path) -> None:
     assert pi.host == "10.0.0.1"
     assert pi.port == 5001
     assert pi.sensor_id is None
+    assert pi.term_threshold == 0.5
+
+
+def test_pi05_term_threshold_from_yaml(tmp_path: Path) -> None:
+    from sensors_dcs.agents import build_agent
+    from sensors_dcs.config import load_dcs_config
+
+    sensors = tmp_path / "sensors.yaml"
+    sensors.write_text(
+        Path("/root/autodl-tmp/sensors-dcs/configs/sensors_camera.yaml").read_text(
+            encoding="utf-8"
+        ),
+        encoding="utf-8",
+    )
+    dcs = tmp_path / "dcs.yaml"
+    data = {
+        "version": 1,
+        "site": "pi05-th",
+        "sensors_config": str(sensors),
+        "dry_run": True,
+        "agents": [
+            {
+                "id": "pi05",
+                "type": "pi05",
+                "hz": 2,
+                "host": "127.0.0.1",
+                "port": 5000,
+                "term_threshold": 0.25,
+            },
+        ],
+        "record": {"save_dir": str(tmp_path / "data")},
+    }
+    dcs.write_text(yaml.dump(data), encoding="utf-8")
+    cfg = load_dcs_config(dcs)
+    pi = next(a for a in cfg.agents if a.type == "pi05")
+    assert pi.term_threshold == 0.25
+    agent = build_agent(pi)
+    st = agent.status_payload()
+    assert st["term_threshold"] == 0.25
 
 
 def test_pi05_api_unconfigured(monkeypatch, tmp_path: Path) -> None:

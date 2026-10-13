@@ -35,6 +35,7 @@ def build_agent(
             host=cfg.host or "127.0.0.1",
             port=int(cfg.port) if cfg.port is not None else 5000,
             prompt=cfg.prompt or "",
+            term_threshold=float(cfg.term_threshold),
             camera_map=dict(cfg.camera_map or _DEFAULT_CAMERA_MAP),
             arm_agent_id=cfg.arm_agent_id,
             gripper_agent_id=cfg.gripper_agent_id,
