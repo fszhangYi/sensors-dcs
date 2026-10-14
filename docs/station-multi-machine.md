@@ -119,14 +119,29 @@ Stop 同理：STOP → ACK → 各自 finalize
 - 时钟：优先 NTP；对齐仍可用现有 timeline/`--master` agent 思路扩展站维度。
 - 二期可选：录后异步 sync 整包或只推元数据/缩略图（非本期）。
 
+### 8.1 多站对齐操作约定（P3 说明）
+
+1. 各站 episode 的 `manifest.json` 含同一 `session_id`（主站 barrier 分配）及本站 `station_id` / `station_role`。
+2. 收集方式：共享盘 / `rsync` / 移动介质，建议目录布局：
+   ```text
+   sessions/<session_id>/
+     <station_id>/episode_XXXXX/
+   ```
+3. 单站内对齐：继续用现有 `export-timeline` / `filter-timeline`（见 [hw-timeline-align.md](hw-timeline-align.md)），`--master` 选该站某 camera。
+4. 跨站对齐（工具尚未自动化）：
+   - 优先依赖局域网 **NTP/chrony**，直接用各站 `t_wall` 并排；
+   - 无 NTP 时，用 barrier `COMMIT` 时刻的相对偏移（各站 prepare_ack 的 `t_wall`/`t_mono`）做一次线性校正后再 merge；
+   - 合并产物以 `session_id` 为键，勿假定各站 `episode_index` 相同。
+5. 现有后处理 UI 仍面向**单站 save_dir**；跨站一键合并列为后续增强，不阻塞采集。
+
 ## 9. 实现分期
 
 | 阶段 | 内容 | 对 master 回退 |
 |------|------|----------------|
 | **P0** | `station` YAML + status 只读回显；peer listen/connect/心跳/断连 UI | ✅ 已落地 |
 | **P1** | 从站 API/UI 权限门禁 | ✅ 已落地（`station_control_locked` + HTTP deny） |
-| **P2** | 采集/推理 barrier | 仅 `has_active_slaves` |
-| **P3** | manifest `session_id` + 多站对齐说明/工具钩子 | 单机字段可缺省 |
+| **P2** | 采集/推理 barrier | ✅ 已落地（`barrier_start` / `barrier_stop`） |
+| **P3** | manifest `session_id` + 多站对齐说明/工具钩子 | 字段已写入 manifest；对齐工具待扩 |
 | **P4** | （可选）录后同步、NTP 运维说明 | 不碰热路径 |
 
 回退写法约定：
@@ -163,6 +178,18 @@ else:
 服务端拒绝（`station_denied`）：record start/stop/save_dir、apply-config、arm/gripper 写、gello sync/teleop、pi05 connect/step/prompt、home set/save/go、delta-pose-offset。  
 前端：主页身份卡 + 采集/推理控制按钮置灰（预览 WS / 传感器页仍可用）。  
 Peer 直调 `RecordController`（P2 barrier）不经上述 HTTP，故不受本门禁影响。
+
+### P2 Barrier
+
+主站 `POST /api/record/start|stop` 经 `Orchestrator.coordinated_record_*`：
+
+- **无从站** → 直接 `RecordController`（与改前一致）
+- **有活跃从站** → `PREPARE` → 全员 `prepare_ack` → 主站本地 start → `COMMIT` → `commit_ack`；失败则 `ABORT`，主站不开录（若已开则需人工/后续 fail-stop）
+- 停录：`STOP` → `stop_ack` → 主站 `local_stop`
+
+从站收到 peer 指令后本地落盘；HTTP 仍拒绝本地 Start/Stop。
+
+manifest 可选字段：`session_id`、`station_id`、`station_role`、`peer_slaves`（单机可缺省）。
 
 ## 11. 非目标（本期不做）
 

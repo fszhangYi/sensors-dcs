@@ -11669,6 +11669,8 @@ def create_viz_app(
     station_peer_connect: Callable[[], dict[str, Any]] | None = None,
     station_peer_disconnect: Callable[[], dict[str, Any]] | None = None,
     station_peer_kick: Callable[..., dict[str, Any]] | None = None,
+    record_start_fn: Callable[..., dict[str, Any]] | None = None,
+    record_stop_fn: Callable[..., dict[str, Any]] | None = None,
 ) -> FastAPI:
     from sensors_dcs.auth_session import (
         auth_enabled,
@@ -12039,11 +12041,12 @@ def create_viz_app(
             return {"ok": False, "error": "collect unavailable (boot error)", "state": "idle"}
         if _station_is_slave():
             return _deny_slave("start recording")
-        if recorder is None:
+        if recorder is None and record_start_fn is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
         body = req or RecordStartBody()
         mode = "infer" if str(body.mode or "").strip().lower() == "infer" else "collect"
-        return await asyncio.to_thread(recorder.start, mode=mode)
+        starter = record_start_fn or recorder.start
+        return await asyncio.to_thread(starter, mode=mode)
 
     @app.post("/api/record/stop")
     async def record_stop(request: Request) -> dict[str, Any]:
@@ -12051,7 +12054,7 @@ def create_viz_app(
             return {"ok": False, "error": "collect unavailable (boot error)", "state": "idle"}
         if _station_is_slave():
             return _deny_slave("stop recording")
-        if recorder is None:
+        if recorder is None and record_stop_fn is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
         # Accept JSON ``{"valid": true|false, "async_flush": true|false,
         # "keep_files": true|false}``. ``keep_files=false`` with ``valid=false``
@@ -12076,8 +12079,9 @@ def create_viz_app(
             valid = True
             async_flush = False
             keep_files = True
+        stopper = record_stop_fn or recorder.stop
         return await asyncio.to_thread(
-            recorder.stop,
+            stopper,
             valid=valid,
             async_flush=async_flush,
             keep_files=keep_files,

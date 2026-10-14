@@ -56,6 +56,8 @@ class _EpisodeSession:
     last_error: str | None = None
     writer: threading.Thread | None = None
     sampler: threading.Thread | None = None
+    # Optional multi-station fields (session_id / station_id / …); omitted on single-host.
+    session_meta: dict[str, Any] = field(default_factory=dict)
 
 
 class RecordController:
@@ -141,8 +143,14 @@ class RecordController:
         with self._lock:
             return self._status_unlocked()
 
-    def start(self, *, mode: str = "collect") -> dict[str, Any]:
+    def start(
+        self,
+        *,
+        mode: str = "collect",
+        session_meta: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         mode_n = "infer" if str(mode).strip().lower() == "infer" else "collect"
+        meta = dict(session_meta or {})
         with self._lock:
             if self.state != "idle":
                 return {
@@ -167,6 +175,7 @@ class RecordController:
                 t_start=time.time(),
                 q=queue.Queue(maxsize=max(8, int(self.cfg.queue_maxsize))),
                 mode=mode_n,
+                session_meta=meta,
             )
             sess.writer = threading.Thread(
                 target=self._writer_loop,
@@ -196,6 +205,7 @@ class RecordController:
                     provisional=True,
                     valid=False,
                     mode=mode_n,
+                    session_meta=meta,
                 )
             except Exception as e:  # noqa: BLE001
                 sess.last_error = f"initial manifest: {e}"
@@ -403,6 +413,7 @@ class RecordController:
                 provisional=False,
                 valid=bool(valid),
                 mode=sess.mode,
+                session_meta=sess.session_meta,
             )
             err = None
         except Exception as e:  # noqa: BLE001
@@ -468,6 +479,7 @@ class RecordController:
         provisional: bool,
         valid: bool = True,
         mode: str = "collect",
+        session_meta: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         cameras = self._collect_cameras()
         prev_path = ep_dir / "manifest.json"
@@ -512,6 +524,10 @@ class RecordController:
             "valid": manifest_valid,
             "format": "dcs_episode_v1",
         }
+        meta = dict(session_meta or {})
+        for key in ("session_id", "station_id", "station_role", "peer_slaves"):
+            if key in meta and meta[key] is not None:
+                manifest[key] = meta[key]
         if provisional:
             manifest["provisional"] = True
             manifest["note"] = (

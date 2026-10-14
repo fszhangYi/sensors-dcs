@@ -93,6 +93,12 @@ class Orchestrator:
             agents_summary_fn=self._peer_agents_summary,
             sensors_summary_fn=self._peer_sensors_summary,
         )
+        self.peer.bind_record_handlers(
+            on_prepare=self._peer_on_prepare,
+            on_commit=self._peer_on_commit,
+            on_abort=self._peer_on_abort,
+            on_stop=self._peer_on_stop,
+        )
         self._stop = threading.Event()
         self._viz_thread: threading.Thread | None = None
         self._console_thread: threading.Thread | None = None
@@ -235,6 +241,55 @@ class Orchestrator:
             "dry_run": bool(getattr(self.manager.ctx, "dry_run", False)),
             "device_ids": ids,
         }
+
+    def _peer_on_prepare(self, mode: str) -> dict[str, Any]:
+        st = self.recorder.status()
+        if st.get("state") != "idle":
+            return {"ok": False, "error": f"recorder busy state={st.get('state')}"}
+        return {"ok": True, "mode": mode}
+
+    def _peer_on_commit(self, mode: str, session_meta: dict[str, Any]) -> dict[str, Any]:
+        return self.recorder.start(mode=mode, session_meta=session_meta)
+
+    def _peer_on_abort(self, session_id: str, reason: str) -> None:
+        st = self.recorder.status()
+        if st.get("state") == "recording":
+            try:
+                self.recorder.stop(valid=False, async_flush=False, keep_files=False)
+            except Exception as e:  # noqa: BLE001
+                print(f"[sensors-dcs] peer abort stop failed ({session_id}): {e}", flush=True)
+        print(f"[sensors-dcs] peer abort session={session_id}: {reason}", flush=True)
+
+    def _peer_on_stop(self, body: dict[str, Any]) -> dict[str, Any]:
+        return self.recorder.stop(
+            valid=bool(body.get("valid", True)),
+            async_flush=bool(body.get("async_flush", False)),
+            keep_files=bool(body.get("keep_files", True)),
+        )
+
+    def coordinated_record_start(self, *, mode: str = "collect") -> dict[str, Any]:
+        """Master with slaves → barrier; otherwise legacy RecordController.start."""
+        if self.peer.has_active_slaves():
+            return self.peer.barrier_start(mode=mode, local_start=self.recorder.start)
+        return self.recorder.start(mode=mode)
+
+    def coordinated_record_stop(
+        self,
+        *,
+        valid: bool = True,
+        async_flush: bool = False,
+        keep_files: bool = True,
+    ) -> dict[str, Any]:
+        if self.peer.has_active_slaves():
+            return self.peer.barrier_stop(
+                local_stop=self.recorder.stop,
+                valid=valid,
+                async_flush=async_flush,
+                keep_files=keep_files,
+            )
+        return self.recorder.stop(
+            valid=valid, async_flush=async_flush, keep_files=keep_files
+        )
 
     def status(self) -> dict[str, Any]:
         from sensors_dcs.config import station_summary
@@ -3117,6 +3172,8 @@ class Orchestrator:
             station_peer_connect=self.peer.connect_to_master,
             station_peer_disconnect=self.peer.disconnect,
             station_peer_kick=self.peer.kick_slave,
+            record_start_fn=self.coordinated_record_start,
+            record_stop_fn=self.coordinated_record_stop,
         )
         self._server = uvicorn.Server(
             uvicorn.Config(

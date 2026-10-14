@@ -23,6 +23,7 @@ from sensors_dcs.config import (
 PROTOCOL = "sensors-dcs-peer/v1"
 HEARTBEAT_S = 1.5
 HEARTBEAT_TIMEOUT_S = 5.0
+BARRIER_TIMEOUT_S = 8.0
 RECV_BUF = 65536
 
 
@@ -147,6 +148,17 @@ class StationPeer:
         self._link_state = "idle"
         self._last_error = ""
         self._session_token = ""
+        self._active_session_id = ""
+        # Record barrier handlers (slave side) + master ack waiters.
+        self._on_prepare: Callable[[str], dict[str, Any]] | None = None
+        self._on_commit: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None
+        self._on_abort: Callable[[str, str], None] | None = None
+        self._on_stop: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+        self._ack_cv = threading.Condition()
+        self._pending_acks: dict[str, dict[str, Any]] = {}
+        self._barrier_expect: set[str] = set()
+        self._barrier_phase = ""
+        self._barrier_token = ""
 
     # --- public status / control -------------------------------------------------
 
@@ -168,6 +180,284 @@ class StationPeer:
     def has_active_slaves(self) -> bool:
         with self._lock:
             return any(c.state == "connected" for c in self._slaves.values())
+
+    def bind_record_handlers(
+        self,
+        *,
+        on_prepare: Callable[[str], dict[str, Any]] | None = None,
+        on_commit: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
+        on_abort: Callable[[str, str], None] | None = None,
+        on_stop: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    ) -> None:
+        """Slave-side hooks for PREPARE/COMMIT/ABORT/STOP (P2 barrier)."""
+        self._on_prepare = on_prepare
+        self._on_commit = on_commit
+        self._on_abort = on_abort
+        self._on_stop = on_stop
+
+    def barrier_start(
+        self,
+        *,
+        mode: str,
+        local_start: Callable[..., dict[str, Any]],
+        timeout_s: float = BARRIER_TIMEOUT_S,
+    ) -> dict[str, Any]:
+        """Master: PREPARE→ACK→local start→COMMIT→ACK. No slaves → local_start only."""
+        if self.cfg.station.role != "master":
+            return {"ok": False, "error": "barrier_start is master-only", **self.status()}
+        if not self.has_active_slaves():
+            return local_start(mode=mode)
+
+        mode_n = "infer" if str(mode).strip().lower() == "infer" else "collect"
+        session_id = str(uuid.uuid4())
+        token = str(uuid.uuid4())
+        local = station_summary(self.cfg)
+        with self._lock:
+            slaves = [c for c in self._slaves.values() if c.state == "connected"]
+            self._link_state = "syncing"
+            self._active_session_id = session_id
+            self._last_error = ""
+            peer_slaves = [
+                {"id": c.station_id, "advertise_ip": c.advertise_ip} for c in slaves
+            ]
+
+        expect = {c.station_id for c in slaves}
+        self._begin_barrier(phase="prepare", expect=expect, token=token)
+        for c in slaves:
+            if not c.send(
+                {
+                    "type": "prepare",
+                    "protocol": PROTOCOL,
+                    "session_id": session_id,
+                    "token": token,
+                    "mode": mode_n,
+                }
+            ):
+                self._broadcast_abort(session_id, token, reason="prepare send failed")
+                with self._lock:
+                    self._link_state = "connected" if self._slaves else "listening"
+                    self._last_error = f"prepare send failed to {c.station_id}"
+                return {"ok": False, "error": self._last_error, "session_id": session_id}
+
+        ok_prep, prep_detail = self._wait_acks(
+            expect=expect, ack_type="prepare_ack", token=token, timeout_s=timeout_s
+        )
+        if not ok_prep:
+            self._broadcast_abort(session_id, token, reason=prep_detail)
+            with self._lock:
+                self._link_state = "connected" if self._slaves else "listening"
+                self._last_error = prep_detail
+            return {
+                "ok": False,
+                "error": prep_detail,
+                "session_id": session_id,
+                **self.status(),
+            }
+
+        session_meta = {
+            "session_id": session_id,
+            "station_id": local["id"],
+            "station_role": "master",
+            "peer_slaves": peer_slaves,
+        }
+        local_res = local_start(mode=mode_n, session_meta=session_meta)
+        if not local_res.get("ok"):
+            self._broadcast_abort(
+                session_id, token, reason=str(local_res.get("error") or "master start failed")
+            )
+            with self._lock:
+                self._link_state = "connected" if self._slaves else "listening"
+            return {**local_res, "session_id": session_id}
+
+        t_start_wall = float(local_res.get("t_start") or _now())
+        # Prefer recorder status clocks if present.
+        try:
+            t_start_wall = float(
+                (local_res.get("t_start") if "t_start" in local_res else None)
+                or time.time()
+            )
+        except (TypeError, ValueError):
+            t_start_wall = time.time()
+
+        self._begin_barrier(phase="commit", expect=expect, token=token)
+        slave_meta = {
+            "session_id": session_id,
+            "station_role": "slave",
+        }
+        for c in slaves:
+            c.send(
+                {
+                    "type": "commit",
+                    "protocol": PROTOCOL,
+                    "session_id": session_id,
+                    "token": token,
+                    "mode": mode_n,
+                    "t_start_wall": t_start_wall,
+                    "session_meta": {
+                        **slave_meta,
+                        "station_id": c.station_id,
+                    },
+                }
+            )
+
+        ok_commit, commit_detail = self._wait_acks(
+            expect=expect, ack_type="commit_ack", token=token, timeout_s=timeout_s
+        )
+        if not ok_commit:
+            # Best-effort fail-stop: abort remaining + stop local.
+            self._broadcast_abort(session_id, token, reason=commit_detail)
+            try:
+                # Caller may pass stop via barrier_stop; here we only signal.
+                pass
+            except Exception:  # noqa: BLE001
+                pass
+            with self._lock:
+                self._link_state = "error"
+                self._last_error = commit_detail
+            return {
+                "ok": False,
+                "error": commit_detail,
+                "session_id": session_id,
+                "master_started": True,
+                **local_res,
+                **self.status(),
+            }
+
+        with self._lock:
+            self._link_state = "connected"
+            self._session_token = token
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "barrier": True,
+            **local_res,
+            "peer": self.status(),
+        }
+
+    def barrier_stop(
+        self,
+        *,
+        local_stop: Callable[..., dict[str, Any]],
+        valid: bool = True,
+        async_flush: bool = False,
+        keep_files: bool = True,
+        timeout_s: float = BARRIER_TIMEOUT_S,
+    ) -> dict[str, Any]:
+        """Master: STOP→ACK then local_stop. No slaves → local_stop only."""
+        if self.cfg.station.role != "master":
+            return {"ok": False, "error": "barrier_stop is master-only", **self.status()}
+        if not self.has_active_slaves():
+            return local_stop(
+                valid=valid, async_flush=async_flush, keep_files=keep_files
+            )
+
+        session_id = self._active_session_id or str(uuid.uuid4())
+        token = self._session_token or str(uuid.uuid4())
+        with self._lock:
+            slaves = [c for c in self._slaves.values() if c.state == "connected"]
+            self._link_state = "syncing"
+        expect = {c.station_id for c in slaves}
+        self._begin_barrier(phase="stop", expect=expect, token=token)
+        for c in slaves:
+            c.send(
+                {
+                    "type": "stop",
+                    "protocol": PROTOCOL,
+                    "session_id": session_id,
+                    "token": token,
+                    "valid": bool(valid),
+                    "async_flush": bool(async_flush),
+                    "keep_files": bool(keep_files),
+                }
+            )
+        ok_stop, stop_detail = self._wait_acks(
+            expect=expect, ack_type="stop_ack", token=token, timeout_s=timeout_s
+        )
+        local_res = local_stop(
+            valid=valid, async_flush=async_flush, keep_files=keep_files
+        )
+        with self._lock:
+            self._link_state = "connected" if self._slaves else "listening"
+            self._active_session_id = ""
+            if not ok_stop:
+                self._last_error = stop_detail
+        out = {
+            "ok": bool(local_res.get("ok")) and ok_stop,
+            "session_id": session_id,
+            "barrier": True,
+            "slaves_ok": ok_stop,
+            "slaves_detail": None if ok_stop else stop_detail,
+            **local_res,
+            "peer": self.status(),
+        }
+        if not ok_stop and out.get("ok"):
+            out["ok"] = False
+            out["error"] = stop_detail
+        return out
+
+    def _begin_barrier(self, *, phase: str, expect: set[str], token: str) -> None:
+        with self._ack_cv:
+            self._barrier_phase = phase
+            self._barrier_expect = set(expect)
+            self._barrier_token = token
+            self._pending_acks.clear()
+            self._ack_cv.notify_all()
+
+    def _note_ack(self, msg: dict[str, Any]) -> None:
+        sid = str(msg.get("station_id") or "").strip()
+        if not sid:
+            return
+        with self._ack_cv:
+            if str(msg.get("token") or "") != self._barrier_token:
+                return
+            self._pending_acks[sid] = msg
+            self._ack_cv.notify_all()
+
+    def _wait_acks(
+        self,
+        *,
+        expect: set[str],
+        ack_type: str,
+        token: str,
+        timeout_s: float,
+    ) -> tuple[bool, str]:
+        deadline = _now() + max(0.5, float(timeout_s))
+        with self._ack_cv:
+            while _now() < deadline and not self._stop.is_set():
+                if self._barrier_token != token:
+                    return False, "barrier token changed"
+                got = {
+                    sid: m
+                    for sid, m in self._pending_acks.items()
+                    if str(m.get("type") or "") == ack_type
+                }
+                if expect.issubset(got.keys()):
+                    for sid in expect:
+                        m = got[sid]
+                        if m.get("ready") is False or m.get("ok") is False:
+                            err = str(m.get("error") or f"{sid} not ready")
+                            return False, err
+                    return True, "ok"
+                remaining = deadline - _now()
+                if remaining <= 0:
+                    break
+                self._ack_cv.wait(timeout=min(0.2, remaining))
+            missing = sorted(expect - set(self._pending_acks.keys()))
+            return False, f"{ack_type} timeout; missing={missing}"
+
+    def _broadcast_abort(self, session_id: str, token: str, *, reason: str) -> None:
+        with self._lock:
+            slaves = list(self._slaves.values())
+        for c in slaves:
+            c.send(
+                {
+                    "type": "abort",
+                    "protocol": PROTOCOL,
+                    "session_id": session_id,
+                    "token": token,
+                    "reason": reason,
+                }
+            )
 
     def start(self) -> None:
         """Start listen (master) or leave idle until slave connect()."""
@@ -505,6 +795,10 @@ class StationPeer:
                 mtype = str(msg.get("type") or "")
                 if mtype == "heartbeat":
                     conn.send({"type": "heartbeat_ack", "protocol": PROTOCOL, "t": _now()})
+                elif mtype in ("prepare_ack", "commit_ack", "stop_ack"):
+                    if not msg.get("station_id"):
+                        msg = {**msg, "station_id": conn.station_id}
+                    self._note_ack(msg)
                 elif mtype == "disconnect":
                     conn.state = "idle"
                     self._drop_slave(conn.station_id, conn)
@@ -544,7 +838,8 @@ class StationPeer:
                     break
                 if mtype == "heartbeat_ack":
                     continue
-                # Future: prepare/commit/abort handled in P2.
+                if mtype in ("prepare", "commit", "abort", "stop"):
+                    self._slave_handle_control(conn, msg)
         with self._lock:
             if self._master_conn is conn:
                 self._master_conn = None
@@ -552,6 +847,125 @@ class StationPeer:
                 if conn.last_error:
                     self._last_error = conn.last_error
         conn.close()
+
+    def _slave_handle_control(self, conn: _PeerConn, msg: dict[str, Any]) -> None:
+        mtype = str(msg.get("type") or "")
+        session_id = str(msg.get("session_id") or "")
+        token = str(msg.get("token") or "")
+        local = station_summary(self.cfg)
+        sid = local["id"]
+
+        if mtype == "prepare":
+            mode = str(msg.get("mode") or "collect")
+            ready = True
+            err = ""
+            if self._on_prepare is not None:
+                try:
+                    res = self._on_prepare(mode) or {}
+                    ready = bool(res.get("ok", True))
+                    err = str(res.get("error") or "")
+                except Exception as e:  # noqa: BLE001
+                    ready = False
+                    err = str(e)
+            with self._lock:
+                self._link_state = "syncing"
+                self._active_session_id = session_id
+            conn.send(
+                {
+                    "type": "prepare_ack",
+                    "protocol": PROTOCOL,
+                    "session_id": session_id,
+                    "token": token,
+                    "station_id": sid,
+                    "ready": ready,
+                    "ok": ready,
+                    "error": err or None,
+                    "t_wall": _now(),
+                    "t_mono": time.monotonic(),
+                }
+            )
+            return
+
+        if mtype == "commit":
+            mode = str(msg.get("mode") or "collect")
+            meta = msg.get("session_meta") if isinstance(msg.get("session_meta"), dict) else {}
+            meta = dict(meta)
+            meta.setdefault("session_id", session_id)
+            meta.setdefault("station_id", sid)
+            meta.setdefault("station_role", "slave")
+            ok = True
+            err = ""
+            if self._on_commit is not None:
+                try:
+                    res = self._on_commit(mode, meta) or {}
+                    ok = bool(res.get("ok", True))
+                    err = str(res.get("error") or "")
+                except Exception as e:  # noqa: BLE001
+                    ok = False
+                    err = str(e)
+            with self._lock:
+                self._link_state = "connected" if ok else "error"
+                if err:
+                    self._last_error = err
+            conn.send(
+                {
+                    "type": "commit_ack",
+                    "protocol": PROTOCOL,
+                    "session_id": session_id,
+                    "token": token,
+                    "station_id": sid,
+                    "ok": ok,
+                    "ready": ok,
+                    "error": err or None,
+                }
+            )
+            return
+
+        if mtype == "abort":
+            reason = str(msg.get("reason") or "aborted")
+            if self._on_abort is not None:
+                try:
+                    self._on_abort(session_id, reason)
+                except Exception:  # noqa: BLE001
+                    pass
+            with self._lock:
+                self._link_state = "connected"
+                self._active_session_id = ""
+                self._last_error = reason
+            return
+
+        if mtype == "stop":
+            body = {
+                "valid": bool(msg.get("valid", True)),
+                "async_flush": bool(msg.get("async_flush", False)),
+                "keep_files": bool(msg.get("keep_files", True)),
+                "session_id": session_id,
+            }
+            ok = True
+            err = ""
+            if self._on_stop is not None:
+                try:
+                    res = self._on_stop(body) or {}
+                    ok = bool(res.get("ok", True))
+                    err = str(res.get("error") or "")
+                except Exception as e:  # noqa: BLE001
+                    ok = False
+                    err = str(e)
+            with self._lock:
+                self._link_state = "connected"
+                self._active_session_id = ""
+            conn.send(
+                {
+                    "type": "stop_ack",
+                    "protocol": PROTOCOL,
+                    "session_id": session_id,
+                    "token": token,
+                    "station_id": sid,
+                    "ok": ok,
+                    "ready": ok,
+                    "error": err or None,
+                }
+            )
 
     def _heartbeat_loop(self) -> None:
         while not self._stop.is_set():
