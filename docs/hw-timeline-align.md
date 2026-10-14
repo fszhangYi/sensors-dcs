@@ -3,7 +3,7 @@
 文档名：`docs/hw-timeline-align.md`  
 日期：2026-09-09（W2 D8）  
 状态：**W2 收口**（D8–D14）· 接口冻结 · MVP + 对比 + 边界 + portfolio  
-关联：[e1-e4-hw-ts-and-discard.md](e1-e4-hw-ts-and-discard.md) · [export-timeline.md](export-timeline.md) · [filter-timeline.md](filter-timeline.md) · [station-multi-machine.md](station-multi-machine.md)（多站 `session_id` + 本地落盘对齐约定） · 基线 `docs/portfolio/baseline/` · Gap **G01/G02 done**
+关联：[e1-e4-hw-ts-and-discard.md](e1-e4-hw-ts-and-discard.md) · [export-timeline.md](export-timeline.md) · [filter-timeline.md](filter-timeline.md) · [station-multi-machine.md](station-multi-machine.md) · [station-clock-align.md](station-clock-align.md)（**跨站** chrony + 相对 τ；本文只管**站内** hw_ts） · 基线 `docs/portfolio/baseline/` · Gap **G01/G02 done**
 
 > 一句话：今天对齐靠主机墙钟 `t_wall`；本周让导出**可选**改用 RealSense 落盘的 `color_timestamp`（硬件时间戳）建主时间网格，并和 W1 的 QC 数字做 before/after 对照。
 

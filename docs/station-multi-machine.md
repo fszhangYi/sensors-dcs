@@ -1,8 +1,8 @@
 # 多机主从站（LAN）方案
 
-日期：2026-10-14  
-状态：已定案，按分期实现  
-前置提交：`5c46497`（working tree clean，与 `origin/master` 同步）
+日期：2026-10-14（时钟策略补充同日）  
+状态：P0–P3 已落地；P4 底线已定案（chrony + 紧 barrier），实现前先更新文档  
+时钟专文：[station-clock-align.md](station-clock-align.md)
 
 ## 1. 目标与硬约束
 
@@ -25,7 +25,7 @@ role 缺省 / master + 无已连接从站
 | 1 | 从站本地预览 WS、传感器 iframe | **允许**（方便现场看图） |
 | 2 | 从站本机机械臂/夹爪点动、Home、abs-ramp | **禁止**（避免双控） |
 | 3 | 一期数据落盘 | **各站本地落盘**；事后拷贝/`rsync` + `session_id` 对齐；不做采集热路径推流 |
-| 4 | 时钟 | **建议局域网 NTP/chrony**；协议仍写 `t_wall`/`t_mono`，barrier 再加可选 `t_sync` |
+| 4 | 时钟 | **chrony（NTP），不上 PTP**；跨站后处理默认相对 τ；详见 [station-clock-align.md](station-clock-align.md) |
 | 5 | 拓扑 | **固定一主多从**；从站不 listen peer；不做从从互连、不做主主切换 |
 
 补充定案（设计讨论）：
@@ -34,6 +34,8 @@ role 缺省 / master + 无已连接从站
 - 从站连主站时上报的是**站元信息 + agents/sensors 摘要**，不覆盖主站运行 YAML。
 - 仅 master 接受 peer 入站；若对从站发起「被连接」则失败。
 - 有活跃从站时，主站开录/开推理走 **PREPARE → ACK → COMMIT** barrier；超时则 ABORT，主站也不 start。
+- **大钟差（甚至 ≥1min）**：采集与 barrier 仍可用；跨站禁止用绝对 `t_wall` 硬并，必须用相对 τ（开录 `t0` 为零时）。
+- **P4 底线**（先于精细 RTT 补偿）：现场上 chrony 缩小绝对钟差 + 缩短 barrier 关键路径；录后同步为可选。
 
 ## 3. 与现状的关系
 
@@ -116,23 +118,25 @@ Stop 同理：STOP → ACK → 各自 finalize
 
 - **各站本地** `dcs_episode_v1`；不在采集热路径传图。
 - 事后拷到分析机；按 `session_id` 多站合并。
-- 时钟：优先 NTP；对齐仍可用现有 timeline/`--master` agent 思路扩展站维度。
-- 二期可选：录后异步 sync 整包或只推元数据/缩略图（非本期）。
+- 时钟与跨站对齐策略见专文 **[station-clock-align.md](station-clock-align.md)**（chrony + barrier 零时 + 相对 τ）。
+- 二期可选：录后异步 sync 整包或只推元数据/缩略图。
 
-### 8.1 多站对齐操作约定（P3 说明）
+### 8.1 多站对齐操作约定
 
-1. 各站 episode 的 `manifest.json` 含同一 `session_id`（主站 barrier 分配）及本站 `station_id` / `station_role`。
+1. 各站 episode 的 `manifest.json` 含同一 `session_id`（主站 barrier 分配）及本站 `station_id` / `station_role`；开录零时为 **`manifest.t_start`（COMMIT 后真正 start）**。
 2. 收集方式：共享盘 / `rsync` / 移动介质，建议目录布局：
    ```text
    sessions/<session_id>/
      <station_id>/episode_XXXXX/
    ```
 3. 单站内对齐：继续用现有 `export-timeline` / `filter-timeline`（见 [hw-timeline-align.md](hw-timeline-align.md)），`--master` 选该站某 camera。
-4. 跨站对齐（工具尚未自动化）：
-   - 优先依赖局域网 **NTP/chrony**，直接用各站 `t_wall` 并排；
-   - 无 NTP 时，用 barrier `COMMIT` 时刻的相对偏移（各站 prepare_ack 的 `t_wall`/`t_mono`）做一次线性校正后再 merge；
-   - 合并产物以 `session_id` 为键，勿假定各站 `episode_index` 相同。
-5. 现有后处理 UI 仍面向**单站 save_dir**；跨站一键合并列为后续增强，不阻塞采集。
+4. 跨站对齐（默认）：
+   - 每帧 `τ = t_wall - t0`（`t0 = manifest.t_start`）；在 **τ 域** 合并；  
+   - **不要**在未同步或大钟差时用绝对 `t_wall` 硬并；  
+   - chrony 用于缩小绝对差与排障，**不替代** τ 作为跨站默认；  
+   - 合并键为 `session_id`，勿假定各站 `episode_index` 相同。
+5. barrier 网络延迟导致两边 `t0` 可能差数毫秒～几十毫秒：靠 chrony + 紧 COMMIT 路径压掉；RTT/2 显式补偿为可选增强。
+6. 现有后处理 UI 仍面向**单站 save_dir**；跨站一键合并列为后续增强，不阻塞采集。
 
 ## 9. 实现分期
 
@@ -141,8 +145,8 @@ Stop 同理：STOP → ACK → 各自 finalize
 | **P0** | `station` YAML + status 只读回显；peer listen/connect/心跳/断连 UI | ✅ 已落地 |
 | **P1** | 从站 API/UI 权限门禁 | ✅ 已落地（`station_control_locked` + HTTP deny） |
 | **P2** | 采集/推理 barrier | ✅ 已落地（`barrier_start` / `barrier_stop`） |
-| **P3** | manifest `session_id` + 多站对齐说明/工具钩子 | 字段已写入 manifest；对齐工具待扩 |
-| **P4** | （可选）录后同步、NTP 运维说明 | 不碰热路径 |
+| **P3** | manifest `session_id` + 多站对齐说明/工具钩子 | ✅ 字段已写入；约定见 §8.1 / clock 专文 |
+| **P4** | **底线**：chrony 运维说明 + 缩短 barrier 热路径；**可选**：录后按 `session_id` 同步、RTT 补偿落盘 | 不碰采集推流；详见 [station-clock-align.md](station-clock-align.md) |
 
 回退写法约定：
 
@@ -197,3 +201,12 @@ manifest 可选字段：`session_id`、`station_id`、`station_role`、`peer_sla
 - 自动主备切换、从站互连
 - 前端改 role/IP
 - 用从站 YAML 覆盖主站 agents/设备清单
+- **PTP / 硬件授时交换机**（时钟策略明确选 chrony，见 clock 专文）
+
+## 12. 文档索引
+
+| 文档 | 内容 |
+|------|------|
+| 本文 | 主从拓扑、权限、barrier、分期与 API |
+| [station-clock-align.md](station-clock-align.md) | 多机时钟：chrony、相对 τ、barrier 偏斜、后处理合并 |
+| [hw-timeline-align.md](hw-timeline-align.md) | **单站内**相机 hw_ts 对齐（与跨站正交） |
