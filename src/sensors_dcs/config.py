@@ -195,6 +195,62 @@ class RecordConfig(BaseModel):
     queue_maxsize: int = 512
 
 
+class StationConfig(BaseModel):
+    """LAN master/slave identity (YAML-only; UI read-only). See docs/station-multi-machine.md.
+
+    Omitting the whole ``station:`` block ≡ ``role=master`` with idle peer (single-machine).
+    """
+
+    role: Literal["master", "slave"] = "master"
+    # Stable machine id; empty → status falls back to DcsConfig.site.
+    id: str = ""
+    # Address shown in UI / used by peers to reach this host (not the bind address).
+    advertise_ip: str = ""
+    # Peer listen/connect port; None → runtime.control_port.
+    peer_port: int | None = None
+    # Slave-only: master endpoint to dial.
+    master_ip: str = ""
+    master_port: int | None = None
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def _role(cls, v: Any) -> str:
+        s = str(v if v is not None else "master").strip().lower()
+        if s in ("primary", "main"):
+            s = "master"
+        if s in ("secondary", "follower"):
+            s = "slave"
+        if s not in ("master", "slave"):
+            raise ValueError("station.role must be master or slave")
+        return s
+
+    @field_validator("id", "advertise_ip", "master_ip", mode="before")
+    @classmethod
+    def _strip_str(cls, v: Any) -> str:
+        if v is None:
+            return ""
+        return str(v).strip()
+
+    @field_validator("peer_port", "master_port", mode="before")
+    @classmethod
+    def _port(cls, v: Any) -> int | None:
+        if v is None or v == "":
+            return None
+        try:
+            p = int(v)
+        except (TypeError, ValueError) as e:
+            raise ValueError("station peer/master port must be an int") from e
+        if p < 1 or p > 65535:
+            raise ValueError("station peer/master port must be 1..65535")
+        return p
+
+    @model_validator(mode="after")
+    def _slave_needs_master(self) -> StationConfig:
+        if self.role == "slave" and not (self.master_ip or "").strip():
+            raise ValueError("station.master_ip is required when role=slave")
+        return self
+
+
 class DcsConfig(BaseModel):
     version: int = 1
     site: str = "default"
@@ -208,6 +264,7 @@ class DcsConfig(BaseModel):
     tcp_xyz: list[float] | None = None
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     record: RecordConfig = Field(default_factory=RecordConfig)
+    station: StationConfig = Field(default_factory=StationConfig)
     gello_arm_sync: GelloArmSyncConfig = Field(default_factory=GelloArmSyncConfig)
     gello_arm_teleop: GelloArmTeleopConfig = Field(default_factory=GelloArmTeleopConfig)
     arm_abs_ramp: ArmAbsRampConfig = Field(default_factory=ArmAbsRampConfig)
@@ -340,6 +397,38 @@ def load_dcs_config(path: str | Path) -> DcsConfig:
     return cfg.model_copy(update={"sensors_config": str(sensors_path), "record": record})
 
 
+def resolve_peer_port(cfg: DcsConfig) -> int:
+    """Peer listen/dial port: station.peer_port, else runtime.control_port."""
+    st = cfg.station
+    if st.peer_port is not None:
+        return int(st.peer_port)
+    return int(cfg.runtime.control_port)
+
+
+def resolve_master_port(cfg: DcsConfig) -> int:
+    """Slave→master dial port: station.master_port, else peer port resolution."""
+    st = cfg.station
+    if st.master_port is not None:
+        return int(st.master_port)
+    return resolve_peer_port(cfg)
+
+
+def station_summary(cfg: DcsConfig) -> dict[str, Any]:
+    """Read-only station identity for /api/status and UI (no peer session state)."""
+    st = cfg.station
+    sid = (st.id or "").strip() or str(cfg.site or "default")
+    return {
+        "role": st.role,
+        "id": sid,
+        "advertise_ip": (st.advertise_ip or "").strip(),
+        "peer_port": resolve_peer_port(cfg),
+        "master_ip": (st.master_ip or "").strip(),
+        "master_port": resolve_master_port(cfg) if st.role == "slave" else None,
+        "is_master": st.role == "master",
+        "is_slave": st.role == "slave",
+    }
+
+
 def config_summary(cfg: DcsConfig) -> dict[str, Any]:
     from sensors_dcs.arm_pose import DEFAULT_TCP_XYZ, normalize_tcp_xyz
 
@@ -355,6 +444,7 @@ def config_summary(cfg: DcsConfig) -> dict[str, Any]:
         "sensors_config": cfg.sensors_config,
         "runtime": cfg.runtime.model_dump(),
         "record": cfg.record.model_dump(),
+        "station": station_summary(cfg),
         "gello_arm_sync": cfg.gello_arm_sync.model_dump(),
         "gello_arm_teleop": cfg.gello_arm_teleop.model_dump(),
         "arm_abs_ramp": cfg.arm_abs_ramp.model_dump(),

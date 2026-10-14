@@ -7,6 +7,16 @@
 version: 1
 site: dcs-full-cell
 
+# 多机主从（可选；整段省略 ≡ 单机主站）。见 docs/station-multi-machine.md
+# station:
+#   role: master                 # master | slave
+#   id: cell-a
+#   advertise_ip: 192.168.1.10   # 前端只读回显；从站连主用
+#   peer_port: 7010              # 默认 = runtime.control_port
+#   # slave 时必填：
+#   # master_ip: 192.168.1.10
+#   # master_port: 7010
+
 sensors_config: ./sensors_default.yaml
 # true = 合成假数据；false = 真机（串口 + RealSense serial）
 dry_run: true

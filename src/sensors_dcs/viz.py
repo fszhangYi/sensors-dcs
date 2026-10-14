@@ -150,7 +150,11 @@ class UserUpdateBody(BaseModel):
 
 
 class ApplyConfigBody(BaseModel):
-    path: str = ""
+    path: str
+
+
+class StationPeerKickBody(BaseModel):
+    station_id: str = ""
 
 
 class ArmHomeSetBody(BaseModel):
@@ -2639,6 +2643,25 @@ PREVIEW_HTML = """<!DOCTYPE html>
   <main>
     <div class="tab-panel active" id="tab-home" role="tabpanel">
       <div class="home-grid">
+        <section class="pp-card" id="homeStationCard">
+          <h2 data-i18n="station.title">本站身份</h2>
+          <p class="home-lead" data-i18n="station.hint">身份与宣告 IP 来自 YAML（station.*），前端只读；改配置后需 apply-config 重启。</p>
+          <div class="meta" style="margin-top:0.75rem;">
+            <div><span data-i18n="station.role">角色：</span><strong id="homeStationRole">—</strong></div>
+            <div><span data-i18n="station.id">站 ID：</span><strong id="homeStationId">—</strong></div>
+            <div><span data-i18n="station.ip">宣告 IP：</span><strong id="homeStationIp">—</strong></div>
+            <div><span data-i18n="station.peer_port">Peer 端口：</span><strong id="homeStationPeerPort">—</strong></div>
+            <div id="homeStationMasterRow" hidden>
+              <span data-i18n="station.master">主站：</span><strong id="homeStationMaster">—</strong>
+            </div>
+            <div><span data-i18n="station.peer_state">站间连接：</span><strong id="homeStationPeerState">—</strong></div>
+          </div>
+          <div class="pp-actions" id="homeStationActions" style="margin-top:0.75rem;" hidden>
+            <button type="button" id="btnStationConnect" data-i18n="station.connect">连接主站</button>
+            <button type="button" id="btnStationDisconnect" data-i18n="station.disconnect">断开</button>
+          </div>
+          <div class="rec-log" id="homeStationSlaves" hidden role="status"></div>
+        </section>
         <section class="pp-card">
           <h2 data-i18n="home.title">sensors-dcs 是什么</h2>
           <p class="home-lead" data-i18n="home.lead">本地机器人单元控制台：看传感器状态、录 episode、离线对齐导出 hik_dataset，并连接 pi05 serve 做推理与臂控制。</p>
@@ -7364,6 +7387,45 @@ PREVIEW_HTML = """<!DOCTYPE html>
       } catch (e) {}
     }
 
+    let stationControlLocked = false;
+
+    function applySlaveControlGate(locked) {
+      stationControlLocked = !!locked;
+      const tip = stationControlLocked ? t('station.control_locked') : '';
+      const ids = [
+        'btnStart', 'btnStop', 'btnDiscard', 'btnSaveDir', 'saveDirInput',
+        'chkQuickCollect', 'chkAsyncFlush',
+        'infBtnStart', 'infBtnStop', 'infBtnDiscard',
+        'flowBtnStart', 'flowBtnStop', 'flowBtnDiscard',
+        'infFlowRun', 'infFlowPause', 'infFlowResume', 'infFlowStop',
+        'infPi05Connect', 'infPi05Disconnect', 'infPi05Step', 'infPi05Loop',
+        'infPi05LoopPause', 'infPi05LoopResume',
+        'infDeltaPoseOffsetEnable', 'infDeltaPoseOffsetZero',
+        'btnArmHomeGo', 'btnArmHomeSet', 'btnArmHomeSave',
+        'btnArmAbsSend', 'btnArmDisarm', 'btnArmStop',
+        'btnGelloArmSync', 'btnGelloArmTeleop', 'btnGripperGelloSync',
+      ];
+      ids.forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (stationControlLocked) {
+          el.disabled = true;
+          el.setAttribute('aria-disabled', 'true');
+          if (tip) el.title = tip;
+        }
+      });
+      document.querySelectorAll('.inf-delta-cell').forEach((el) => {
+        if (stationControlLocked) {
+          el.disabled = true;
+          el.setAttribute('aria-disabled', 'true');
+        }
+      });
+      const hint = document.getElementById('runHint');
+      if (hint && stationControlLocked) {
+        hint.textContent = tip;
+      }
+    }
+
     function applyCollectGate(ok, info) {
       collectOk = !!ok;
       tabBtnCollect.classList.toggle('tab-locked', !collectOk);
@@ -7405,6 +7467,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
         bootBanner.hidden = true;
         bootBanner.classList.remove('visible');
       }
+      const locked = !!(info && (info.station_control_locked
+        || (info.station && (info.station.is_slave || info.station.role === 'slave'))));
+      applySlaveControlGate(locked);
     }
 
     function switchInfPage(name) {
@@ -8597,11 +8662,141 @@ PREVIEW_HTML = """<!DOCTYPE html>
       });
     }
 
+    function applyStationFromStatus(j) {
+      const st = (j && (j.station || (j.config && j.config.station))) || null;
+      const roleEl = document.getElementById('homeStationRole');
+      const idEl = document.getElementById('homeStationId');
+      const ipEl = document.getElementById('homeStationIp');
+      const portEl = document.getElementById('homeStationPeerPort');
+      const masterRow = document.getElementById('homeStationMasterRow');
+      const masterEl = document.getElementById('homeStationMaster');
+      const peerStateEl = document.getElementById('homeStationPeerState');
+      const actions = document.getElementById('homeStationActions');
+      const slavesEl = document.getElementById('homeStationSlaves');
+      if (!st) {
+        if (roleEl) roleEl.textContent = '—';
+        if (idEl) idEl.textContent = '—';
+        if (ipEl) ipEl.textContent = '—';
+        if (portEl) portEl.textContent = '—';
+        if (peerStateEl) peerStateEl.textContent = '—';
+        if (actions) actions.hidden = true;
+        if (slavesEl) slavesEl.hidden = true;
+        if (masterRow) masterRow.hidden = true;
+        return;
+      }
+      const role = st.role || 'master';
+      const roleLabel = role === 'slave'
+        ? t('station.role_slave')
+        : t('station.role_master');
+      if (roleEl) roleEl.textContent = roleLabel;
+      if (idEl) idEl.textContent = st.id || '—';
+      if (ipEl) ipEl.textContent = (st.advertise_ip && String(st.advertise_ip).trim())
+        ? st.advertise_ip
+        : t('station.ip_unset');
+      if (portEl) portEl.textContent = st.peer_port != null ? String(st.peer_port) : '—';
+      if (masterRow && masterEl) {
+        if (role === 'slave') {
+          masterRow.hidden = false;
+          const mip = st.master_ip || '';
+          const mport = st.master_port != null ? st.master_port : '';
+          masterEl.textContent = mip ? (mip + (mport !== '' ? (':' + mport) : '')) : '—';
+        } else {
+          masterRow.hidden = true;
+        }
+      }
+      // /api/status → j.peer; /api/station/peer/* → peer fields at top level.
+      const peer = (j && j.peer)
+        || (j && (j.link_state != null || Array.isArray(j.slaves)) ? j : {})
+        || {};
+      const link = peer.link_state || peer.state || 'idle';
+      if (peerStateEl) {
+        const key = 'station.link_' + link;
+        const label = t(key);
+        peerStateEl.textContent = label !== key ? label : link;
+      }
+      if (actions) actions.hidden = role !== 'slave';
+      if (slavesEl) {
+        const list = Array.isArray(peer.slaves) ? peer.slaves : [];
+        if (role === 'master' && list.length) {
+          slavesEl.hidden = false;
+          slavesEl.textContent = list.map((s) => {
+            const sid = (s && (s.id || s.station_id)) || '?';
+            const sip = (s && (s.advertise_ip || s.ip)) || '';
+            const sst = (s && (s.state || s.link_state)) || '';
+            return sid + (sip ? (' @ ' + sip) : '') + (sst ? (' [' + sst + ']') : '');
+          }).join('\\n');
+        } else if (role === 'master') {
+          slavesEl.hidden = false;
+          slavesEl.textContent = t('station.slaves_none');
+        } else {
+          slavesEl.hidden = true;
+        }
+      }
+      const locked = !!(st && (st.is_slave || st.role === 'slave'))
+        || !!(j && j.station_control_locked);
+      applySlaveControlGate(locked);
+    }
+
+    function refreshStationStatus() {
+      return fetch('/api/station/status', { credentials: 'same-origin' })
+        .then((r) => r.json())
+        .then((j) => {
+          if (j && j.ok !== false) applyStationFromStatus(j);
+          return j;
+        })
+        .catch(() => null);
+    }
+
+    const btnStationConnect = document.getElementById('btnStationConnect');
+    const btnStationDisconnect = document.getElementById('btnStationDisconnect');
+    if (btnStationConnect) {
+      btnStationConnect.addEventListener('click', async () => {
+        btnStationConnect.disabled = true;
+        try {
+          const r = await fetch('/api/station/peer/connect', {
+            method: 'POST',
+            credentials: 'same-origin',
+          });
+          const j = await r.json();
+          applyStationFromStatus(j);
+          if (j && j.ok === false && j.error) {
+            const el = document.getElementById('homeStationPeerState');
+            if (el) el.textContent = String(j.error);
+          }
+        } catch (e) {
+          const el = document.getElementById('homeStationPeerState');
+          if (el) el.textContent = String(e);
+        } finally {
+          btnStationConnect.disabled = false;
+        }
+      });
+    }
+    if (btnStationDisconnect) {
+      btnStationDisconnect.addEventListener('click', async () => {
+        btnStationDisconnect.disabled = true;
+        try {
+          const r = await fetch('/api/station/peer/disconnect', {
+            method: 'POST',
+            credentials: 'same-origin',
+          });
+          const j = await r.json();
+          applyStationFromStatus(j);
+        } catch (e) {
+          const el = document.getElementById('homeStationPeerState');
+          if (el) el.textContent = String(e);
+        } finally {
+          btnStationDisconnect.disabled = false;
+        }
+      });
+    }
+
     fetch('/api/status', { credentials: 'same-origin' }).then((r) => r.json()).then((j) => {
       const ok = j.collect_ok !== false && !j.boot_error;
       applyCollectGate(ok, j);
       applyTcpXyzFromStatus(j);
+      applyStationFromStatus(j);
     }).catch(() => {});
+    setInterval(() => { refreshStationStatus(); }, 2000);
     refreshSettingsAuth().catch(() => {});
     if (sensorsEmbedFrame) sensorsEmbedFrame.title = t('sensors.title');
 
@@ -11471,6 +11666,9 @@ def create_viz_app(
     boot_box: dict[str, Any] | None = None,
     config_path: str | None = None,
     postprocess_save_dir: str | None = None,
+    station_peer_connect: Callable[[], dict[str, Any]] | None = None,
+    station_peer_disconnect: Callable[[], dict[str, Any]] | None = None,
+    station_peer_kick: Callable[..., dict[str, Any]] | None = None,
 ) -> FastAPI:
     from sensors_dcs.auth_session import (
         auth_enabled,
@@ -11500,6 +11698,22 @@ def create_viz_app(
                 return None
             return str(err)
         return boot_error
+
+    def _station_is_slave() -> bool:
+        try:
+            p = dict(status_fn() or {})
+        except Exception:  # noqa: BLE001
+            return False
+        st = p.get("station") if isinstance(p.get("station"), dict) else {}
+        return bool(st.get("is_slave") or st.get("role") == "slave")
+
+    def _deny_slave(action: str) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "error": f"slave station cannot {action} (control from master peer only)",
+            "station_denied": True,
+            "station_control_locked": True,
+        }
 
     from pathlib import Path
 
@@ -11764,6 +11978,8 @@ def create_viz_app(
                 },
                 status_code=401,
             )
+        if _station_is_slave():
+            return JSONResponse(_deny_slave("apply-config"), status_code=403)
         try:
             path = validate_dcs_config_file(req.path)
             write_active_config_path(path)
@@ -11797,6 +12013,10 @@ def create_viz_app(
             payload.setdefault("collect_ok", True)
         # Infer tab stays reachable even when Collect is locked (no gello / agent open fail).
         payload["infer_ok"] = True
+        st = payload.get("station") if isinstance(payload.get("station"), dict) else {}
+        payload["station_control_locked"] = bool(
+            st.get("is_slave") or st.get("role") == "slave"
+        )
         return payload
 
     @app.get("/api/record/status")
@@ -11817,6 +12037,8 @@ def create_viz_app(
     async def record_start(req: RecordStartBody | None = None) -> dict[str, Any]:
         if _current_boot_error() is not None:
             return {"ok": False, "error": "collect unavailable (boot error)", "state": "idle"}
+        if _station_is_slave():
+            return _deny_slave("start recording")
         if recorder is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
         body = req or RecordStartBody()
@@ -11827,6 +12049,8 @@ def create_viz_app(
     async def record_stop(request: Request) -> dict[str, Any]:
         if _current_boot_error() is not None:
             return {"ok": False, "error": "collect unavailable (boot error)", "state": "idle"}
+        if _station_is_slave():
+            return _deny_slave("stop recording")
         if recorder is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
         # Accept JSON ``{"valid": true|false, "async_flush": true|false,
@@ -11863,9 +12087,44 @@ def create_viz_app(
     async def record_save_dir(req: SaveDirBody) -> dict[str, Any]:
         if _current_boot_error() is not None:
             return {"ok": False, "error": "collect unavailable (boot error)", "state": "idle"}
+        if _station_is_slave():
+            return _deny_slave("change save_dir")
         if recorder is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
         return recorder.set_save_dir(req.save_dir)
+
+    @app.get("/api/station/status")
+    async def station_status() -> dict[str, Any]:
+        try:
+            payload = dict(status_fn() or {})
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+        return {
+            "ok": True,
+            "station": payload.get("station"),
+            "peer": payload.get("peer") or {"link_state": "idle", "slaves": []},
+        }
+
+    @app.post("/api/station/peer/connect")
+    async def station_peer_connect_api() -> dict[str, Any]:
+        if station_peer_connect is None:
+            return {"ok": False, "error": "peer connect unavailable"}
+        return await asyncio.to_thread(station_peer_connect)
+
+    @app.post("/api/station/peer/disconnect")
+    async def station_peer_disconnect_api() -> dict[str, Any]:
+        if station_peer_disconnect is None:
+            return {"ok": False, "error": "peer disconnect unavailable"}
+        return await asyncio.to_thread(station_peer_disconnect)
+
+    @app.post("/api/station/peer/kick")
+    async def station_peer_kick_api(req: StationPeerKickBody) -> dict[str, Any]:
+        if station_peer_kick is None:
+            return {"ok": False, "error": "peer kick unavailable"}
+        sid = (req.station_id or "").strip()
+        if not sid:
+            return {"ok": False, "error": "station_id required"}
+        return await asyncio.to_thread(station_peer_kick, sid)
 
     _pp_lock = threading.Lock()
 
@@ -12049,6 +12308,8 @@ def create_viz_app(
 
     @app.post("/api/gripper/command")
     async def gripper_cmd(req: GripperCommandBody) -> dict[str, Any]:
+        if _station_is_slave():
+            return _deny_slave("gripper command")
         if gripper_command is None:
             return {"ok": False, "error": "gripper write unavailable"}
         return await asyncio.to_thread(
@@ -12067,6 +12328,8 @@ def create_viz_app(
 
     @app.post("/api/gripper/gello-sync")
     async def gripper_gello_sync_set(req: GripperGelloSyncBody) -> dict[str, Any]:
+        if _station_is_slave():
+            return _deny_slave("gripper gello sync")
         if gripper_gello_sync is None:
             return {"ok": False, "error": "gripper gello sync unavailable", "enabled": False}
         return await asyncio.to_thread(
@@ -12080,6 +12343,8 @@ def create_viz_app(
 
     @app.post("/api/arm/command")
     async def arm_cmd(req: ArmCommandBody) -> dict[str, Any]:
+        if _station_is_slave():
+            return _deny_slave("arm command")
         if arm_command is None:
             return {"ok": False, "error": "arm write unavailable"}
         return await asyncio.to_thread(
@@ -12117,6 +12382,8 @@ def create_viz_app(
 
     @app.post("/api/arm/gello-sync")
     async def arm_gello_sync_set(req: GelloArmSyncBody) -> dict[str, Any]:
+        if _station_is_slave():
+            return _deny_slave("gello arm sync")
         if gello_arm_sync is None:
             return {"ok": False, "error": "gello arm sync unavailable", "enabled": False}
         return await asyncio.to_thread(
@@ -12135,6 +12402,8 @@ def create_viz_app(
 
     @app.post("/api/arm/gello-teleop")
     async def arm_gello_teleop_set(req: GelloArmTeleopBody) -> dict[str, Any]:
+        if _station_is_slave():
+            return _deny_slave("gello arm teleop")
         if gello_arm_teleop is None:
             return {"ok": False, "error": "gello arm teleop unavailable", "enabled": False}
         return await asyncio.to_thread(
@@ -12168,6 +12437,8 @@ def create_viz_app(
                 "error": "infer unavailable (boot error)",
                 "boot_error": True,
             }
+        if _station_is_slave():
+            return _deny_slave("pi05 connect")
         if pi05_connect is None:
             return {"ok": False, "configured": False, "error": "pi05 unavailable"}
         return await asyncio.to_thread(
@@ -12186,6 +12457,8 @@ def create_viz_app(
                 "error": "infer unavailable (boot error)",
                 "boot_error": True,
             }
+        if _station_is_slave():
+            return _deny_slave("pi05 disconnect")
         if pi05_disconnect is None:
             return {"ok": False, "configured": False, "error": "pi05 unavailable"}
         body = req or Pi05AgentIdBody()
@@ -12200,6 +12473,8 @@ def create_viz_app(
                 "error": "infer unavailable (boot error)",
                 "boot_error": True,
             }
+        if _station_is_slave():
+            return _deny_slave("pi05 prompt")
         if pi05_set_prompt is None:
             return {"ok": False, "configured": False, "error": "pi05 unavailable"}
         return await asyncio.to_thread(
@@ -12215,6 +12490,8 @@ def create_viz_app(
                 "error": "infer unavailable (boot error)",
                 "boot_error": True,
             }
+        if _station_is_slave():
+            return _deny_slave("pi05 step")
         if pi05_step is None:
             return {"ok": False, "configured": False, "error": "pi05 unavailable"}
         body = req or Pi05StepBody()
@@ -12243,6 +12520,8 @@ def create_viz_app(
 
     @app.post("/api/pi05/delta-pose-offset")
     async def delta_pose_offset_post(req: DeltaPoseOffsetBody | None = None) -> dict[str, Any]:
+        if _station_is_slave():
+            return _deny_slave("delta pose offset")
         if delta_pose_offset_set is None:
             return {"ok": False, "error": "delta_pose_offset unavailable", "configured": False}
         body = req or DeltaPoseOffsetBody()
@@ -12261,6 +12540,8 @@ def create_viz_app(
 
     @app.post("/api/arm/home/set")
     async def arm_home_set_api(req: ArmHomeSetBody | None = None) -> dict[str, Any]:
+        if _station_is_slave():
+            return _deny_slave("arm home set")
         if arm_home_set is None:
             return {"ok": False, "error": "arm home unavailable"}
         body = req or ArmHomeSetBody()
@@ -12273,6 +12554,8 @@ def create_viz_app(
 
     @app.post("/api/arm/home/save")
     async def arm_home_save_api(req: ArmHomeSaveBody | None = None) -> dict[str, Any]:
+        if _station_is_slave():
+            return _deny_slave("arm home save")
         if arm_home_save is None:
             return {"ok": False, "error": "arm home unavailable"}
         body = req or ArmHomeSaveBody()
@@ -12280,6 +12563,8 @@ def create_viz_app(
 
     @app.post("/api/arm/home/go")
     async def arm_home_go_api(req: ArmHomeGoBody | None = None) -> dict[str, Any]:
+        if _station_is_slave():
+            return _deny_slave("arm home go")
         if arm_home_go is None:
             return {"ok": False, "error": "arm home unavailable"}
         body = req or ArmHomeGoBody()

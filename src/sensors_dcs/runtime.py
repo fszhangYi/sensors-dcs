@@ -86,6 +86,13 @@ class Orchestrator:
             agents=self.agents,
             site=cfg.site,
         )
+        from sensors_dcs.station_peer import StationPeer
+
+        self.peer = StationPeer(
+            cfg,
+            agents_summary_fn=self._peer_agents_summary,
+            sensors_summary_fn=self._peer_sensors_summary,
+        )
         self._stop = threading.Event()
         self._viz_thread: threading.Thread | None = None
         self._console_thread: threading.Thread | None = None
@@ -206,9 +213,36 @@ class Orchestrator:
                 except Exception:  # noqa: BLE001
                     pass
 
+    def _peer_agents_summary(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for aid, agent in self.agents.items():
+            out.append(
+                {
+                    "id": aid,
+                    "kind": getattr(agent, "kind", None) or type(agent).__name__,
+                    "sensor_id": getattr(agent, "sensor_id", None),
+                }
+            )
+        return out
+
+    def _peer_sensors_summary(self) -> dict[str, Any]:
+        try:
+            ids = list(self.manager.ids())
+        except Exception:  # noqa: BLE001
+            ids = []
+        return {
+            "site": getattr(self.manager.bundle, "site", None),
+            "dry_run": bool(getattr(self.manager.ctx, "dry_run", False)),
+            "device_ids": ids,
+        }
+
     def status(self) -> dict[str, Any]:
+        from sensors_dcs.config import station_summary
+
         return {
             "config": config_summary(self.cfg),
+            "station": station_summary(self.cfg),
+            "peer": self.peer.status(),
             "agents": {aid: a.stats() for aid, a in self.agents.items()},
             "sensors_site": self.manager.bundle.site,
             "sensors_dry_run": self.manager.ctx.dry_run,
@@ -1033,6 +1067,10 @@ class Orchestrator:
     def stop(self, *, for_shutdown: bool = False) -> None:
         # Stop viz/console first so the terminal stops "pushing" immediately.
         self._stop.set()
+        try:
+            self.peer.stop()
+        except Exception as e:  # noqa: BLE001
+            print(f"[sensors-dcs] peer stop: {e}", flush=True)
         self._arm_teleop_stop.set()
         self._arm_sync_stop.set()
         self._sync_stop.set()
@@ -3076,6 +3114,9 @@ class Orchestrator:
             boot_box=boot_box,
             postprocess_save_dir=str(self.recorder.save_dir),
             config_path=str(default_dcs_config()),
+            station_peer_connect=self.peer.connect_to_master,
+            station_peer_disconnect=self.peer.disconnect,
+            station_peer_kick=self.peer.kick_slave,
         )
         self._server = uvicorn.Server(
             uvicorn.Config(
@@ -3115,6 +3156,11 @@ class Orchestrator:
             f"save_dir={self.recorder.save_dir} episode={self.recorder.episode_index}",
             flush=True,
         )
+
+        try:
+            self.peer.start()
+        except Exception as e:  # noqa: BLE001
+            print(f"[sensors-dcs] peer start failed (local collect still ok): {e}", flush=True)
 
         try:
             self.start()

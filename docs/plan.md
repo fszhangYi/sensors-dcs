@@ -332,5 +332,6 @@ stop() / close()
 
 - 不在本仓库重写 RealSense / Dynamixel / ZMQ 驱动  
 - 不把训练数据集格式（LeRobot 等）作为首期交付  
-- 不做复杂分布式多机采集编排（仅保留旧 remote index 兼容的调研位）  
+- ~~不做复杂分布式多机采集编排~~ → 已定案见 [station-multi-machine.md](station-multi-machine.md)（一主多从、本地落盘、master 安全回退）  
+
 - 不以 Vue/React 大前端为阻塞项；先保证推送协议与最小预览
