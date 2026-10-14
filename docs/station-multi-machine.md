@@ -1,7 +1,7 @@
 # 多机主从站（LAN）方案
 
-日期：2026-10-14（时钟策略补充同日）  
-状态：P0–P3 已落地；P4 底线已定案（chrony + 紧 barrier），实现前先更新文档  
+日期：2026-10-14（P4 同日收口）  
+状态：P0–P4 底线已落地（chrony 文档 + COMMIT 先发紧 barrier）；**不做** Peer 拉取跨站后处理  
 时钟专文：[station-clock-align.md](station-clock-align.md)
 
 ## 1. 目标与硬约束
@@ -35,7 +35,8 @@ role 缺省 / master + 无已连接从站
 - 仅 master 接受 peer 入站；若对从站发起「被连接」则失败。
 - 有活跃从站时，主站开录/开推理走 **PREPARE → ACK → COMMIT** barrier；超时则 ABORT，主站也不 start。
 - **大钟差（甚至 ≥1min）**：采集与 barrier 仍可用；跨站禁止用绝对 `t_wall` 硬并，必须用相对 τ（开录 `t0` 为零时）。
-- **P4 底线**（先于精细 RTT 补偿）：现场上 chrony 缩小绝对钟差 + 缩短 barrier 关键路径；录后同步为可选。
+- **P4 底线**：chrony 运维说明 + barrier **先广播 COMMIT、再主站 local start**；录后目录同步 / RTT 补偿仍为可选、未做。
+- **跨站后处理数据**：默认拷盘 / rsync / 共享盘；**不做** Peer 自动拉 episode。
 
 ## 3. 与现状的关系
 
@@ -119,7 +120,7 @@ Stop 同理：STOP → ACK → 各自 finalize
 - **各站本地** `dcs_episode_v1`；不在采集热路径传图。
 - 事后拷到分析机；按 `session_id` 多站合并。
 - 时钟与跨站对齐策略见专文 **[station-clock-align.md](station-clock-align.md)**（chrony + barrier 零时 + 相对 τ）。
-- 二期可选：录后异步 sync 整包或只推元数据/缩略图。
+- 录后自动 sync / Peer 拉集：**不做**（见 §11）。
 
 ### 8.1 多站对齐操作约定
 
@@ -146,7 +147,7 @@ Stop 同理：STOP → ACK → 各自 finalize
 | **P1** | 从站 API/UI 权限门禁 | ✅ 已落地（`station_control_locked` + HTTP deny） |
 | **P2** | 采集/推理 barrier | ✅ 已落地（`barrier_start` / `barrier_stop`） |
 | **P3** | manifest `session_id` + 多站对齐说明/工具钩子 | ✅ 字段已写入；约定见 §8.1 / clock 专文 |
-| **P4** | **底线**：chrony 运维说明 + 缩短 barrier 热路径；**可选**：录后按 `session_id` 同步、RTT 补偿落盘 | 不碰采集推流；详见 [station-clock-align.md](station-clock-align.md) |
+| **P4** | chrony 运维说明 + `COMMIT→master start` 紧路径 | ✅ 底线已落地；可选 sync/RTT **未做**；Peer 跨站后处理 **明确不做** |
 
 回退写法约定：
 
@@ -183,12 +184,12 @@ else:
 前端：主页身份卡 + 采集/推理控制按钮置灰（预览 WS / 传感器页仍可用）。  
 Peer 直调 `RecordController`（P2 barrier）不经上述 HTTP，故不受本门禁影响。
 
-### P2 Barrier
+### P2 / P4 Barrier
 
 主站 `POST /api/record/start|stop` 经 `Orchestrator.coordinated_record_*`：
 
 - **无从站** → 直接 `RecordController`（与改前一致）
-- **有活跃从站** → `PREPARE` → 全员 `prepare_ack` → 主站本地 start → `COMMIT` → `commit_ack`；失败则 `ABORT`，主站不开录（若已开则需人工/后续 fail-stop）
+- **有活跃从站（P4 顺序）** → `PREPARE` → `prepare_ack` → **先广播 `COMMIT`** → **主站 `local_start`** → `commit_ack`；prepare 失败则 `ABORT` 且主站不开录；commit 失败则已开录的主站标 `master_started`（需停录/人工收口）
 - 停录：`STOP` → `stop_ack` → 主站 `local_stop`
 
 从站收到 peer 指令后本地落盘；HTTP 仍拒绝本地 Start/Stop。
@@ -198,6 +199,7 @@ manifest 可选字段：`session_id`、`station_id`、`station_role`、`peer_sla
 ## 11. 非目标（本期不做）
 
 - 从站实时把图像/状态推到主站落盘
+- **经 Peer 从从站拉取 episode 做跨站后处理**（数据仍靠拷盘/rsync/共享盘）
 - 自动主备切换、从站互连
 - 前端改 role/IP
 - 用从站 YAML 覆盖主站 agents/设备清单

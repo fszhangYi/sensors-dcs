@@ -1,7 +1,7 @@
 # 多机时钟对齐策略
 
 日期：2026-10-14  
-状态：定案（P4 底线：chrony + 紧 barrier；相对 τ 为跨站后处理默认）  
+状态：P4 底线已落地（chrony 运维说明 + `COMMIT→master start`）；相对 τ 为跨站后处理默认；**不做** Peer 拉集后处理  
 关联：[station-multi-machine.md](station-multi-machine.md) · [hw-timeline-align.md](hw-timeline-align.md) · [export-timeline.md](export-timeline.md)
 
 > 一句话：**用 chrony 压绝对钟差，用 barrier 的 COMMIT/开录瞬间作各站零时，后处理用相对时间 τ 合并；不选 PTP。**
@@ -122,7 +122,7 @@ t0  := 该站本集真正开始录制的时刻
 
 ## 5. 后处理：分布在两台机器上的数据怎么并
 
-### 5.1 收拢
+### 5.1 收拢（默认人工 / 离线）
 
 ```text
 sessions/<session_id>/
@@ -130,7 +130,8 @@ sessions/<session_id>/
   <station_id_slave>/episode_YYYYY/
 ```
 
-配对键是 manifest 的 **`session_id`**，不要假定两边 `episode_index` 相同。
+配对键是 manifest 的 **`session_id`**，不要假定两边 `episode_index` 相同。  
+**不**经 Peer 自动从从站拉 episode；需要时用 U 盘 / `rsync` / 共享盘。
 
 ### 5.2 时间域
 
@@ -151,41 +152,68 @@ sessions/<session_id>/
 
 ---
 
-## 6. chrony 运维要点（P4 文档底线）
+## 6. chrony 运维要点（P4 已落地文档）
 
-> 下列为策略与验收口径；具体发行版包名以现场 OS 为准。
+> 策略与验收口径；包名以现场 OS 为准。软件**不**内嵌 NTP。
 
 ### 6.1 角色
 
 - **时间源**：主站，或局域网内一台常开、稳定的机器。  
 - **客户端**：所有采集站（含主站若源在别处）。
 
-### 6.2 验收（采集前建议过一遍）
+### 6.2 示例（Debian/Ubuntu 思路）
 
-- 各站能看到正常 tracking（未长期 `Not synchronised`）。  
-- 站间墙钟差稳定在 **数毫秒～亚秒** 量级（远小于「1 分钟」故障态）。  
-- 记录：源地址、各站 offset 抽样，便于对照某次 `session_id`。
+时间源（示意：允许局域网同步，**勿对公网裸奔 `allow`**）：
 
-### 6.3 与软件的关系
+```text
+# /etc/chrony/chrony.conf 片段思路
+server ntp.aliyun.com iburst          # 或更高层可靠源
+allow 192.168.1.0/24                  # 仅实验室网段
+local stratum 10                      # 与上游断开时仍可给局域网授时（按需）
+```
+
+客户端：
+
+```text
+server <时间源局域网IP> iburst
+# 去掉冲突的默认 pool 或按现场策略保留一个上游
+```
+
+常用检查：
+
+```bash
+sudo systemctl enable --now chrony    # 或 chronyd
+chronyc tracking
+chronyc sources -v
+# 两台机上对比 date -u 与 tracking 的 System time offset
+```
+
+### 6.3 验收（采集前建议过一遍）
+
+- 各站 `chronyc tracking` 正常（未长期未同步）。  
+- 站间墙钟差稳定在 **数毫秒～亚秒**（远小于「1 分钟」故障态）。  
+- 记录源地址与各站 offset 抽样，便于对照某次 `session_id`。
+
+### 6.4 与软件的关系
 
 - **不**在 `sensors-dcs` 进程内嵌入 NTP 客户端。  
-- 软件假定：运维已尽量同步；后处理**仍默认用 τ**，不假设绝对钟完美。  
-- 无 chrony 时：**允许采集**；跨站合并必须走 τ，并预期绝对时间不可比。
+- 后处理**仍默认用 τ**，不假设绝对钟完美。  
+- 无 chrony 时：**允许采集**；跨站合并必须走 τ。
 
 ---
 
-## 7. Barrier 路径收紧（P4 底线，实现项）
+## 7. Barrier 路径收紧（P4 已落地）
 
 目标：减小 `Δ`（从站 t0 相对主站开录的滞后）。
 
-| 原则 | 说明 |
+| 原则 | 落地 |
 |------|------|
-| 重活放 PREPARE | 建目录、校验 idle、预热等放在 COMMIT 之前 |
-| COMMIT 路径要短 | 收到后尽快 `RecordController.start`，少日志/少阻塞 IO |
-| 时序 | 评估「先广播 COMMIT、主从几乎同时 start」vs「主站先 start 再 COMMIT」；以减小最大站间 Δ 为准并文档化选定顺序 |
-| 度量 | 可选：记录 `t_send_commit` / 从站 `t_recv` / `t_start`，便于估 RTT |
+| 重活放 PREPARE | 从站 prepare 只做 idle 校验；COMMIT 上尽快 `RecordController.start` |
+| 时序（已选定） | **`PREPARE → prepare_ack → 广播 COMMIT → 主站 local_start → commit_ack`** |
+| 为何先 COMMIT | 从站在包飞行期间即可开录，不必等主站 start/落盘完成 |
+| 度量 | COMMIT 带 `t_commit_send`；RTT/2 显式补偿仍为可选、未做 |
 
-当前代码路径（实现时以仓库为准）：有从站时 `PREPARE → prepare_ack → 主站 start → COMMIT → commit_ack`。P4 收紧时应对照上表评审是否调整顺序。
+代码：`StationPeer.barrier_start`（`barrier_order=commit_then_master_start`）。
 
 ---
 
@@ -207,8 +235,9 @@ sessions/<session_id>/
 | NTP vs PTP | **chrony/NTP**；不上 PTP |
 | 跨站默认时钟 | **相对 τ**（开录 t0 为零时） |
 | 大钟差（≥1min） | 采集 OK；后处理必须用 τ（或显式钟偏），禁用绝对硬并 |
-| P4 底线 | **chrony 运维说明 + 缩短 barrier 关键路径** |
-| P4 可选 | 录后 `session_id` 目录同步；RTT/2 写入 manifest |
+| P4 底线 | ✅ chrony 运维说明 + `COMMIT→master start` |
+| P4 可选（未做） | 录后 `session_id` 目录同步；RTT/2 写入 manifest |
+| Peer 拉集后处理 | **明确不做**；拷盘/rsync/共享盘 |
 | 与站内 hw_ts | 正交；先站内后跨站 |
 
 ---

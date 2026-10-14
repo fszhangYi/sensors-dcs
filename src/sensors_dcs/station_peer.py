@@ -202,7 +202,12 @@ class StationPeer:
         local_start: Callable[..., dict[str, Any]],
         timeout_s: float = BARRIER_TIMEOUT_S,
     ) -> dict[str, Any]:
-        """Master: PREPARE→ACK→local start→COMMIT→ACK. No slaves → local_start only."""
+        """Master: PREPARE→ACK→COMMIT→local start→commit ACK (P4 tight order).
+
+        Broadcast COMMIT before master ``local_start`` so slaves open during
+        network flight instead of waiting for master start to finish first.
+        No slaves → ``local_start`` only.
+        """
         if self.cfg.station.role != "master":
             return {"ok": False, "error": "barrier_start is master-only", **self.status()}
         if not self.has_active_slaves():
@@ -260,6 +265,33 @@ class StationPeer:
             "station_role": "master",
             "peer_slaves": peer_slaves,
         }
+        t_commit_send = time.time()
+        self._begin_barrier(phase="commit", expect=expect, token=token)
+        slave_meta = {"session_id": session_id, "station_role": "slave"}
+        for c in slaves:
+            if not c.send(
+                {
+                    "type": "commit",
+                    "protocol": PROTOCOL,
+                    "session_id": session_id,
+                    "token": token,
+                    "mode": mode_n,
+                    "t_start_wall": t_commit_send,
+                    "t_commit_send": t_commit_send,
+                    "session_meta": {**slave_meta, "station_id": c.station_id},
+                }
+            ):
+                self._broadcast_abort(session_id, token, reason="commit send failed")
+                with self._lock:
+                    self._link_state = "connected" if self._slaves else "listening"
+                    self._last_error = f"commit send failed to {c.station_id}"
+                return {
+                    "ok": False,
+                    "error": self._last_error,
+                    "session_id": session_id,
+                    **self.status(),
+                }
+
         local_res = local_start(mode=mode_n, session_meta=session_meta)
         if not local_res.get("ok"):
             self._broadcast_abort(
@@ -269,48 +301,11 @@ class StationPeer:
                 self._link_state = "connected" if self._slaves else "listening"
             return {**local_res, "session_id": session_id}
 
-        t_start_wall = float(local_res.get("t_start") or _now())
-        # Prefer recorder status clocks if present.
-        try:
-            t_start_wall = float(
-                (local_res.get("t_start") if "t_start" in local_res else None)
-                or time.time()
-            )
-        except (TypeError, ValueError):
-            t_start_wall = time.time()
-
-        self._begin_barrier(phase="commit", expect=expect, token=token)
-        slave_meta = {
-            "session_id": session_id,
-            "station_role": "slave",
-        }
-        for c in slaves:
-            c.send(
-                {
-                    "type": "commit",
-                    "protocol": PROTOCOL,
-                    "session_id": session_id,
-                    "token": token,
-                    "mode": mode_n,
-                    "t_start_wall": t_start_wall,
-                    "session_meta": {
-                        **slave_meta,
-                        "station_id": c.station_id,
-                    },
-                }
-            )
-
         ok_commit, commit_detail = self._wait_acks(
             expect=expect, ack_type="commit_ack", token=token, timeout_s=timeout_s
         )
         if not ok_commit:
-            # Best-effort fail-stop: abort remaining + stop local.
             self._broadcast_abort(session_id, token, reason=commit_detail)
-            try:
-                # Caller may pass stop via barrier_stop; here we only signal.
-                pass
-            except Exception:  # noqa: BLE001
-                pass
             with self._lock:
                 self._link_state = "error"
                 self._last_error = commit_detail
@@ -330,6 +325,7 @@ class StationPeer:
             "ok": True,
             "session_id": session_id,
             "barrier": True,
+            "barrier_order": "commit_then_master_start",
             **local_res,
             "peer": self.status(),
         }
