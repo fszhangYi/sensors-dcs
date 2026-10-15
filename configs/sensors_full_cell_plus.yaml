@@ -1,5 +1,5 @@
 # hik-sensors bundle — gello + DH gripper + multi RealSense + Elite arm
-# 真机工位参考配置（与 full_cell_plus.yaml 配对）
+# 真机主站设备清单（与 full_cell_plus.yaml 配对）。见 docs/station-multi-machine.md
 version: 1
 site: dcs-full-cell
 # Windows 真机：改 false；无硬件演示：true

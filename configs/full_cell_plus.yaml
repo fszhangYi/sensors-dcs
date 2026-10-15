@@ -1,6 +1,14 @@
-# sensors-dcs — gello + gripper_read + multi RealSense
+# sensors-dcs — 真机主站参考配置（gello + gripper + multi RealSense + Elite + pi05）
+# 多机主从：本文件为 master；无从站连接时行为与改前单机一致。见 docs/station-multi-machine.md
 version: 1
 site: dcs-full-cell
+
+# 主站身份（YAML 配置，前端只读回显）。整段省略 ≡ master + peer 不参与控制
+station:
+  role: master
+  id: cell-a
+  advertise_ip: 192.168.1.10  # 改成主站可路由局域网 IP（≠ bind 0.0.0.0）
+  peer_port: 7010             # 默认 = runtime.control_port；从站连此端口
 
 sensors_config: ./sensors_full_cell_plus.yaml
 # true = 合成假数据；false = 真机（串口 + RealSense serial）
@@ -26,12 +34,19 @@ record:
   save_dir: D:\data_new
   episode_index: 5
 
+home_joints_rad: [3.1402, -1.7222, 1.7864, -1.5882, 1.668, -0.0646]
+
 agents:
   - id: gello
     type: gello
     sensor_id: gello-leader
     hz: 50
     buffer_frames: 64
+  - id: gello-reinforce
+    type: gello_reinforce
+    hz: 20
+    buffer_frames: 8
+    gello_agent_id: gello
   - id: gripper-read
     type: gripper_read
     sensor_id: gripper-dh
@@ -67,9 +82,16 @@ agents:
     sensor_id: arm-elite
     hz: 5
     buffer_frames: 8
-  - id: gello-reinforce
-    type: gello_reinforce
-    hz: 20
+  - id: pi05
+    type: pi05
+    hz: 2
     buffer_frames: 8
-    gello_agent_id: gello
-
+    host: "10.111.34.10"
+    port: 5000
+    prompt: ""
+    camera_map:
+      top: cam-middle
+      chest: cam-right
+      wrist2: cam-left
+    arm_agent_id: arm
+    gripper_agent_id: gripper-read
