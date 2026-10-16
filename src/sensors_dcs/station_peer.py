@@ -24,6 +24,7 @@ PROTOCOL = "sensors-dcs-peer/v1"
 HEARTBEAT_S = 1.5
 HEARTBEAT_TIMEOUT_S = 5.0
 BARRIER_TIMEOUT_S = 8.0
+PING_TIMEOUT_S = 3.0
 RECV_BUF = 65536
 
 
@@ -75,6 +76,8 @@ class _PeerConn:
         self.state = "connecting"
         self.last_rx = _now()
         self.last_error = ""
+        self.last_rtt_ms: float | None = None
+        self.last_rtt_at: float | None = None
         self._buf = bytearray()
         self._lock = threading.Lock()
         self._closed = False
@@ -120,6 +123,8 @@ class _PeerConn:
             "state": self.state,
             "last_rx_age_s": round(max(0.0, _now() - self.last_rx), 2),
             "last_error": self.last_error or None,
+            "last_rtt_ms": self.last_rtt_ms,
+            "last_rtt_at": self.last_rtt_at,
             "agents": list(self.agents),
             "sensors_summary": dict(self.sensors_summary),
         }
@@ -159,6 +164,8 @@ class StationPeer:
         self._barrier_expect: set[str] = set()
         self._barrier_phase = ""
         self._barrier_token = ""
+        self._pong_cv = threading.Condition()
+        self._pending_pongs: dict[str, dict[str, Any]] = {}
 
     # --- public status / control -------------------------------------------------
 
@@ -200,12 +207,15 @@ class StationPeer:
         *,
         mode: str,
         local_start: Callable[..., dict[str, Any]],
+        episode_index: int | None = None,
         timeout_s: float = BARRIER_TIMEOUT_S,
     ) -> dict[str, Any]:
         """Master: PREPARE→ACK→COMMIT→local start→commit ACK (P4 tight order).
 
         Broadcast COMMIT before master ``local_start`` so slaves open during
         network flight instead of waiting for master start to finish first.
+        When ``episode_index`` is set, master and all slaves open the same
+        ``episode_NNNNN`` for cross-station consistency.
         No slaves → ``local_start`` only.
         """
         if self.cfg.station.role != "master":
@@ -217,6 +227,7 @@ class StationPeer:
         session_id = str(uuid.uuid4())
         token = str(uuid.uuid4())
         local = station_summary(self.cfg)
+        ep_assigned = int(episode_index) if episode_index is not None else None
         with self._lock:
             slaves = [c for c in self._slaves.values() if c.state == "connected"]
             self._link_state = "syncing"
@@ -229,15 +240,16 @@ class StationPeer:
         expect = {c.station_id for c in slaves}
         self._begin_barrier(phase="prepare", expect=expect, token=token)
         for c in slaves:
-            if not c.send(
-                {
-                    "type": "prepare",
-                    "protocol": PROTOCOL,
-                    "session_id": session_id,
-                    "token": token,
-                    "mode": mode_n,
-                }
-            ):
+            prep_msg: dict[str, Any] = {
+                "type": "prepare",
+                "protocol": PROTOCOL,
+                "session_id": session_id,
+                "token": token,
+                "mode": mode_n,
+            }
+            if ep_assigned is not None:
+                prep_msg["episode_index"] = ep_assigned
+            if not c.send(prep_msg):
                 self._broadcast_abort(session_id, token, reason="prepare send failed")
                 with self._lock:
                     self._link_state = "connected" if self._slaves else "listening"
@@ -259,15 +271,22 @@ class StationPeer:
                 **self.status(),
             }
 
-        session_meta = {
+        session_meta: dict[str, Any] = {
             "session_id": session_id,
             "station_id": local["id"],
             "station_role": "master",
             "peer_slaves": peer_slaves,
         }
+        if ep_assigned is not None:
+            session_meta["episode_index"] = ep_assigned
         t_commit_send = time.time()
         self._begin_barrier(phase="commit", expect=expect, token=token)
-        slave_meta = {"session_id": session_id, "station_role": "slave"}
+        slave_meta: dict[str, Any] = {
+            "session_id": session_id,
+            "station_role": "slave",
+        }
+        if ep_assigned is not None:
+            slave_meta["episode_index"] = ep_assigned
         for c in slaves:
             if not c.send(
                 {
@@ -633,6 +652,100 @@ class StationPeer:
         conn.close()
         return {"ok": True, **self.status()}
 
+    def ping_slave(
+        self, station_id: str, *, timeout_s: float = PING_TIMEOUT_S
+    ) -> dict[str, Any]:
+        """Master→slave RTT probe (ping/pong). Used to inspect LAN skew budget."""
+        if self.cfg.station.role != "master":
+            return {"ok": False, "error": "only master can ping slaves", **self.status()}
+        sid = (station_id or "").strip()
+        with self._lock:
+            conn = self._slaves.get(sid)
+        if conn is None or conn.state != "connected":
+            return {
+                "ok": False,
+                "error": f"slave not connected: {sid or '?'}",
+                **self.status(),
+            }
+        ping_id = str(uuid.uuid4())
+        t_send = _now()
+        with self._pong_cv:
+            self._pending_pongs[ping_id] = {}
+        if not conn.send(
+            {
+                "type": "ping",
+                "protocol": PROTOCOL,
+                "id": ping_id,
+                "t_send": t_send,
+                "station_id": sid,
+            }
+        ):
+            with self._pong_cv:
+                self._pending_pongs.pop(ping_id, None)
+            return {"ok": False, "error": "ping send failed", **self.status()}
+
+        deadline = _now() + max(0.2, float(timeout_s))
+        pong: dict[str, Any] | None = None
+        with self._pong_cv:
+            while _now() < deadline:
+                cur = self._pending_pongs.get(ping_id) or {}
+                if cur.get("done"):
+                    pong = dict(cur)
+                    self._pending_pongs.pop(ping_id, None)
+                    break
+                remain = deadline - _now()
+                if remain <= 0:
+                    break
+                self._pong_cv.wait(timeout=min(0.2, remain))
+            else:
+                self._pending_pongs.pop(ping_id, None)
+
+        if not pong:
+            return {
+                "ok": False,
+                "error": "pong timeout",
+                "station_id": sid,
+                **self.status(),
+            }
+
+        t_recv = float(pong.get("t_recv_local") or _now())
+        rtt_s = max(0.0, t_recv - t_send)
+        rtt_ms = round(rtt_s * 1000.0, 3)
+        one_way_ms = round(rtt_ms / 2.0, 3)
+        conn.last_rtt_ms = rtt_ms
+        conn.last_rtt_at = t_recv
+        return {
+            "ok": True,
+            "station_id": sid,
+            "ping_id": ping_id,
+            "rtt_ms": rtt_ms,
+            "one_way_ms": one_way_ms,
+            "t_send": t_send,
+            "t_recv": t_recv,
+            "slave_t_recv": pong.get("t_recv"),
+            "slave_t_send": pong.get("t_send"),
+            **self.status(),
+        }
+
+    def _note_pong(self, msg: dict[str, Any]) -> None:
+        ping_id = str(msg.get("id") or "").strip()
+        if not ping_id:
+            return
+        with self._pong_cv:
+            slot = self._pending_pongs.get(ping_id)
+            if slot is None:
+                return
+            slot.update(
+                {
+                    "done": True,
+                    "t_recv_local": _now(),
+                    "t_recv": msg.get("t_recv"),
+                    "t_send": msg.get("t_send"),
+                    "station_id": msg.get("station_id"),
+                }
+            )
+            self._pong_cv.notify_all()
+
     # --- listen / accept (master) ------------------------------------------------
 
     def _start_listen(self) -> None:
@@ -791,6 +904,22 @@ class StationPeer:
                 mtype = str(msg.get("type") or "")
                 if mtype == "heartbeat":
                     conn.send({"type": "heartbeat_ack", "protocol": PROTOCOL, "t": _now()})
+                elif mtype == "pong":
+                    if not msg.get("station_id"):
+                        msg = {**msg, "station_id": conn.station_id}
+                    self._note_pong(msg)
+                elif mtype == "ping":
+                    # Slave→master probe (optional symmetry).
+                    conn.send(
+                        {
+                            "type": "pong",
+                            "protocol": PROTOCOL,
+                            "id": msg.get("id"),
+                            "t_send": msg.get("t_send"),
+                            "t_recv": _now(),
+                            "station_id": station_summary(self.cfg)["id"],
+                        }
+                    )
                 elif mtype in ("prepare_ack", "commit_ack", "stop_ack"):
                     if not msg.get("station_id"):
                         msg = {**msg, "station_id": conn.station_id}
@@ -834,6 +963,19 @@ class StationPeer:
                     break
                 if mtype == "heartbeat_ack":
                     continue
+                if mtype == "ping":
+                    local = station_summary(self.cfg)
+                    conn.send(
+                        {
+                            "type": "pong",
+                            "protocol": PROTOCOL,
+                            "id": msg.get("id"),
+                            "t_send": msg.get("t_send"),
+                            "t_recv": _now(),
+                            "station_id": local["id"],
+                        }
+                    )
+                    continue
                 if mtype in ("prepare", "commit", "abort", "stop"):
                     self._slave_handle_control(conn, msg)
         with self._lock:
@@ -857,9 +999,18 @@ class StationPeer:
             err = ""
             if self._on_prepare is not None:
                 try:
-                    res = self._on_prepare(mode) or {}
+                    res = self._on_prepare(mode, msg) or {}
                     ready = bool(res.get("ok", True))
                     err = str(res.get("error") or "")
+                except TypeError:
+                    # Older handlers: on_prepare(mode) only.
+                    try:
+                        res = self._on_prepare(mode) or {}
+                        ready = bool(res.get("ok", True))
+                        err = str(res.get("error") or "")
+                    except Exception as e:  # noqa: BLE001
+                        ready = False
+                        err = str(e)
                 except Exception as e:  # noqa: BLE001
                     ready = False
                     err = str(e)

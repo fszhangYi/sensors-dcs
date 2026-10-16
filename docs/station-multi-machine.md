@@ -103,17 +103,18 @@ station:
 ```text
 主站 UI Start
   → syncing
-  → PREPARE{session_id, episode_hint, mode, token}
-  → 从站：建目录 / sampler 待命 → ACK{ready, t_mono, t_wall}
+  → PREPARE{session_id, episode_index, mode, token}
+  → 从站：校验 idle / episode 目录未占用 → ACK{ready, t_mono, t_wall}
   → 全员 ready（超时 → ABORT，主站不 start）
-  → COMMIT{t_start_wall?}
-  → 各站 RecordController.start
+  → COMMIT{session_meta含同一 episode_index, t_start_wall?}
+  → 各站 RecordController.start（主从同一 episode_NNNNN）
 Stop 同理：STOP → ACK → 各自 finalize
 ```
 
-- `session_id` 由主站分配；各站本地仍用 `episode_NNNNN`。
-- manifest 增加可选：`station_id`、`station_role`、`session_id`、`peer_slaves`（主站）。
+- `session_id` 与 **`episode_index`** 均由主站分配；有活跃从站时主从打开同名 `episode_NNNNN`。
+- manifest 增加可选：`station_id`、`station_role`、`session_id`、`peer_slaves`（主站）、`episode_index`（与目录名一致）。
 - 单机/无从站：不走 barrier，不强制写新字段（缺省兼容）。
+- 主站从站卡支持 **测速（ping/pong RTT）** 与踢除，用于评估开录零时的网络预算（约单向 ≈ RTT/2）。
 
 ## 8. 数据与后处理（一期）
 
@@ -135,8 +136,8 @@ Stop 同理：STOP → ACK → 各自 finalize
    - 每帧 `τ = t_wall - t0`（`t0 = manifest.t_start`）；在 **τ 域** 合并；  
    - **不要**在未同步或大钟差时用绝对 `t_wall` 硬并；  
    - chrony 用于缩小绝对差与排障，**不替代** τ 作为跨站默认；  
-   - 合并键为 `session_id`，勿假定各站 `episode_index` 相同。
-5. barrier 网络延迟导致两边 `t0` 可能差数毫秒～几十毫秒：靠 chrony + 紧 COMMIT 路径压掉；RTT/2 显式补偿为可选增强。
+   - 合并键为 `session_id`；协同开录时各站 `episode_index` 应相同（主站分配），仍建议按 `station_id` 分子目录存放以免拷盘冲突。
+5. barrier 网络延迟导致两边 `t0` 可能差数毫秒～几十毫秒：靠 chrony + 紧 COMMIT 路径压掉；主站 UI「测速」可读 RTT/2；显式写入 manifest 补偿仍为可选增强。
 6. 现有后处理 UI 仍面向**单站 save_dir**；跨站一键合并列为后续增强，不阻塞采集。
 
 ## 9. 实现分期
@@ -175,13 +176,14 @@ else:
 | POST | `/api/station/peer/connect` | 从站连主站 |
 | POST | `/api/station/peer/disconnect` | 从站断开 |
 | POST | `/api/station/peer/kick` | 主站踢从站 `{ "station_id" }` |
+| POST | `/api/station/peer/ping` | 主站对指定从站测速 `{ "station_id" }` → `rtt_ms` / `one_way_ms` |
 
 `GET /api/status` 亦含 `station` / `peer` / `station_control_locked`。无活跃从站时 master 录制路径不变。
 
 ### P1 从站门禁
 
 服务端拒绝（`station_denied`）：record start/stop/save_dir、apply-config、arm/gripper 写、gello sync/teleop、pi05 connect/step/prompt、home set/save/go、delta-pose-offset。  
-前端：主页身份卡 + 采集/推理控制按钮置灰（预览 WS / 传感器页仍可用）。  
+前端：主页身份卡 + 采集/推理/臂爪写卡控制按钮置灰（`body.station-slave-locked`；预览 WS / 传感器页仍可用）。  
 Peer 直调 `RecordController`（P2 barrier）不经上述 HTTP，故不受本门禁影响。
 
 ### P2 / P4 Barrier
@@ -189,12 +191,13 @@ Peer 直调 `RecordController`（P2 barrier）不经上述 HTTP，故不受本�
 主站 `POST /api/record/start|stop` 经 `Orchestrator.coordinated_record_*`：
 
 - **无从站** → 直接 `RecordController`（与改前一致）
-- **有活跃从站（P4 顺序）** → `PREPARE` → `prepare_ack` → **先广播 `COMMIT`** → **主站 `local_start`** → `commit_ack`；prepare 失败则 `ABORT` 且主站不开录；commit 失败则已开录的主站标 `master_started`（需停录/人工收口）
+- **有活跃从站（P4 顺序）** → `PREPARE(含 episode_index)` → `prepare_ack` → **先广播 `COMMIT`** → **主站 `local_start`** → `commit_ack`；prepare 失败则 `ABORT` 且主站不开录；commit 失败则已开录的主站标 `master_started`（需停录/人工收口）
 - 停录：`STOP` → `stop_ack` → 主站 `local_stop`
+- 主从使用同一 `episode_index`（主站当前 next index）
 
 从站收到 peer 指令后本地落盘；HTTP 仍拒绝本地 Start/Stop。
 
-manifest 可选字段：`session_id`、`station_id`、`station_role`、`peer_slaves`（单机可缺省）。
+manifest 可选字段：`session_id`、`station_id`、`station_role`、`peer_slaves`、`episode_index`（单机可缺省）。
 
 ## 11. 非目标（本期不做）
 

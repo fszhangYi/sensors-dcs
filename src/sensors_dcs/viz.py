@@ -157,6 +157,10 @@ class StationPeerKickBody(BaseModel):
     station_id: str = ""
 
 
+class StationPeerPingBody(BaseModel):
+    station_id: str = ""
+
+
 class ArmHomeSetBody(BaseModel):
     joints_rad: list[float] | None = None
     from_live: bool = False
@@ -584,6 +588,46 @@ PREVIEW_HTML = """<!DOCTYPE html>
       color: #34d399;
       border-color: rgba(52, 211, 153, 0.35);
       background: rgba(52, 211, 153, 0.08);
+    }
+    .station-slaves {
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+      margin-top: 0.75rem;
+    }
+    .station-slave-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--chrome);
+      padding: 0.55rem 0.7rem;
+      font-size: 0.82rem;
+      line-height: 1.45;
+    }
+    .station-slave-card .slave-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem 0.75rem;
+      align-items: baseline;
+      margin-bottom: 0.35rem;
+    }
+    .station-slave-card .slave-id { color: var(--accent); font-weight: 600; }
+    .station-slave-card .slave-meta { color: var(--muted); }
+    .station-slave-card .slave-rtt { font-variant-numeric: tabular-nums; }
+    .station-slave-card .slave-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      margin-top: 0.4rem;
+    }
+    .station-slave-card .slave-actions button {
+      font-size: 0.78rem;
+      padding: 0.25rem 0.55rem;
+    }
+    body.station-slave-locked button:disabled,
+    body.station-slave-locked input:disabled,
+    body.station-slave-locked select:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
     }
     .save-path {
       flex-shrink: 0;
@@ -2660,7 +2704,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <button type="button" id="btnStationConnect" data-i18n="station.connect">连接主站</button>
             <button type="button" id="btnStationDisconnect" data-i18n="station.disconnect">断开</button>
           </div>
-          <div class="rec-log" id="homeStationSlaves" hidden role="status"></div>
+          <div class="station-slaves" id="homeStationSlaves" hidden role="status"></div>
         </section>
         <section class="pp-card">
           <h2 data-i18n="home.title">sensors-dcs 是什么</h2>
@@ -3986,17 +4030,22 @@ PREVIEW_HTML = """<!DOCTYPE html>
         panel.writtenEl.textContent = String(rec.written == null ? 0 : rec.written);
       }
       const recBusy = st === 'recording' || st === 'flushing';
-      if (panel.saveDirInput) panel.saveDirInput.disabled = recBusy;
-      if (panel.btnSaveDir) panel.btnSaveDir.disabled = recBusy;
-      if (busy) return;
+      if (panel.saveDirInput) panel.saveDirInput.disabled = recBusy || stationControlLocked;
+      if (panel.btnSaveDir) panel.btnSaveDir.disabled = recBusy || stationControlLocked;
+      if (busy) {
+        if (stationControlLocked) applySlaveControlGate(true);
+        return;
+      }
       if (st === 'recording') {
         if (panel.btnStart) panel.btnStart.disabled = true;
-        if (panel.btnStop) panel.btnStop.disabled = false;
-        if (panel.btnDiscard) panel.btnDiscard.disabled = false;
+        if (panel.btnStop) panel.btnStop.disabled = stationControlLocked;
+        if (panel.btnDiscard) panel.btnDiscard.disabled = stationControlLocked;
         if (panel.runHint) {
-          panel.runHint.textContent = (panel.mode === 'infer')
-            ? t('hint.recording_infer')
-            : t('hint.recording');
+          panel.runHint.textContent = stationControlLocked
+            ? t('station.control_locked')
+            : ((panel.mode === 'infer')
+              ? t('hint.recording_infer')
+              : t('hint.recording'));
         }
       } else if (st === 'flushing') {
         if (panel.btnStart) panel.btnStart.disabled = true;
@@ -4004,11 +4053,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (panel.btnDiscard) panel.btnDiscard.disabled = true;
         if (panel.runHint) panel.runHint.textContent = t('hint.flushing');
       } else {
-        if (panel.btnStart) panel.btnStart.disabled = false;
+        if (panel.btnStart) panel.btnStart.disabled = stationControlLocked;
         if (panel.btnStop) panel.btnStop.disabled = true;
         if (panel.btnDiscard) panel.btnDiscard.disabled = true;
         if (panel.runHint) {
-          if (flushN > 0) {
+          if (stationControlLocked) {
+            panel.runHint.textContent = t('station.control_locked');
+          } else if (flushN > 0) {
             panel.runHint.textContent = t('hint.async_flushing', {
               n: flushN,
               ep: panel.episodeEl ? panel.episodeEl.textContent : '—',
@@ -4020,6 +4071,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           }
         }
       }
+      if (stationControlLocked) applySlaveControlGate(true);
     }
 
     function syncFlowRecBadge(rec) {
@@ -7391,15 +7443,19 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
     function applySlaveControlGate(locked) {
       stationControlLocked = !!locked;
+      document.body.classList.toggle('station-slave-locked', stationControlLocked);
       const tip = stationControlLocked ? t('station.control_locked') : '';
       const ids = [
         'btnStart', 'btnStop', 'btnDiscard', 'btnSaveDir', 'saveDirInput',
         'chkQuickCollect', 'chkAsyncFlush',
         'infBtnStart', 'infBtnStop', 'infBtnDiscard',
+        'infChkQuickCollect', 'infChkAsyncFlush',
         'flowBtnStart', 'flowBtnStop', 'flowBtnDiscard',
-        'infFlowRun', 'infFlowPause', 'infFlowResume', 'infFlowStop',
+        'flowChkQuickCollect', 'flowChkAsyncFlush',
+        'infFlowRun', 'infFlowPause', 'infFlowResume', 'infFlowStop', 'infFlowPrepare',
         'infPi05Connect', 'infPi05Disconnect', 'infPi05Step', 'infPi05Loop',
-        'infPi05LoopPause', 'infPi05LoopResume',
+        'infPi05LoopPause', 'infPi05LoopResume', 'infPi05PromptApply',
+        'infArmSend', 'infArmHome',
         'infDeltaPoseOffsetEnable', 'infDeltaPoseOffsetZero',
         'btnArmHomeGo', 'btnArmHomeSet', 'btnArmHomeSave',
         'btnArmAbsSend', 'btnArmDisarm', 'btnArmStop',
@@ -7414,10 +7470,19 @@ PREVIEW_HTML = """<!DOCTYPE html>
           if (tip) el.title = tip;
         }
       });
-      document.querySelectorAll('.inf-delta-cell').forEach((el) => {
+      const dynSel = [
+        '.inf-delta-cell',
+        '.arm-arm', '.arm-disarm', '.arm-estop', '.arm-gello-sync', '.arm-gello-teleop',
+        '.arm-minus', '.arm-plus', '.arm-delta', '.arm-abs-send', '.arm-home-go',
+        '.arm-abs-input', '.arm-abs-t-min', '.arm-abs-t-max', '.arm-abs-v-norm',
+        '.arm-abs-jerk-frac', '.arm-abs-accel-frac',
+        '.grip-init', '.grip-sync', '.grip-send', '.grip-norm',
+      ].join(',');
+      document.querySelectorAll(dynSel).forEach((el) => {
         if (stationControlLocked) {
           el.disabled = true;
           el.setAttribute('aria-disabled', 'true');
+          if (tip && el.title !== tip) el.title = tip;
         }
       });
       const hint = document.getElementById('runHint');
@@ -8709,32 +8774,122 @@ PREVIEW_HTML = """<!DOCTYPE html>
         || (j && (j.link_state != null || Array.isArray(j.slaves)) ? j : {})
         || {};
       const link = peer.link_state || peer.state || 'idle';
+      const peerErr = (peer.last_error || j.error || '').toString().trim();
       if (peerStateEl) {
         const key = 'station.link_' + link;
         const label = t(key);
-        peerStateEl.textContent = label !== key ? label : link;
+        const base = label !== key ? label : link;
+        // Keep connect failure detail visible (was wiped by 2s refresh showing only「错误」).
+        peerStateEl.textContent = (link === 'error' && peerErr) ? (base + ' — ' + peerErr) : base;
       }
       if (actions) actions.hidden = role !== 'slave';
       if (slavesEl) {
         const list = Array.isArray(peer.slaves) ? peer.slaves : [];
-        if (role === 'master' && list.length) {
+        if (role === 'master') {
           slavesEl.hidden = false;
-          slavesEl.textContent = list.map((s) => {
-            const sid = (s && (s.id || s.station_id)) || '?';
-            const sip = (s && (s.advertise_ip || s.ip)) || '';
-            const sst = (s && (s.state || s.link_state)) || '';
-            return sid + (sip ? (' @ ' + sip) : '') + (sst ? (' [' + sst + ']') : '');
-          }).join('\\n');
-        } else if (role === 'master') {
-          slavesEl.hidden = false;
-          slavesEl.textContent = t('station.slaves_none');
+          renderStationSlaves(slavesEl, list);
         } else {
           slavesEl.hidden = true;
+          slavesEl.innerHTML = '';
         }
       }
       const locked = !!(st && (st.is_slave || st.role === 'slave'))
         || !!(j && j.station_control_locked);
       applySlaveControlGate(locked);
+    }
+
+    function renderStationSlaves(root, list) {
+      if (!root) return;
+      if (!list.length) {
+        root.innerHTML = '<div class="slave-meta" data-i18n-skip="1">' + t('station.slaves_none') + '</div>';
+        return;
+      }
+      root.innerHTML = list.map((s) => {
+        const sid = String((s && (s.id || s.station_id)) || '?');
+        const sip = String((s && (s.advertise_ip || s.ip)) || '');
+        const sst = String((s && (s.state || s.link_state)) || '');
+        const rtt = (s && s.last_rtt_ms != null && Number.isFinite(Number(s.last_rtt_ms)))
+          ? Number(s.last_rtt_ms)
+          : null;
+        const oneWay = rtt != null ? (rtt / 2) : null;
+        const rttText = rtt != null
+          ? t('station.rtt_value', {
+              rtt: rtt.toFixed(2),
+              one: oneWay.toFixed(2),
+            })
+          : t('station.rtt_none');
+        const sidEsc = sid.replace(/"/g, '&quot;');
+        return (
+          '<div class="station-slave-card" data-station-id="' + sidEsc + '">' +
+            '<div class="slave-head">' +
+              '<span class="slave-id">' + sid.replace(/</g, '&lt;') + '</span>' +
+              '<span class="slave-meta">' +
+                (sip ? ('@ ' + sip.replace(/</g, '&lt;') + ' ') : '') +
+                (sst ? ('[' + sst.replace(/</g, '&lt;') + ']') : '') +
+              '</span>' +
+            '</div>' +
+            '<div class="slave-rtt slave-meta">' + rttText + '</div>' +
+            '<div class="slave-actions">' +
+              '<button type="button" class="btn-slave-ping" data-station-id="' + sidEsc + '">' +
+                t('station.ping') + '</button>' +
+              '<button type="button" class="btn-slave-kick" data-station-id="' + sidEsc + '">' +
+                t('station.kick') + '</button>' +
+            '</div>' +
+          '</div>'
+        );
+      }).join('');
+      root.querySelectorAll('.btn-slave-ping').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const sid = btn.getAttribute('data-station-id') || '';
+          btn.disabled = true;
+          try {
+            const r = await fetch('/api/station/peer/ping', {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ station_id: sid }),
+            }).then((x) => x.json());
+            applyStationFromStatus(r);
+            const card = btn.closest('.station-slave-card');
+            const rttEl = card && card.querySelector('.slave-rtt');
+            if (rttEl) {
+              if (r && r.ok) {
+                rttEl.textContent = t('station.rtt_value', {
+                  rtt: Number(r.rtt_ms).toFixed(2),
+                  one: Number(r.one_way_ms).toFixed(2),
+                });
+              } else {
+                rttEl.textContent = t('station.ping_fail', {
+                  error: (r && r.error) || 'ping failed',
+                });
+              }
+            }
+          } catch (e) {
+            const card = btn.closest('.station-slave-card');
+            const rttEl = card && card.querySelector('.slave-rtt');
+            if (rttEl) rttEl.textContent = t('station.ping_fail', { error: String(e) });
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      });
+      root.querySelectorAll('.btn-slave-kick').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const sid = btn.getAttribute('data-station-id') || '';
+          btn.disabled = true;
+          try {
+            const r = await fetch('/api/station/peer/kick', {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ station_id: sid }),
+            }).then((x) => x.json());
+            applyStationFromStatus(r);
+          } catch (e) {
+            btn.disabled = false;
+          }
+        });
+      });
     }
 
     function refreshStationStatus() {
@@ -10801,11 +10956,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
             ? '<span class="cmd-hint">推理页不提供 gello→夹爪同步</span>'
             : '<span class="cmd-hint">同步=服务端 gello j6(cal)→夹爪；前端只开关</span>');
         card.appendChild(box);
+        if (stationControlLocked) applySlaveControlGate(true);
         const btn = box.querySelector('.grip-send');
         const initBtn = box.querySelector('.grip-init');
         const syncBtn = box.querySelector('.grip-sync');
         const inp = box.querySelector('.grip-norm');
         const setManualEnabled = (on) => {
+          if (stationControlLocked) {
+            btn.disabled = true;
+            inp.disabled = true;
+            return;
+          }
           btn.disabled = !on;
           inp.disabled = !on;
         };
@@ -10994,6 +11155,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             : '<span class="cmd-hint">须先有 robot·Read；Arm →「同步」对齐 →「摇操」跟随；解除后 gello 不再控臂</span>');
         card.appendChild(box);
         applyDomI18n(box);
+        if (stationControlLocked) applySlaveControlGate(true);
         const delta = box.querySelector('.arm-delta');
         const deltaVal = box.querySelector('.arm-delta-val');
         const armedTag = box.querySelector('.arm-armed-tag');
@@ -11669,6 +11831,7 @@ def create_viz_app(
     station_peer_connect: Callable[[], dict[str, Any]] | None = None,
     station_peer_disconnect: Callable[[], dict[str, Any]] | None = None,
     station_peer_kick: Callable[..., dict[str, Any]] | None = None,
+    station_peer_ping: Callable[..., dict[str, Any]] | None = None,
     record_start_fn: Callable[..., dict[str, Any]] | None = None,
     record_stop_fn: Callable[..., dict[str, Any]] | None = None,
 ) -> FastAPI:
@@ -12129,6 +12292,15 @@ def create_viz_app(
         if not sid:
             return {"ok": False, "error": "station_id required"}
         return await asyncio.to_thread(station_peer_kick, sid)
+
+    @app.post("/api/station/peer/ping")
+    async def station_peer_ping_api(req: StationPeerPingBody) -> dict[str, Any]:
+        if station_peer_ping is None:
+            return {"ok": False, "error": "peer ping unavailable"}
+        sid = (req.station_id or "").strip()
+        if not sid:
+            return {"ok": False, "error": "station_id required"}
+        return await asyncio.to_thread(station_peer_ping, sid)
 
     _pp_lock = threading.Lock()
 

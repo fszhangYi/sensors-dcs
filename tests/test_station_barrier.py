@@ -189,3 +189,63 @@ def test_record_manifest_session_meta(tmp_path) -> None:
     assert man["station_role"] == "master"
     assert man["peer_slaves"][0]["id"] == "slave-b"
     rec.stop(valid=True, async_flush=False)
+
+
+def test_barrier_assigns_shared_episode_index(linked_peers, tmp_path) -> None:
+    master, slave = linked_peers
+    master_rec = RecordController(
+        RecordConfig(save_dir=str(tmp_path / "m"), episode_index=7, queue_maxsize=8),
+        agents={},
+        site="m",
+    )
+    slave_rec = RecordController(
+        RecordConfig(save_dir=str(tmp_path / "s"), episode_index=99, queue_maxsize=8),
+        agents={},
+        site="s",
+    )
+
+    def on_prepare(mode: str, body=None) -> dict[str, Any]:
+        body = body or {}
+        assert body.get("episode_index") == 7
+        return {"ok": True, "mode": mode}
+
+    def on_commit(mode: str, meta: dict[str, Any]) -> dict[str, Any]:
+        assert meta.get("episode_index") == 7
+        return slave_rec.start(mode=mode, session_meta=meta)
+
+    slave.bind_record_handlers(
+        on_prepare=on_prepare,
+        on_commit=on_commit,
+        on_stop=lambda body: slave_rec.stop(
+            valid=bool(body.get("valid", True)),
+            async_flush=False,
+            keep_files=True,
+        ),
+    )
+
+    r = master.barrier_start(
+        mode="collect",
+        local_start=master_rec.start,
+        episode_index=7,
+    )
+    assert r.get("ok") is True, r
+    assert (tmp_path / "m" / "episode_00007").is_dir()
+    assert (tmp_path / "s" / "episode_00007").is_dir()
+    assert slave_rec.episode_index == 7
+    assert master_rec.status().get("episode_index") == 7
+
+    s = master.barrier_stop(local_stop=master_rec.stop, valid=True)
+    assert s.get("ok") is True, s
+
+
+def test_ping_slave_rtt(linked_peers) -> None:
+    master, slave = linked_peers
+    sid = "slave-b"
+    r = master.ping_slave(sid)
+    assert r.get("ok") is True, r
+    assert r.get("station_id") == sid
+    assert isinstance(r.get("rtt_ms"), (int, float))
+    assert r["rtt_ms"] >= 0
+    assert r.get("one_way_ms") == round(float(r["rtt_ms"]) / 2.0, 3)
+    slaves = master.status().get("slaves") or []
+    assert slaves and slaves[0].get("last_rtt_ms") is not None

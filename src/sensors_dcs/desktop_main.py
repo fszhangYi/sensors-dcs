@@ -202,11 +202,25 @@ def main(argv: list[str] | None = None) -> None:
         boot_box=boot_box,
         config_path=str(cfg_path),
         postprocess_save_dir=str(orch.recorder.save_dir),
+        station_peer_connect=orch.peer.connect_to_master,
+        station_peer_disconnect=orch.peer.disconnect,
+        station_peer_kick=orch.peer.kick_slave,
+        station_peer_ping=orch.peer.ping_slave,
+        record_start_fn=orch.coordinated_record_start,
+        record_stop_fn=orch.coordinated_record_stop,
     )
     orch.cfg.runtime.viz_port = port
 
     def _boot_agents() -> None:
         try:
+            # Same as Orchestrator.serve(): master must listen peer before agents.
+            try:
+                orch.peer.start()
+            except Exception as e:  # noqa: BLE001
+                print(
+                    f"[sensors-dcs] peer start failed (local collect still ok): {e}",
+                    flush=True,
+                )
             orch.start()
             boot_box["error"] = None
             print(

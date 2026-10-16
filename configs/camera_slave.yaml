@@ -1,0 +1,35 @@
+# sensors-dcs — 真机从站参考配置（单路 RealSense）
+# 多机主从：本文件为 slave；连主站 192.168.50.1:7010。见 docs/station-multi-machine.md
+version: 1
+site: dcs-camera-slave
+
+# 从站身份（YAML 配置，前端只读回显）
+station:
+  role: slave
+  id: cell-b
+  advertise_ip: 192.168.50.2   # 本机可路由局域网 IP（≠ bind 0.0.0.0）
+  master_ip: 192.168.50.1      # 主站 peer 地址
+  master_port: 7010            # 默认 = 主站 runtime.control_port / peer_port
+
+sensors_config: ./sensors_camera_slave.yaml
+# true = 合成预览图；false = 真机（serial=218622279681）
+dry_run: false
+
+runtime:
+  control_host: "0.0.0.0"
+  control_port: 7010
+  viz_host: "0.0.0.0"
+  viz_port: 7011
+  viz_hz: 15
+  console_hz: 5
+
+record:
+  save_dir: D:\data_new
+  episode_index: 0
+
+agents:
+  - id: camera
+    type: realsense
+    sensor_id: rs-main
+    hz: 60
+    buffer_frames: 2

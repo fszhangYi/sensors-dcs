@@ -1,0 +1,24 @@
+# hik-sensors bundle — 从站单路 RealSense（与 camera_slave.yaml 配对）
+# 见 docs/station-multi-machine.md
+version: 1
+site: dcs-camera-slave
+dry_run: false
+
+defaults:
+  realsense:
+    width: 640
+    height: 480
+    fps: 30
+    exposure: 200
+    gain: 64
+    enable_depth: true
+    align_to_color: true
+    timeout_ms: 5000
+
+devices:
+  - id: rs-main
+    kind: realsense
+    name: "RealSense · Main"
+    params:
+      role: middle
+      serial: "218622279681"

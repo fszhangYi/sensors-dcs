@@ -158,7 +158,25 @@ class RecordController:
                     "error": f"cannot start while state={self.state}",
                     **self._status_unlocked(),
                 }
-            ep = self.episode_index
+            # Master barrier may assign the same episode_index to all stations.
+            if "episode_index" in meta and meta["episode_index"] is not None:
+                try:
+                    ep = int(meta["episode_index"])
+                except (TypeError, ValueError):
+                    return {
+                        "ok": False,
+                        "error": f"invalid session_meta.episode_index: {meta['episode_index']!r}",
+                        **self._status_unlocked(),
+                    }
+                if ep < 0:
+                    return {
+                        "ok": False,
+                        "error": "episode_index must be >= 0",
+                        **self._status_unlocked(),
+                    }
+                self.episode_index = ep
+            else:
+                ep = self.episode_index
             ep_dir = _episode_dir(self.save_dir, ep)
             if ep_dir.exists():
                 return {
@@ -525,7 +543,7 @@ class RecordController:
             "format": "dcs_episode_v1",
         }
         meta = dict(session_meta or {})
-        for key in ("session_id", "station_id", "station_role", "peer_slaves"):
+        for key in ("session_id", "station_id", "station_role", "peer_slaves", "episode_index"):
             if key in meta and meta[key] is not None:
                 manifest[key] = meta[key]
         if provisional:

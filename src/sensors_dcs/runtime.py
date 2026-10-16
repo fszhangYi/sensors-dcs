@@ -242,10 +242,29 @@ class Orchestrator:
             "device_ids": ids,
         }
 
-    def _peer_on_prepare(self, mode: str) -> dict[str, Any]:
+    def _peer_on_prepare(
+        self, mode: str, body: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         st = self.recorder.status()
         if st.get("state") != "idle":
             return {"ok": False, "error": f"recorder busy state={st.get('state')}"}
+        body = body or {}
+        if body.get("episode_index") is not None:
+            try:
+                ep = int(body["episode_index"])
+            except (TypeError, ValueError):
+                return {
+                    "ok": False,
+                    "error": f"invalid episode_index: {body.get('episode_index')!r}",
+                }
+            from sensors_dcs.record import _episode_dir
+
+            ep_dir = _episode_dir(self.recorder.save_dir, ep)
+            if ep_dir.exists():
+                return {
+                    "ok": False,
+                    "error": f"episode dir already exists: {ep_dir}",
+                }
         return {"ok": True, "mode": mode}
 
     def _peer_on_commit(self, mode: str, session_meta: dict[str, Any]) -> dict[str, Any]:
@@ -270,7 +289,11 @@ class Orchestrator:
     def coordinated_record_start(self, *, mode: str = "collect") -> dict[str, Any]:
         """Master with slaves → barrier; otherwise legacy RecordController.start."""
         if self.peer.has_active_slaves():
-            return self.peer.barrier_start(mode=mode, local_start=self.recorder.start)
+            return self.peer.barrier_start(
+                mode=mode,
+                local_start=self.recorder.start,
+                episode_index=int(self.recorder.episode_index),
+            )
         return self.recorder.start(mode=mode)
 
     def coordinated_record_stop(
@@ -3172,6 +3195,7 @@ class Orchestrator:
             station_peer_connect=self.peer.connect_to_master,
             station_peer_disconnect=self.peer.disconnect,
             station_peer_kick=self.peer.kick_slave,
+            station_peer_ping=self.peer.ping_slave,
             record_start_fn=self.coordinated_record_start,
             record_stop_fn=self.coordinated_record_stop,
         )
