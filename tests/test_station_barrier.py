@@ -247,5 +247,27 @@ def test_ping_slave_rtt(linked_peers) -> None:
     assert isinstance(r.get("rtt_ms"), (int, float))
     assert r["rtt_ms"] >= 0
     assert r.get("one_way_ms") == round(float(r["rtt_ms"]) / 2.0, 3)
+    assert r.get("clock_offset_est_ms") is None or isinstance(
+        r.get("clock_offset_est_ms"), (int, float)
+    )
     slaves = master.status().get("slaves") or []
     assert slaves and slaves[0].get("last_rtt_ms") is not None
+
+
+def test_probe_slave_zero_time_budget(linked_peers, tmp_path) -> None:
+    master, slave = linked_peers
+    # Point both peers at writable save dirs for mkdir probe.
+    master.cfg.record.save_dir = str(tmp_path / "m")
+    slave.cfg.record.save_dir = str(tmp_path / "s")
+    sid = "slave-b"
+    r = master.probe_slave(sid)
+    assert r.get("ok") is True, r
+    assert r.get("rtt_ms") is not None
+    assert r.get("one_way_ms") is not None
+    assert r.get("slave_start_overhead_ms") is not None
+    assert r.get("master_commit_to_start_ms") is not None
+    assert r.get("delta_est_ms") is not None
+    assert float(r["delta_est_ms"]) >= float(r["one_way_ms"])
+    slaves = master.status().get("slaves") or []
+    assert slaves and slaves[0].get("last_probe")
+    assert slaves[0]["last_probe"].get("delta_est_ms") is not None

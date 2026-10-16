@@ -1,10 +1,10 @@
 # 主从站测速与开录零时偏斜预算
 
 日期：2026-10-16  
-状态：P0 已落地（peer ping/pong RTT + 从站管理卡）；增强项（开销分解 / chrony）待做  
+状态：**P0+增强已落地**（多采样 ping、干跑 `latency_probe`、Δ 分解、peer 钟差粗估、可选 chrony 只读）  
 关联：[station-multi-machine.md](station-multi-machine.md) · [station-clock-align.md](station-clock-align.md)
 
-> 一句话：**测速回答「开录零时的网络与调度预算大概多少」；不替代录完后各站 `manifest.t_start` / τ 对账，也不替代 chrony。**
+> 一句话：**测速回答「开录零时的网络与调度预算大概多少」；不替代录完后各站 `manifest.t_start` / τ 对账，也不把 peer 钟差估当成 chrony 真值。**
 
 ---
 
@@ -61,9 +61,29 @@
 有活跃从站时 barrier 由主站分配同一 `episode_index`（PREPARE/COMMIT/`session_meta`），主从打开同名 `episode_NNNNN`。  
 从站本地采集/写臂等按钮置灰（`station_control_locked` + `body.station-slave-locked`）。
 
-### 2.5 P0 能回答 / 不能回答
+### 2.5 增强后能力（主站「测速」→ `probe_slave`）
 
-| 问题 | P0 测速 |
+| 问题 | 现状 |
+|------|------|
+| 控制面 RTT / 约单向网络预算？ | ✅ 5 次采样取中位 |
+| 从站 start 调度开销？ | ✅ 干跑 `latency_probe`（mkdir 近似，不落 episode） |
+| 主站 COMMIT→local_start 时序？ | ✅ 发 probe 后本机同样干跑，记 `master_commit_to_start_ms` |
+| 两机墙钟差？ | ⚠️ peer NTP 式 `clock_offset_est_ms`（参考）；`chronyc tracking` 可读则附带 |
+| 某次真实开录的 `t_start` 差？ | ❌（需对账 episode） |
+
+展示：
+
+```text
+Δ_est ≈ one_way(RTT/2)
+      + slave_start_overhead_ms
+      + master_commit_to_start_ms
+```
+
+API：`POST /api/station/peer/probe`（UI 主按钮）；轻量 `POST /api/station/peer/ping` 仍保留。
+
+### 2.6 P0 仅 ping 时能回答 / 不能回答（历史）
+
+| 问题 | 仅 ping |
 |------|---------|
 | 控制面 RTT / 约单向网络预算？ | ✅ |
 | 从站 start 调度开销？ | ❌ |
@@ -73,7 +93,7 @@
 
 ---
 
-## 3. 开录零时四成分评估（增强设计依据）
+## 3. 开录零时四成分评估（设计依据，已按 §3.7 落地）
 
 针对「前四点能否进测速」的结论（2026-10-16）：
 
@@ -130,11 +150,11 @@
 - 单次 ping 墙钟差冒充 chrony 钟差
 - 用测速替代 τ 域后处理对齐
 
-### 3.7 推荐落地顺序
+### 3.7 落地顺序（已完成）
 
-1. **轻量测速加强**：RTT + RTT/2 + 主站本地时间戳占位（含 §3.3）  
-2. **干跑探针**：模拟 COMMIT 路径量 §3.2 + §3.3，从站不落盘或临时目录即删  
-3. **钟差**：peer 粗估可选；旁路「chrony 状态」只读  
+1. ✅ 轻量测速加强：多采样 RTT + RTT/2 + peer 钟差粗估  
+2. ✅ 干跑探针：`latency_probe` / `latency_probe_ack`，save_dir 下 `.peer_latency_probe/` 即删  
+3. ✅ 钟差：`clock_offset_est_ms` + 可选 `_read_chrony_tracking()`  
 
 ---
 
@@ -154,11 +174,11 @@
 
 | 模块 | 路径 |
 |------|------|
-| ping/pong / `ping_slave` | `src/sensors_dcs/station_peer.py` |
-| API | `POST /api/station/peer/ping`（`viz.py`） |
+| ping/pong / `ping_slave` / `probe_slave` | `src/sensors_dcs/station_peer.py` |
+| API | `POST /api/station/peer/ping` · `POST /api/station/peer/probe`（`viz.py`） |
 | 从站卡 UI | `viz.py` `renderStationSlaves` + `ui_i18n.py` |
 | 桌面接线 | `desktop_main.py` |
-| 测试 | `tests/test_station_barrier.py::test_ping_slave_rtt` |
+| 测试 | `test_ping_slave_rtt` · `test_probe_slave_zero_time_budget` |
 | 拓扑 / barrier / episode | [station-multi-machine.md](station-multi-machine.md) |
 
 ---
@@ -168,4 +188,4 @@
 | 日期 | 内容 |
 |------|------|
 | 2026-10-15 | P0：peer ping/pong、从站管理卡、桌面 `peer.start`、主站分配 `episode_index` |
-| 2026-10-16 | 本文：沉淀 P0 口径 + 四成分增强评估与推荐顺序 |
+| 2026-10-16 | 本文：沉淀 P0 口径 + 四成分增强评估；落地 `probe_slave` Δ 分解 |

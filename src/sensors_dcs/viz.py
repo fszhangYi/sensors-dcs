@@ -161,6 +161,10 @@ class StationPeerPingBody(BaseModel):
     station_id: str = ""
 
 
+class StationPeerProbeBody(BaseModel):
+    station_id: str = ""
+
+
 class ArmHomeSetBody(BaseModel):
     joints_rad: list[float] | None = None
     from_live: bool = False
@@ -8798,6 +8802,36 @@ PREVIEW_HTML = """<!DOCTYPE html>
       applySlaveControlGate(locked);
     }
 
+    function formatSlaveProbeDetail(probe, rttFallback) {
+      if (!probe && (rttFallback == null || !Number.isFinite(rttFallback))) {
+        return t('station.rtt_none');
+      }
+      const rtt = probe && probe.rtt_ms != null ? Number(probe.rtt_ms) : Number(rttFallback);
+      const one = probe && probe.one_way_ms != null
+        ? Number(probe.one_way_ms)
+        : (Number.isFinite(rtt) ? rtt / 2 : null);
+      let html = t('station.rtt_value', {
+        rtt: Number.isFinite(rtt) ? rtt.toFixed(2) : '—',
+        one: one != null && Number.isFinite(one) ? one.toFixed(2) : '—',
+      });
+      if (probe && probe.delta_est_ms != null && Number.isFinite(Number(probe.delta_est_ms))) {
+        html += '<br/>' + t('station.delta_est', {
+          delta: Number(probe.delta_est_ms).toFixed(2),
+          slave: probe.slave_start_overhead_ms != null
+            ? Number(probe.slave_start_overhead_ms).toFixed(2) : '—',
+          master: probe.master_commit_to_start_ms != null
+            ? Number(probe.master_commit_to_start_ms).toFixed(2) : '—',
+        });
+      }
+      if (probe && probe.clock_offset_est_ms != null
+          && Number.isFinite(Number(probe.clock_offset_est_ms))) {
+        html += '<br/>' + t('station.clock_offset_est', {
+          offset: Number(probe.clock_offset_est_ms).toFixed(2),
+        });
+      }
+      return html;
+    }
+
     function renderStationSlaves(root, list) {
       if (!root) return;
       if (!list.length) {
@@ -8808,16 +8842,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const sid = String((s && (s.id || s.station_id)) || '?');
         const sip = String((s && (s.advertise_ip || s.ip)) || '');
         const sst = String((s && (s.state || s.link_state)) || '');
-        const rtt = (s && s.last_rtt_ms != null && Number.isFinite(Number(s.last_rtt_ms)))
-          ? Number(s.last_rtt_ms)
-          : null;
-        const oneWay = rtt != null ? (rtt / 2) : null;
-        const rttText = rtt != null
-          ? t('station.rtt_value', {
-              rtt: rtt.toFixed(2),
-              one: oneWay.toFixed(2),
-            })
-          : t('station.rtt_none');
+        const probe = (s && s.last_probe) || null;
+        const rtt = (probe && probe.rtt_ms != null)
+          ? Number(probe.rtt_ms)
+          : ((s && s.last_rtt_ms != null && Number.isFinite(Number(s.last_rtt_ms)))
+            ? Number(s.last_rtt_ms) : null);
+        const detailHtml = formatSlaveProbeDetail(probe, rtt);
         const sidEsc = sid.replace(/"/g, '&quot;');
         return (
           '<div class="station-slave-card" data-station-id="' + sidEsc + '">' +
@@ -8828,46 +8858,49 @@ PREVIEW_HTML = """<!DOCTYPE html>
                 (sst ? ('[' + sst.replace(/</g, '&lt;') + ']') : '') +
               '</span>' +
             '</div>' +
-            '<div class="slave-rtt slave-meta">' + rttText + '</div>' +
+            '<div class="slave-rtt slave-meta">' + detailHtml + '</div>' +
             '<div class="slave-actions">' +
-              '<button type="button" class="btn-slave-ping" data-station-id="' + sidEsc + '">' +
-                t('station.ping') + '</button>' +
+              '<button type="button" class="btn-slave-probe" data-station-id="' + sidEsc + '">' +
+                t('station.probe') + '</button>' +
               '<button type="button" class="btn-slave-kick" data-station-id="' + sidEsc + '">' +
                 t('station.kick') + '</button>' +
             '</div>' +
           '</div>'
         );
       }).join('');
-      root.querySelectorAll('.btn-slave-ping').forEach((btn) => {
+      root.querySelectorAll('.btn-slave-probe').forEach((btn) => {
         btn.addEventListener('click', async () => {
           const sid = btn.getAttribute('data-station-id') || '';
           btn.disabled = true;
+          const card = btn.closest('.station-slave-card');
+          const rttEl = card && card.querySelector('.slave-rtt');
+          if (rttEl) rttEl.textContent = t('station.probe_busy');
           try {
-            const r = await fetch('/api/station/peer/ping', {
+            const r = await fetch('/api/station/peer/probe', {
               method: 'POST',
               credentials: 'same-origin',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ station_id: sid }),
             }).then((x) => x.json());
             applyStationFromStatus(r);
-            const card = btn.closest('.station-slave-card');
-            const rttEl = card && card.querySelector('.slave-rtt');
             if (rttEl) {
               if (r && r.ok) {
-                rttEl.textContent = t('station.rtt_value', {
-                  rtt: Number(r.rtt_ms).toFixed(2),
-                  one: Number(r.one_way_ms).toFixed(2),
-                });
+                rttEl.innerHTML = formatSlaveProbeDetail({
+                  rtt_ms: r.rtt_ms,
+                  one_way_ms: r.one_way_ms,
+                  slave_start_overhead_ms: r.slave_start_overhead_ms,
+                  master_commit_to_start_ms: r.master_commit_to_start_ms,
+                  delta_est_ms: r.delta_est_ms,
+                  clock_offset_est_ms: r.clock_offset_est_ms,
+                }, Number(r.rtt_ms));
               } else {
-                rttEl.textContent = t('station.ping_fail', {
-                  error: (r && r.error) || 'ping failed',
+                rttEl.textContent = t('station.probe_fail', {
+                  error: (r && r.error) || 'probe failed',
                 });
               }
             }
           } catch (e) {
-            const card = btn.closest('.station-slave-card');
-            const rttEl = card && card.querySelector('.slave-rtt');
-            if (rttEl) rttEl.textContent = t('station.ping_fail', { error: String(e) });
+            if (rttEl) rttEl.textContent = t('station.probe_fail', { error: String(e) });
           } finally {
             btn.disabled = false;
           }
@@ -11832,6 +11865,7 @@ def create_viz_app(
     station_peer_disconnect: Callable[[], dict[str, Any]] | None = None,
     station_peer_kick: Callable[..., dict[str, Any]] | None = None,
     station_peer_ping: Callable[..., dict[str, Any]] | None = None,
+    station_peer_probe: Callable[..., dict[str, Any]] | None = None,
     record_start_fn: Callable[..., dict[str, Any]] | None = None,
     record_stop_fn: Callable[..., dict[str, Any]] | None = None,
 ) -> FastAPI:
@@ -12301,6 +12335,15 @@ def create_viz_app(
         if not sid:
             return {"ok": False, "error": "station_id required"}
         return await asyncio.to_thread(station_peer_ping, sid)
+
+    @app.post("/api/station/peer/probe")
+    async def station_peer_probe_api(req: StationPeerProbeBody) -> dict[str, Any]:
+        if station_peer_probe is None:
+            return {"ok": False, "error": "peer probe unavailable"}
+        sid = (req.station_id or "").strip()
+        if not sid:
+            return {"ok": False, "error": "station_id required"}
+        return await asyncio.to_thread(station_peer_probe, sid)
 
     _pp_lock = threading.Lock()
 

@@ -7,10 +7,13 @@ not affect local record/infer (master single-machine fallback).
 from __future__ import annotations
 
 import json
+import shutil
 import socket
+import subprocess
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Callable
 
 from sensors_dcs.config import (
@@ -25,11 +28,75 @@ HEARTBEAT_S = 1.5
 HEARTBEAT_TIMEOUT_S = 5.0
 BARRIER_TIMEOUT_S = 8.0
 PING_TIMEOUT_S = 3.0
+PROBE_TIMEOUT_S = 5.0
 RECV_BUF = 65536
 
 
 def _now() -> float:
     return time.time()
+
+
+def _local_start_probe(save_dir: str | Path) -> dict[str, Any]:
+    """Cheap mkdir/write/rmdir approximating RecordController.start disk work (no agents)."""
+    t0 = time.monotonic()
+    root = Path(save_dir)
+    base = root / ".peer_latency_probe"
+    err: str | None = None
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        d = base / f"probe_{uuid.uuid4().hex[:12]}"
+        d.mkdir(parents=True, exist_ok=False)
+        (d / "states").mkdir()
+        (d / "cameras").mkdir()
+        (d / "manifest.json").write_text(
+            json.dumps({"provisional": True, "probe": True}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        shutil.rmtree(d, ignore_errors=True)
+    except Exception as e:  # noqa: BLE001
+        err = str(e)
+    overhead_ms = round(max(0.0, (time.monotonic() - t0) * 1000.0), 3)
+    out: dict[str, Any] = {"overhead_ms": overhead_ms}
+    if err:
+        out["error"] = err
+    return out
+
+
+def _read_chrony_tracking() -> dict[str, Any] | None:
+    """Best-effort ``chronyc tracking`` parse (may be absent on Windows / no chrony)."""
+    try:
+        proc = subprocess.run(
+            ["chronyc", "tracking"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            check=False,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return {"ok": False, "error": (proc.stderr or proc.stdout or "").strip()[:200]}
+    info: dict[str, Any] = {"ok": True, "raw_lines": []}
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        info["raw_lines"].append(line)
+        if ":" not in line:
+            continue
+        key, _, val = line.partition(":")
+        key_n = key.strip().lower()
+        val_n = val.strip()
+        if "last offset" in key_n:
+            info["last_offset"] = val_n
+        elif key_n == "system time" or "system time" in key_n:
+            info["system_time"] = val_n
+        elif "rms offset" in key_n:
+            info["rms_offset"] = val_n
+        elif key_n.startswith("reference") or "reference" in key_n:
+            info.setdefault("reference", val_n)
+    info["raw_lines"] = info["raw_lines"][:12]
+    return info
 
 
 def _json_line(obj: dict[str, Any]) -> bytes:
@@ -78,6 +145,7 @@ class _PeerConn:
         self.last_error = ""
         self.last_rtt_ms: float | None = None
         self.last_rtt_at: float | None = None
+        self.last_probe: dict[str, Any] | None = None
         self._buf = bytearray()
         self._lock = threading.Lock()
         self._closed = False
@@ -125,6 +193,7 @@ class _PeerConn:
             "last_error": self.last_error or None,
             "last_rtt_ms": self.last_rtt_ms,
             "last_rtt_at": self.last_rtt_at,
+            "last_probe": dict(self.last_probe) if self.last_probe else None,
             "agents": list(self.agents),
             "sensors_summary": dict(self.sensors_summary),
         }
@@ -166,6 +235,8 @@ class StationPeer:
         self._barrier_token = ""
         self._pong_cv = threading.Condition()
         self._pending_pongs: dict[str, dict[str, Any]] = {}
+        self._probe_cv = threading.Condition()
+        self._pending_probes: dict[str, dict[str, Any]] = {}
 
     # --- public status / control -------------------------------------------------
 
@@ -653,9 +724,13 @@ class StationPeer:
         return {"ok": True, **self.status()}
 
     def ping_slave(
-        self, station_id: str, *, timeout_s: float = PING_TIMEOUT_S
+        self,
+        station_id: str,
+        *,
+        timeout_s: float = PING_TIMEOUT_S,
+        samples: int = 1,
     ) -> dict[str, Any]:
-        """Master→slave RTT probe (ping/pong). Used to inspect LAN skew budget."""
+        """Master→slave RTT probe (ping/pong). Optional multi-sample + clock offset est."""
         if self.cfg.station.role != "master":
             return {"ok": False, "error": "only master can ping slaves", **self.status()}
         sid = (station_id or "").strip()
@@ -667,6 +742,180 @@ class StationPeer:
                 "error": f"slave not connected: {sid or '?'}",
                 **self.status(),
             }
+        n = max(1, min(11, int(samples)))
+        rows: list[dict[str, Any]] = []
+        for _ in range(n):
+            one = self._ping_once(conn, sid, timeout_s=timeout_s)
+            if not one.get("ok"):
+                if not rows:
+                    return {**one, **self.status()}
+                break
+            rows.append(one)
+
+        if not rows:
+            return {"ok": False, "error": "ping failed", "station_id": sid, **self.status()}
+
+        rows_sorted = sorted(rows, key=lambda r: float(r["rtt_ms"]))
+        mid = rows_sorted[len(rows_sorted) // 2]
+        rtt_ms = float(mid["rtt_ms"])
+        one_way_ms = round(rtt_ms / 2.0, 3)
+        offsets = [float(r["clock_offset_est_ms"]) for r in rows if r.get("clock_offset_est_ms") is not None]
+        offset_ms = None
+        if offsets:
+            offsets.sort()
+            offset_ms = round(offsets[len(offsets) // 2], 3)
+
+        conn.last_rtt_ms = rtt_ms
+        conn.last_rtt_at = float(mid.get("t_recv") or _now())
+        out = {
+            "ok": True,
+            "station_id": sid,
+            "rtt_ms": rtt_ms,
+            "one_way_ms": one_way_ms,
+            "samples": len(rows),
+            "clock_offset_est_ms": offset_ms,
+            "clock_offset_note": "peer NTP-style estimate; asymmetric RTT pollutes — reference only",
+            "t_send": mid.get("t_send"),
+            "t_recv": mid.get("t_recv"),
+            "slave_t_recv": mid.get("slave_t_recv"),
+            "chrony": _read_chrony_tracking(),
+            **self.status(),
+        }
+        return out
+
+    def probe_slave(
+        self, station_id: str, *, timeout_s: float = PROBE_TIMEOUT_S
+    ) -> dict[str, Any]:
+        """Full zero-time budget probe: RTT + slave start-like overhead + master COMMIT→start proxy.
+
+        Does not open a real episode. See docs/station-peer-latency-probe.md.
+        """
+        if self.cfg.station.role != "master":
+            return {"ok": False, "error": "only master can probe slaves", **self.status()}
+        sid = (station_id or "").strip()
+        with self._lock:
+            conn = self._slaves.get(sid)
+        if conn is None or conn.state != "connected":
+            return {
+                "ok": False,
+                "error": f"slave not connected: {sid or '?'}",
+                **self.status(),
+            }
+
+        ping = self.ping_slave(sid, samples=5, timeout_s=min(timeout_s, PING_TIMEOUT_S))
+        if not ping.get("ok"):
+            return ping
+
+        probe_id = str(uuid.uuid4())
+        t_commit_send = _now()
+        t_commit_send_mono = time.monotonic()
+        with self._probe_cv:
+            self._pending_probes[probe_id] = {}
+        if not conn.send(
+            {
+                "type": "latency_probe",
+                "protocol": PROTOCOL,
+                "id": probe_id,
+                "t_commit_send": t_commit_send,
+                "station_id": sid,
+            }
+        ):
+            with self._probe_cv:
+                self._pending_probes.pop(probe_id, None)
+            return {"ok": False, "error": "latency_probe send failed", **self.status()}
+
+        # §3.3 proxy: after COMMIT send, master runs local start-like work (mkdir probe).
+        master_probe = _local_start_probe(self.cfg.record.save_dir)
+        t_master_start = _now()
+        t_master_start_mono = time.monotonic()
+        master_commit_to_start_ms = round(
+            max(0.0, (t_master_start_mono - t_commit_send_mono) * 1000.0), 3
+        )
+
+        deadline = _now() + max(0.5, float(timeout_s))
+        ack: dict[str, Any] | None = None
+        with self._probe_cv:
+            while _now() < deadline:
+                cur = self._pending_probes.get(probe_id) or {}
+                if cur.get("done"):
+                    ack = dict(cur)
+                    self._pending_probes.pop(probe_id, None)
+                    break
+                remain = deadline - _now()
+                if remain <= 0:
+                    break
+                self._probe_cv.wait(timeout=min(0.2, remain))
+            else:
+                self._pending_probes.pop(probe_id, None)
+
+        if not ack:
+            return {
+                "ok": False,
+                "error": "latency_probe_ack timeout",
+                "station_id": sid,
+                "ping": ping,
+                **self.status(),
+            }
+
+        slave_overhead_ms = ack.get("slave_overhead_ms")
+        try:
+            slave_overhead_ms = round(float(slave_overhead_ms), 3)
+        except (TypeError, ValueError):
+            slave_overhead_ms = None
+
+        one_way = float(ping.get("one_way_ms") or 0.0)
+        parts = [one_way, master_commit_to_start_ms]
+        if slave_overhead_ms is not None:
+            parts.append(float(slave_overhead_ms))
+        delta_est_ms = round(sum(parts), 3)
+
+        breakdown = {
+            "one_way_ms": one_way,
+            "slave_start_overhead_ms": slave_overhead_ms,
+            "master_commit_to_start_ms": master_commit_to_start_ms,
+            "delta_est_ms": delta_est_ms,
+            "clock_offset_est_ms": ping.get("clock_offset_est_ms"),
+            "chrony": ping.get("chrony"),
+            "note": (
+                "Δ_est ≈ one_way + slave_start_overhead + master_commit_to_start; "
+                "clock_offset_est is reference-only; not a substitute for τ alignment"
+            ),
+        }
+        probe_out = {
+            "ok": True,
+            "station_id": sid,
+            "rtt_ms": ping.get("rtt_ms"),
+            "one_way_ms": one_way,
+            "samples": ping.get("samples"),
+            "clock_offset_est_ms": ping.get("clock_offset_est_ms"),
+            "slave_start_overhead_ms": slave_overhead_ms,
+            "master_commit_to_start_ms": master_commit_to_start_ms,
+            "master_start_probe_ms": master_probe.get("overhead_ms"),
+            "delta_est_ms": delta_est_ms,
+            "breakdown": breakdown,
+            "t_commit_send": t_commit_send,
+            "t_master_start": t_master_start,
+            "slave_t_recv": ack.get("t_recv"),
+            "slave_t_ready": ack.get("t_ready"),
+            "chrony": ping.get("chrony"),
+            **self.status(),
+        }
+        conn.last_rtt_ms = float(ping.get("rtt_ms") or 0.0)
+        conn.last_rtt_at = _now()
+        conn.last_probe = {
+            "rtt_ms": probe_out["rtt_ms"],
+            "one_way_ms": one_way,
+            "slave_start_overhead_ms": slave_overhead_ms,
+            "master_commit_to_start_ms": master_commit_to_start_ms,
+            "delta_est_ms": delta_est_ms,
+            "clock_offset_est_ms": ping.get("clock_offset_est_ms"),
+            "at": _now(),
+        }
+        return probe_out
+
+    def _ping_once(
+        self, conn: _PeerConn, sid: str, *, timeout_s: float
+    ) -> dict[str, Any]:
         ping_id = str(uuid.uuid4())
         t_send = _now()
         with self._pong_cv:
@@ -682,7 +931,7 @@ class StationPeer:
         ):
             with self._pong_cv:
                 self._pending_pongs.pop(ping_id, None)
-            return {"ok": False, "error": "ping send failed", **self.status()}
+            return {"ok": False, "error": "ping send failed", "station_id": sid}
 
         deadline = _now() + max(0.2, float(timeout_s))
         pong: dict[str, Any] | None = None
@@ -696,35 +945,37 @@ class StationPeer:
                 remain = deadline - _now()
                 if remain <= 0:
                     break
-                self._pong_cv.wait(timeout=min(0.2, remain))
+                self._pong_cv.wait(timeout=min(0.05, remain))
             else:
                 self._pending_pongs.pop(ping_id, None)
 
         if not pong:
-            return {
-                "ok": False,
-                "error": "pong timeout",
-                "station_id": sid,
-                **self.status(),
-            }
+            return {"ok": False, "error": "pong timeout", "station_id": sid}
 
         t_recv = float(pong.get("t_recv_local") or _now())
         rtt_s = max(0.0, t_recv - t_send)
         rtt_ms = round(rtt_s * 1000.0, 3)
-        one_way_ms = round(rtt_ms / 2.0, 3)
-        conn.last_rtt_ms = rtt_ms
-        conn.last_rtt_at = t_recv
+        slave_t_recv = pong.get("t_recv")
+        # NTP-style: t1=t_send, t2=slave_t_recv, t3=slave_t_send≈t2, t4=t_recv
+        # offset ≈ ((t2-t1)+(t3-t4))/2
+        offset_ms = None
+        try:
+            t2 = float(slave_t_recv)
+            t3 = float(pong.get("t_send_slave") if pong.get("t_send_slave") is not None else t2)
+            offset_s = ((t2 - t_send) + (t3 - t_recv)) / 2.0
+            offset_ms = round(offset_s * 1000.0, 3)
+        except (TypeError, ValueError):
+            offset_ms = None
         return {
             "ok": True,
             "station_id": sid,
             "ping_id": ping_id,
             "rtt_ms": rtt_ms,
-            "one_way_ms": one_way_ms,
+            "one_way_ms": round(rtt_ms / 2.0, 3),
             "t_send": t_send,
             "t_recv": t_recv,
-            "slave_t_recv": pong.get("t_recv"),
-            "slave_t_send": pong.get("t_send"),
-            **self.status(),
+            "slave_t_recv": slave_t_recv,
+            "clock_offset_est_ms": offset_ms,
         }
 
     def _note_pong(self, msg: dict[str, Any]) -> None:
@@ -741,10 +992,47 @@ class StationPeer:
                     "t_recv_local": _now(),
                     "t_recv": msg.get("t_recv"),
                     "t_send": msg.get("t_send"),
+                    "t_send_slave": msg.get("t_send_slave"),
                     "station_id": msg.get("station_id"),
                 }
             )
             self._pong_cv.notify_all()
+
+    def _note_probe_ack(self, msg: dict[str, Any]) -> None:
+        probe_id = str(msg.get("id") or "").strip()
+        if not probe_id:
+            return
+        with self._probe_cv:
+            slot = self._pending_probes.get(probe_id)
+            if slot is None:
+                return
+            slot.update({"done": True, **msg})
+            self._probe_cv.notify_all()
+
+    def _handle_latency_probe(self, conn: _PeerConn, msg: dict[str, Any]) -> None:
+        """Slave (or master if probed): dry start-like mkdir probe, no episode."""
+        local = station_summary(self.cfg)
+        t_recv = _now()
+        t_recv_mono = time.monotonic()
+        probe = _local_start_probe(self.cfg.record.save_dir)
+        t_ready = _now()
+        t_ready_mono = time.monotonic()
+        overhead_ms = round(max(0.0, (t_ready_mono - t_recv_mono) * 1000.0), 3)
+        conn.send(
+            {
+                "type": "latency_probe_ack",
+                "protocol": PROTOCOL,
+                "id": msg.get("id"),
+                "station_id": local["id"],
+                "ok": True,
+                "t_recv": t_recv,
+                "t_ready": t_ready,
+                "t_recv_mono": t_recv_mono,
+                "t_ready_mono": t_ready_mono,
+                "slave_overhead_ms": overhead_ms,
+                "probe_mkdir_ms": probe.get("overhead_ms"),
+            }
+        )
 
     # --- listen / accept (master) ------------------------------------------------
 
@@ -908,18 +1196,26 @@ class StationPeer:
                     if not msg.get("station_id"):
                         msg = {**msg, "station_id": conn.station_id}
                     self._note_pong(msg)
+                elif mtype == "latency_probe_ack":
+                    if not msg.get("station_id"):
+                        msg = {**msg, "station_id": conn.station_id}
+                    self._note_probe_ack(msg)
                 elif mtype == "ping":
                     # Slave→master probe (optional symmetry).
+                    t_recv = _now()
                     conn.send(
                         {
                             "type": "pong",
                             "protocol": PROTOCOL,
                             "id": msg.get("id"),
                             "t_send": msg.get("t_send"),
-                            "t_recv": _now(),
+                            "t_recv": t_recv,
+                            "t_send_slave": t_recv,
                             "station_id": station_summary(self.cfg)["id"],
                         }
                     )
+                elif mtype == "latency_probe":
+                    self._handle_latency_probe(conn, msg)
                 elif mtype in ("prepare_ack", "commit_ack", "stop_ack"):
                     if not msg.get("station_id"):
                         msg = {**msg, "station_id": conn.station_id}
@@ -965,16 +1261,21 @@ class StationPeer:
                     continue
                 if mtype == "ping":
                     local = station_summary(self.cfg)
+                    t_recv = _now()
                     conn.send(
                         {
                             "type": "pong",
                             "protocol": PROTOCOL,
                             "id": msg.get("id"),
                             "t_send": msg.get("t_send"),
-                            "t_recv": _now(),
+                            "t_recv": t_recv,
+                            "t_send_slave": t_recv,
                             "station_id": local["id"],
                         }
                     )
+                    continue
+                if mtype == "latency_probe":
+                    self._handle_latency_probe(conn, msg)
                     continue
                 if mtype in ("prepare", "commit", "abort", "stop"):
                     self._slave_handle_control(conn, msg)

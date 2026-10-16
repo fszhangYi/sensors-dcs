@@ -176,7 +176,8 @@ else:
 | POST | `/api/station/peer/connect` | 从站连主站 |
 | POST | `/api/station/peer/disconnect` | 从站断开 |
 | POST | `/api/station/peer/kick` | 主站踢从站 `{ "station_id" }` |
-| POST | `/api/station/peer/ping` | 主站对指定从站测速 `{ "station_id" }` → `rtt_ms` / `one_way_ms` |
+| POST | `/api/station/peer/ping` | 主站轻量 ping `{ "station_id" }` → `rtt_ms` / `one_way_ms` / `clock_offset_est_ms` |
+| POST | `/api/station/peer/probe` | 主站完整测速（RTT + 干跑开销 + Δ估）→ 见 [station-peer-latency-probe.md](station-peer-latency-probe.md) |
 
 `GET /api/status` 亦含 `station` / `peer` / `station_control_locked`。无活跃从站时 master 录制路径不变。
 

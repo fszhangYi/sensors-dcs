@@ -3196,6 +3196,7 @@ class Orchestrator:
             station_peer_disconnect=self.peer.disconnect,
             station_peer_kick=self.peer.kick_slave,
             station_peer_ping=self.peer.ping_slave,
+            station_peer_probe=self.peer.probe_slave,
             record_start_fn=self.coordinated_record_start,
             record_stop_fn=self.coordinated_record_stop,
         )

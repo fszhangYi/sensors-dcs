@@ -206,6 +206,7 @@ def main(argv: list[str] | None = None) -> None:
         station_peer_disconnect=orch.peer.disconnect,
         station_peer_kick=orch.peer.kick_slave,
         station_peer_ping=orch.peer.ping_slave,
+        station_peer_probe=orch.peer.probe_slave,
         record_start_fn=orch.coordinated_record_start,
         record_stop_fn=orch.coordinated_record_stop,
     )
