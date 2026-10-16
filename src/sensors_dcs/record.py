@@ -684,6 +684,7 @@ class RecordController:
                 "color_shape": pl.get("color_shape"),
                 "depth_shape": pl.get("depth_shape"),
                 "enable_depth": pl.get("enable_depth"),
+                "depth_scale": pl.get("depth_scale"),
                 "color_timestamp": pl.get("color_timestamp"),
                 "depth_timestamp": pl.get("depth_timestamp"),
                 "color_timestamp_domain": pl.get("color_timestamp_domain"),

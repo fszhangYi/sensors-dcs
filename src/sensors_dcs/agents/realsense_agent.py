@@ -52,6 +52,23 @@ def _depth_png_b64(depth: np.ndarray) -> str:
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
+def _hconcat_color_depth(color: np.ndarray, depth_bgr: np.ndarray) -> np.ndarray:
+    """Side-by-side color | colorized depth (show_d405 layout)."""
+    import cv2
+
+    panels = [np.asarray(color), np.asarray(depth_bgr)]
+    height = min(int(p.shape[0]) for p in panels)
+    resized = []
+    for panel in panels:
+        if panel.ndim == 2:
+            panel = cv2.cvtColor(panel, cv2.COLOR_GRAY2BGR)
+        elif panel.shape[2] == 4:
+            panel = cv2.cvtColor(panel, cv2.COLOR_BGRA2BGR)
+        w = int(panel.shape[1] * height / max(panel.shape[0], 1))
+        resized.append(cv2.resize(panel, (max(w, 1), height), interpolation=cv2.INTER_AREA))
+    return np.hstack(resized)
+
+
 class RealSenseAgent(BaseAgent):
     """Agent for hik-sensors ``kind=realsense`` — color (+ optional depth) via JPEG/PNG."""
 
@@ -113,28 +130,44 @@ class RealSenseAgent(BaseAgent):
         depth_png_b64 = None
         shape = None
         depth_shape = None
-        if color is not None:
-            arr = np.asarray(color)
-            shape = list(arr.shape)
-            # Full-resolution JPEG for episode write (matches sensor width/height).
-            jpeg_b64 = _jpeg_b64(
-                arr,
-                quality=self.jpeg_quality,
-                max_width=None,
-            )
-            # Downscaled copy only for WebSocket viz (keeps WS light).
-            jpeg_b64_preview = _jpeg_b64(
-                arr,
-                quality=self.viz_jpeg_quality,
-                max_width=self.viz_max_width,
-            )
-
-        depth = sample.get("depth")
         enable_depth = bool(
             sample.get("enable_depth")
             if sample.get("enable_depth") is not None
             else getattr(self.sensor, "enable_depth", False)
         )
+        depth = sample.get("depth")
+        depth_colorized = sample.get("depth_colorized")
+
+        if color is not None:
+            arr = np.asarray(color)
+            shape = list(arr.shape)
+            # Full-resolution JPEG for episode write / pi05 (color only).
+            jpeg_b64 = _jpeg_b64(
+                arr,
+                quality=self.jpeg_quality,
+                max_width=None,
+            )
+            # Viz preview: color | rs.colorizer depth when available (show_d405).
+            preview_img = arr
+            preview_max_w = self.viz_max_width
+            if (
+                enable_depth
+                and not dry
+                and depth_colorized is not None
+            ):
+                try:
+                    preview_img = _hconcat_color_depth(arr, np.asarray(depth_colorized))
+                    # Two panels side-by-side → allow ~2× width so each stays readable.
+                    if preview_max_w is not None:
+                        preview_max_w = int(preview_max_w) * 2
+                except Exception:  # noqa: BLE001
+                    preview_img = arr
+            jpeg_b64_preview = _jpeg_b64(
+                preview_img,
+                quality=self.viz_jpeg_quality,
+                max_width=preview_max_w,
+            )
+
         if enable_depth and depth is not None and not dry:
             try:
                 darr = np.asarray(depth)
@@ -156,6 +189,9 @@ class RealSenseAgent(BaseAgent):
             "enable_depth": enable_depth,
             "depth_shape": depth_shape,
             "depth_png_b64": depth_png_b64,
+            "depth_scale": sample.get("depth_scale")
+            if sample.get("depth_scale") is not None
+            else getattr(self.sensor, "depth_scale", None),
             "dry_run": dry,
             "synth": bool(sample.get("synth")),
             # Persisted for audit / future align; timeline still keys on t_wall.

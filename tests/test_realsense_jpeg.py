@@ -4,7 +4,7 @@ import base64
 
 import numpy as np
 
-from sensors_dcs.agents.realsense_agent import _jpeg_b64
+from sensors_dcs.agents.realsense_agent import _hconcat_color_depth, _jpeg_b64
 
 
 def test_jpeg_full_res_keeps_native_size() -> None:
@@ -31,3 +31,14 @@ def test_jpeg_preview_downscales() -> None:
     assert arr is not None
     assert arr.shape[1] == 427
     assert arr.shape[0] == 240  # 720 * 427/1280
+
+
+def test_hconcat_color_depth_side_by_side() -> None:
+    color = np.zeros((48, 64, 3), dtype=np.uint8)
+    color[:, :, 2] = 200
+    depth = np.zeros((48, 64, 3), dtype=np.uint8)
+    depth[:, :, 0] = 200
+    out = _hconcat_color_depth(color, depth)
+    assert out.shape[0] == 48
+    assert out.shape[1] == 128
+    assert out.shape[2] == 3
