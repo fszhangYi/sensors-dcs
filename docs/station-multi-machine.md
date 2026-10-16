@@ -214,4 +214,5 @@ manifest 可选字段：`session_id`、`station_id`、`station_role`、`peer_sla
 |------|------|
 | 本文 | 主从拓扑、权限、barrier、分期与 API |
 | [station-clock-align.md](station-clock-align.md) | 多机时钟：chrony、相对 τ、barrier 偏斜、后处理合并 |
+| [station-peer-latency-probe.md](station-peer-latency-probe.md) | 测速 P0（ping/RTT）+ 开录零时四成分增强评估 |
 | [hw-timeline-align.md](hw-timeline-align.md) | **单站内**相机 hw_ts 对齐（与跨站正交） |
