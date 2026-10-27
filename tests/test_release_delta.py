@@ -24,11 +24,29 @@ def test_compare_and_delta_zip(tmp_path: Path) -> None:
     _write(baseline / "sensors-dcs.exe", b"exe-v1")
     _write(baseline / "_internal" / "mod.pyd", b"mod-v1")
     _write(baseline / "README.txt", b"readme-v1")
+    _write(
+        baseline / "_internal" / "numpy" / "__pycache__" / "version.cpython-310.pyc",
+        b"pyc-v1",
+    )
 
     _write(current / "sensors-dcs.exe", b"exe-v2")
     _write(current / "_internal" / "mod.pyd", b"mod-v1")
     _write(current / "_internal" / "new.dll", b"new")
     _write(current / "README.txt", b"readme-v2")
+    _write(
+        current / "_internal" / "numpy" / "__pycache__" / "version.cpython-310.pyc",
+        b"pyc-v2-different",
+    )
+    _write(
+        current
+        / "_internal"
+        / "sensors_src"
+        / "sensors"
+        / "cs66_kinematics"
+        / "示教器信息"
+        / "IMG.HEIC",
+        b"should-not-enter-delta",
+    )
 
     baseline_files = scan_release(baseline)
     current_files = scan_release(current)
@@ -38,6 +56,10 @@ def test_compare_and_delta_zip(tmp_path: Path) -> None:
     assert "_internal/new.dll" in added
     assert removed == []
     assert "BUILD_INFO.json" not in changed
+    assert any("__pycache__" in s for s in skipped)
+    assert any(s.endswith(".HEIC") or s.endswith(".heic") for s in skipped)
+    assert not any(p.endswith(".pyc") for p in changed + added)
+    assert not any("示教器信息" in p for p in changed + added)
 
     write_manifest(baseline)
     write_manifest(current)
@@ -55,6 +77,8 @@ def test_compare_and_delta_zip(tmp_path: Path) -> None:
         assert "_internal/new.dll" in names
         assert "README.txt" in names
         assert "_internal/mod.pyd" not in names
+        assert not any(n.endswith(".pyc") for n in names)
+        assert not any("示教器信息" in n for n in names)
         info = json.loads(zf.read("DELTA_INFO.json"))
         assert info["baseline_release"] == baseline.name
         assert info["current_release"] == current.name

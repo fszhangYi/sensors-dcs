@@ -8,6 +8,7 @@ from PyInstaller.utils.hooks import collect_submodules
 
 ROOT = Path(SPECPATH).resolve().parent  # noqa: F821
 sys.path.insert(0, str(ROOT / "packaging"))
+from bundle_filters import collect_filtered_datas  # noqa: E402
 from hardware_bundle import extend_analysis  # noqa: E402
 
 SRC = ROOT / "src"
@@ -18,15 +19,16 @@ SENSORS_CFG = (ROOT / "sensors" / "configs").resolve()
 if not SENSORS_CFG.is_dir():
     SENSORS_CFG = (ROOT.parent / "sensors" / "configs").resolve()
 
-datas = [
-    (str(ROOT / "configs"), "configs"),
+datas: list = [
     (str(SRC / "sensors_dcs" / "static"), "sensors_dcs/static"),
 ]
 binaries: list = []
+# Filtered trees: drop checkpoints / cs66 research media (HEIC/docx/示教器…).
+datas += collect_filtered_datas(ROOT / "configs", "configs")
 if SENSORS_SRC.is_dir():
-    datas.append((str(SENSORS_SRC / "sensors"), "sensors_src/sensors"))
+    datas += collect_filtered_datas(SENSORS_SRC / "sensors", "sensors_src/sensors")
 if SENSORS_CFG.is_dir():
-    datas.append((str(SENSORS_CFG), "sensors/configs"))
+    datas += collect_filtered_datas(SENSORS_CFG, "sensors/configs")
 
 frontend_dist = ROOT / "packaging" / "frontend-dist-stub"
 if frontend_dist.is_dir():

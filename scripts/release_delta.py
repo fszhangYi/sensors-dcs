@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 import time
 import zipfile
 from dataclasses import asdict, dataclass
@@ -19,6 +20,9 @@ DELTA_INFO_NAME = "DELTA_INFO.json"
 
 # Metadata files that change every build but are not needed for runtime overlay.
 SKIP_DELTA_PATHS = frozenset({MANIFEST_NAME, "BUILD_INFO.json"})
+
+sys.path.insert(0, str(ROOT / "packaging"))
+from bundle_filters import should_skip_delta_path  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -109,7 +113,7 @@ def compare_manifests(
     skipped: list[str] = []
 
     for rel, entry in sorted(current_files.items()):
-        if rel in SKIP_DELTA_PATHS:
+        if rel in SKIP_DELTA_PATHS or should_skip_delta_path(rel):
             skipped.append(rel)
             continue
         base = baseline_files.get(rel)
@@ -119,7 +123,7 @@ def compare_manifests(
             changed.append(rel)
 
     for rel in sorted(baseline_files):
-        if rel in SKIP_DELTA_PATHS:
+        if rel in SKIP_DELTA_PATHS or should_skip_delta_path(rel):
             continue
         if rel not in current_files:
             removed.append(rel)
