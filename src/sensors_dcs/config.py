@@ -77,6 +77,50 @@ class GelloArmSyncConfig(BaseModel):
     max_ramp_rounds: int = 3
 
 
+class GripperGelloSyncConfig(BaseModel):
+    """Server-side gello joint → gripper write (UI toggles on/off).
+
+    Defaults match DH AG95 ``position_norm`` (~0..0.637). For 慧灵 with J7 in mm,
+    set ``command_as: position_mm`` and ``clamp_max: 65`` (see configs/g26562.yaml).
+    ``clamp_min`` / ``clamp_max`` null = no bound on that side.
+    """
+
+    clamp_min: float | None = 0.0
+    clamp_max: float | None = 0.637
+    command_as: Literal["position_norm", "position_mm"] = "position_norm"
+
+    @field_validator("clamp_min", "clamp_max", mode="before")
+    @classmethod
+    def _optional_float(cls, v: Any) -> float | None:
+        if v is None or v == "":
+            return None
+        f = float(v)
+        if f != f or f in (float("inf"), float("-inf")):
+            raise ValueError("clamp_min/clamp_max must be finite or null")
+        return f
+
+    @field_validator("command_as", mode="before")
+    @classmethod
+    def _command_as(cls, v: Any) -> str:
+        s = str(v if v is not None else "position_norm").strip().lower()
+        if s in ("norm", "position"):
+            s = "position_norm"
+        if s in ("mm", "position_mm_s"):
+            s = "position_mm"
+        if s not in ("position_norm", "position_mm"):
+            raise ValueError(
+                "gripper_gello_sync.command_as must be position_norm or position_mm"
+            )
+        return s
+
+    @model_validator(mode="after")
+    def _min_le_max(self) -> GripperGelloSyncConfig:
+        lo, hi = self.clamp_min, self.clamp_max
+        if lo is not None and hi is not None and float(lo) > float(hi):
+            raise ValueError("gripper_gello_sync.clamp_min must be <= clamp_max")
+        return self
+
+
 class GelloArmTeleopConfig(BaseModel):
     """Live gello→arm teleop (see docs/gello-arm-teleop.md). Default off."""
 
@@ -266,6 +310,9 @@ class DcsConfig(BaseModel):
     record: RecordConfig = Field(default_factory=RecordConfig)
     station: StationConfig = Field(default_factory=StationConfig)
     gello_arm_sync: GelloArmSyncConfig = Field(default_factory=GelloArmSyncConfig)
+    gripper_gello_sync: GripperGelloSyncConfig = Field(
+        default_factory=GripperGelloSyncConfig
+    )
     gello_arm_teleop: GelloArmTeleopConfig = Field(default_factory=GelloArmTeleopConfig)
     arm_abs_ramp: ArmAbsRampConfig = Field(default_factory=ArmAbsRampConfig)
     agents: list[AgentConfig] = Field(default_factory=list)
@@ -446,6 +493,7 @@ def config_summary(cfg: DcsConfig) -> dict[str, Any]:
         "record": cfg.record.model_dump(),
         "station": station_summary(cfg),
         "gello_arm_sync": cfg.gello_arm_sync.model_dump(),
+        "gripper_gello_sync": cfg.gripper_gello_sync.model_dump(),
         "gello_arm_teleop": cfg.gello_arm_teleop.model_dump(),
         "arm_abs_ramp": cfg.arm_abs_ramp.model_dump(),
         "agents": [a.model_dump() for a in cfg.agents],

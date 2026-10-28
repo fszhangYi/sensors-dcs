@@ -14,11 +14,11 @@ from sensors_dcs.frame import Frame
 
 
 class GripperWriteAgent(BaseAgent):
-    """Command DH AG95 via ``sensor.write()``; does not poll Modbus in the loop.
+    """Command gripper via ``sensor.write()`` (DH AG95 / 慧灵); no Modbus poll loop.
 
-    Share the same ``sensor_id`` as ``gripper_read``. UI posts a fixed
-    ``position_norm`` (or ``position_raw``); this agent holds the last command
-    for viz and calls write once per request.
+    Share the same ``sensor_id`` as ``gripper_read``. UI may post
+    ``position_norm`` / ``position_raw`` (DH) or ``position_mm`` (慧灵);
+    this agent holds the last command for viz and calls write once per request.
     """
 
     kind = "gripper_write"
@@ -60,31 +60,38 @@ class GripperWriteAgent(BaseAgent):
         *,
         position_norm: float | None = None,
         position_raw: int | None = None,
+        position_mm: float | None = None,
         initialize: bool = False,
     ) -> dict[str, Any]:
         """Initialize and/or send one absolute gripper target.
 
-        AG95 must be initialized (Modbus init / ``init_state==1``) before
-        position writes. Prefer ``position_norm`` (0..~0.637) for motion.
+        DH AG95: prefer ``position_norm`` (0..~0.637). 慧灵: prefer ``position_mm``
+        (0..65) or ``position_norm`` (driver maps to mm).
         """
         if initialize:
             body: dict[str, Any] = {"initialize": True}
-        elif position_norm is None and position_raw is None:
-            return {"ok": False, "error": "position_norm, position_raw, or initialize required"}
+        elif position_norm is None and position_raw is None and position_mm is None:
+            return {
+                "ok": False,
+                "error": "position_norm, position_raw, position_mm, or initialize required",
+            }
         else:
             body = {}
             if position_norm is not None:
                 body["position_norm"] = float(position_norm)
             if position_raw is not None:
                 body["position_raw"] = int(position_raw)
+            if position_mm is not None:
+                body["position_mm"] = float(position_mm)
         try:
             result = dict(self.sensor.write(body))
         except Exception as e:  # noqa: BLE001
             result = {"ok": False, "error": str(e)}
         with self._cmd_lock:
             self._last_cmd = {
-                "position_norm": body.get("position_norm"),
+                "position_norm": body.get("position_norm", result.get("position_norm")),
                 "position_raw": body.get("position_raw", result.get("position_raw")),
+                "position_mm": body.get("position_mm", result.get("position_mm")),
                 "initialized": result.get("initialized"),
                 "ok": bool(result.get("ok")),
                 "error": result.get("error"),

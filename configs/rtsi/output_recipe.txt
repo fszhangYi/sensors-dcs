@@ -1,0 +1,9 @@
+timestamp
+actual_joint_positions
+actual_joint_speeds
+actual_TCP_pose
+robot_mode
+safety_status
+runtime_state
+speed_scaling
+target_speed_fraction

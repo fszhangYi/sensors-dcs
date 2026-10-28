@@ -14,11 +14,11 @@ from sensors_dcs.frame import Frame
 
 
 class GripperReadAgent(BaseAgent):
-    """Read-only agent for hik-sensors ``kind=gripper`` (DH AG95 position feedback).
+    """Read-only agent for hik-sensors gripper kinds (DH AG95 / 慧灵 Z-EFG-C65).
 
     Control-layer separation: this agent only calls ``sensor.read()`` and never
-    ``write()``. A future write agent can share the same underlying sensor
-    instance under a lock — do not open a second Serial on the same port.
+    ``write()``. Share the same ``sensor_id`` with a write agent — do not open a
+    second Serial on the same port.
     """
 
     kind = "gripper_read"
@@ -72,6 +72,15 @@ class GripperReadAgent(BaseAgent):
             "position_norm": pos,
             "raw_value": raw,
             "position_raw": raw,  # alias of raw_value (Modbus ticks before norm)
+            # 慧灵 Z-EFG-C65 (kind=gripper_huiling) also exposes mm / status codes
+            "position_mm": sample.get("position_mm"),
+            "speed_mm_s": sample.get("speed_mm_s"),
+            "current_a": sample.get("current_a"),
+            "init_code": sample.get("init_code"),
+            "grip_code": sample.get("grip_code"),
+            "init_text": sample.get("init_text"),
+            "grip_text": sample.get("grip_text"),
+            "initialized": sample.get("initialized"),
             "init_state": sample.get("init_state"),
             "fault": sample.get("fault"),
             "read_ms": sample.get("read_ms"),

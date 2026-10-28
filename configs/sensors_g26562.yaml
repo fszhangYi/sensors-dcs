@@ -1,0 +1,124 @@
+# hik-sensors bundle — Cell C / G26562
+# 配对：configs/g26562.yaml
+# gello + 慧灵夹爪 + G26562 三相机 + Elite CS66 (ExternalControl)
+version: 1
+site: dcs-g26562
+dry_run: false
+
+defaults:
+  gello:
+    baudrate: 1000000
+    max_delta_rad: 0.8
+    joint_ids: [1, 2, 3, 4, 5, 6, 7]
+    # Affine q=(q_raw-offsets)*signs — aligned with gello host
+    # J7: raw 1.83→慧灵 0 mm；raw 0.9986→65 mm
+    joint_offsets:
+      - 1.5707963267948966
+      - 6.283185307179586
+      - 6.283185307179586
+      - 6.283185307179586
+      - -4.71238898038469
+      - 3.141592653589793
+      - 1.83
+    joint_signs: [1, 1, -1, 1, 1, 1, -78.18138080346404]
+  arm_cs_write:
+    num_joints: 6
+    max_delta_deg: 2.0
+    primary_port: 30001
+    headless_mode: true
+    require_rtsi: true
+    stream_max_rad_s: 1.0
+    servoj_time: 0.008
+    servoj_lookahead_time: 0.25
+    servoj_gain: 300
+    servoj_timeout_ms: 2000
+  gripper_huiling:
+    baudrate: 115200
+    slave_id: 1
+    timeout_ms: 300
+    default_speed_mm_s: 50
+    default_current_a: 0.3
+    init_on_open: false
+    position_min_mm: 0.0
+    position_max_mm: 65.0
+  realsense:
+    width: 640
+    height: 480
+    fps: 30
+    exposure: 200
+    gain: 64
+    enable_depth: true
+    align_to_color: true
+    timeout_ms: 5000
+
+devices:
+  - id: gello-leader
+    kind: gello
+    name: "Gello · Leader (G26562)"
+    endpoint: "COM13"
+    params:
+      baudrate: 1000000
+      port_substr: ""
+      gripper_config: null
+      joint_offsets:
+        - 1.5707963267948966
+        - 6.283185307179586
+        - 6.283185307179586
+        - 6.283185307179586
+        - -4.71238898038469
+        - 3.141592653589793
+        - 1.83
+      joint_signs: [1, 1, -1, 1, 1, 1, -78.18138080346404]
+
+  - id: gripper-huiling
+    kind: gripper_huiling
+    name: "慧灵 Z-EFG-C65"
+    endpoint: "COM4"
+    params:
+      baudrate: 115200
+      slave_id: 1
+      default_speed_mm_s: 50
+      default_current_a: 0.3
+      init_on_open: false
+
+  - id: rs-g26562-wrist
+    kind: realsense
+    name: "RealSense · G26562 Wrist (D405)"
+    params:
+      role: g26562_wrist
+      serial: "218622279681"
+
+  # - id: rs-g26562-right
+  #   kind: realsense
+  #   name: "RealSense · G26562 Right (D435)"
+  #   params:
+  #     role: g26562_right
+  #     serial: "337122074288"
+
+  # - id: rs-g26562-left
+  #   kind: realsense
+  #   name: "RealSense · G26562 Left (D435)"
+  #   params:
+  #     role: g26562_left
+  #     serial: "334622072861"
+
+  - id: arm-cs66
+    kind: arm_cs_write
+    name: "Elite CS66 · C (G26562)"
+    endpoint: "192.168.1.200"
+    params:
+      robot_ip: "192.168.1.200"
+      num_joints: 6
+      max_delta_deg: 2.0
+      primary_port: 30001
+      headless_mode: true
+      require_rtsi: true
+      stream_max_rad_s: 1.0
+      servoj_time: 0.008
+      servoj_lookahead_time: 0.25
+      servoj_gain: 300
+      kinematics: cs66_kin_g26562
+      kinematics_profile: elite_cs66
+      # local_ip: "192.168.1.xxx"
+      rtsi_output_recipe: configs/rtsi/output_recipe.txt
+      rtsi_input_recipe: configs/rtsi/input_recipe.txt

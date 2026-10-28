@@ -22,6 +22,7 @@ class GripperCommandBody(BaseModel):
     agent_id: str | None = None
     position_norm: float | None = None
     position_raw: int | None = None
+    position_mm: float | None = None
     initialize: bool = False
 
 
@@ -10959,6 +10960,50 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }]);
     }
 
+    function gripGelloSyncParams() {
+      // Prefer live WS /api status; fall back to YAML defaults (AG95).
+      const sync = window.__gripGelloSync || {};
+      const raw = sync.params || {};
+      const commandAs = raw.command_as === 'position_mm' ? 'position_mm' : 'position_norm';
+      let lo = raw.clamp_min;
+      let hi = raw.clamp_max;
+      if (lo == null || !Number.isFinite(Number(lo))) lo = 0;
+      if (hi == null || !Number.isFinite(Number(hi))) {
+        hi = commandAs === 'position_mm' ? 65 : 0.637;
+      }
+      lo = Number(lo);
+      hi = Number(hi);
+      if (lo > hi) { const t0 = lo; lo = hi; hi = t0; }
+      return { commandAs: commandAs, lo: lo, hi: hi };
+    }
+
+    function applyGripCmdBounds(box) {
+      if (!box) return gripGelloSyncParams();
+      const gp = gripGelloSyncParams();
+      const lab = box.querySelector('label');
+      const inp = box.querySelector('.grip-norm');
+      const hint = box.querySelector('.cmd-hint');
+      if (lab) lab.textContent = gp.commandAs;
+      if (inp) {
+        inp.min = String(gp.lo);
+        inp.max = String(gp.hi);
+        inp.step = gp.commandAs === 'position_mm' ? '0.1' : '0.01';
+        const cur = Number(inp.value);
+        if (!Number.isFinite(cur) || cur < gp.lo || cur > gp.hi) {
+          const mid = (gp.lo + gp.hi) / 2;
+          inp.value = String(
+            gp.commandAs === 'position_mm' ? Math.round(mid * 10) / 10 : Number(mid.toFixed(3)),
+          );
+        }
+      }
+      if (hint && box.dataset.scope !== 'infer') {
+        hint.textContent = gp.commandAs === 'position_mm'
+          ? '同步=服务端 gello j7(cal mm)→夹爪；前端只开关'
+          : '同步=服务端 gello j6(cal)→夹爪；前端只开关';
+      }
+      return gp;
+    }
+
     function renderGripperWrite(card, frame, hzText) {
       card.querySelector('h2').textContent = 'gripper · Write';
       window.__gripWriteAgentId = frame.agent_id;
@@ -10979,15 +11024,22 @@ PREVIEW_HTML = """<!DOCTYPE html>
         box = document.createElement('div');
         box.className = 'grip-cmd';
         const inferScope = card.dataset.scope === 'infer';
+        if (inferScope) box.dataset.scope = 'infer';
+        const gp0 = gripGelloSyncParams();
+        const mid0 = (gp0.lo + gp0.hi) / 2;
+        const val0 = gp0.commandAs === 'position_mm'
+          ? String(Math.round(mid0 * 10) / 10)
+          : String(Number(mid0.toFixed(3)));
         box.innerHTML =
           '<button type="button" class="grip-init">初始化</button>' +
           (inferScope ? '' : '<button type="button" class="grip-sync">同步</button>') +
-          '<label>position_norm</label>' +
-          '<input type="number" step="0.01" min="0" max="0.637" value="0.32" class="grip-norm" />' +
+          '<label>' + gp0.commandAs + '</label>' +
+          '<input type="number" step="' + (gp0.commandAs === 'position_mm' ? '0.1' : '0.01') +
+          '" min="' + gp0.lo + '" max="' + gp0.hi + '" value="' + val0 + '" class="grip-norm" />' +
           '<button type="button" class="grip-send">下发</button>' +
           (inferScope
             ? '<span class="cmd-hint">推理页不提供 gello→夹爪同步</span>'
-            : '<span class="cmd-hint">同步=服务端 gello j6(cal)→夹爪；前端只开关</span>');
+            : '<span class="cmd-hint">同步=服务端 gello→夹爪；前端只开关</span>');
         card.appendChild(box);
         if (stationControlLocked) applySlaveControlGate(true);
         const btn = box.querySelector('.grip-send');
@@ -11004,6 +11056,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           inp.disabled = !on;
         };
         const applySyncUi = (sync) => {
+          applyGripCmdBounds(box);
           if (!syncBtn) {
             setManualEnabled(true);
             return;
@@ -11013,7 +11066,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
           syncBtn.dataset.enabled = on ? '1' : '0';
           setManualEnabled(!on);
           if (on && sync.last_norm != null && Number.isFinite(Number(sync.last_norm))) {
-            inp.value = String(Number(sync.last_norm).toFixed(3));
+            const gp = gripGelloSyncParams();
+            const n = Number(sync.last_norm);
+            inp.value = String(
+              gp.commandAs === 'position_mm' ? Number(n.toFixed(1)) : Number(n.toFixed(3)),
+            );
           }
         };
         box._applySyncUi = applySyncUi;
@@ -11067,7 +11124,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             window.__gripGelloSync = r;
             applySyncUi(r);
             runHint.textContent = r.enabled
-              ? '已同步：服务端 gello j6(cal) → gripper（数据不经前端）'
+              ? '已同步：服务端 gello → gripper（数据不经前端）'
               : '已取消同步';
           } catch (e) {
             runHint.textContent = t('grip.sync_err', { error: e });
@@ -11081,19 +11138,21 @@ PREVIEW_HTML = """<!DOCTYPE html>
             runHint.textContent = t('grip.bad_num');
             return;
           }
+          const gp = gripGelloSyncParams();
+          const body = { agent_id: frame.agent_id };
+          if (gp.commandAs === 'position_mm') body.position_mm = v;
+          else body.position_norm = v;
           try {
-            const r = await postGrip(
-              { agent_id: frame.agent_id, position_norm: v },
-              btn,
-            );
+            const r = await postGrip(body, btn);
             runHint.textContent = r.ok
-              ? ('夹爪已下发 norm=' + v)
+              ? ('夹爪已下发 ' + gp.commandAs + '=' + v)
               : ('夹爪下发失败：' + (r.error || JSON.stringify(r)));
           } catch (e) {
             runHint.textContent = t('grip.cmd_err', { error: e });
           }
         });
       }
+      applyGripCmdBounds(box);
       if (box && box._applySyncUi) {
         box._applySyncUi(window.__gripGelloSync || { enabled: false });
       }
@@ -12536,6 +12595,7 @@ def create_viz_app(
             agent_id=req.agent_id,
             position_norm=req.position_norm,
             position_raw=req.position_raw,
+            position_mm=req.position_mm,
             initialize=bool(req.initialize),
         )
 

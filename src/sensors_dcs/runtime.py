@@ -1373,6 +1373,7 @@ class Orchestrator:
                 "last_error": self._sync_last_error,
                 "last_t_wall": self._sync_last_t_wall,
                 "write_count": self._sync_write_count,
+                "params": self.cfg.gripper_gello_sync.model_dump(),
             }
 
     def set_gripper_gello_sync(
@@ -1485,7 +1486,7 @@ class Orchestrator:
                 continue
 
             try:
-                norm = float(joints[idx])
+                val = float(joints[idx])
             except (TypeError, ValueError):
                 with self._sync_lock:
                     self._sync_last_ok = False
@@ -1494,11 +1495,18 @@ class Orchestrator:
                 self._sync_stop.wait(period)
                 continue
 
-            # Clamp to AG95 position_norm range used elsewhere in UI.
-            norm = max(0.0, min(0.637, norm))
-            result = writer.command(position_norm=norm)
+            sync_cfg = self.cfg.gripper_gello_sync
+            lo, hi = sync_cfg.clamp_min, sync_cfg.clamp_max
+            if lo is not None:
+                val = max(float(lo), val)
+            if hi is not None:
+                val = min(float(hi), val)
+            if sync_cfg.command_as == "position_mm":
+                result = writer.command(position_mm=val)
+            else:
+                result = writer.command(position_norm=val)
             with self._sync_lock:
-                self._sync_last_norm = norm
+                self._sync_last_norm = val
                 self._sync_last_ok = bool(result.get("ok"))
                 self._sync_last_error = result.get("error")
                 self._sync_last_t_wall = time.time()
@@ -2441,6 +2449,7 @@ class Orchestrator:
         agent_id: str | None = None,
         position_norm: float | None = None,
         position_raw: int | None = None,
+        position_mm: float | None = None,
         initialize: bool = False,
         allow_during_sync: bool = False,
     ) -> dict[str, Any]:
@@ -2468,6 +2477,7 @@ class Orchestrator:
         return agent.command(
             position_norm=position_norm,
             position_raw=position_raw,
+            position_mm=position_mm,
             initialize=initialize,
         )
 

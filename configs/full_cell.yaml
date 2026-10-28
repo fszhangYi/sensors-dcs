@@ -23,6 +23,12 @@ gello_arm_sync:
   sync_done_eps_rad: 0.03
   max_ramp_rounds: 3
 
+# Gello → gripper write（UI 开关）。DH AG95 position_norm ~0..0.637。
+gripper_gello_sync:
+  clamp_min: 0.0
+  clamp_max: 0.637
+  command_as: position_norm
+
 record:
   save_dir: D:\data_new
   episode_index: 0
