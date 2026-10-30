@@ -121,9 +121,12 @@ def collect_filtered_datas(src_root: Path, dest_root: str) -> list[tuple[str, st
                 continue
             if should_skip_bundle_rel(rel):
                 continue
-            # Desktop configs payload: YAML/JSON only (skip stray binaries under configs/).
+            # Desktop configs: YAML/JSON + CS66 RTSI recipe .txt under configs/rtsi/.
             if dest_root.rstrip("/").endswith("configs") or dest_root == "configs":
-                if path.suffix.lower() not in {".yaml", ".yml", ".json"}:
+                suf = path.suffix.lower()
+                parts = _norm_parts(rel)
+                is_rtsi_txt = suf == ".txt" and "rtsi" in parts
+                if suf not in {".yaml", ".yml", ".json"} and not is_rtsi_txt:
                     continue
             dest_dir = Path(dest_root) / rel.parent
             dest = dest_dir.as_posix().rstrip("/") or dest_root.rstrip("/")

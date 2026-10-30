@@ -88,19 +88,19 @@ devices:
       role: g26562_wrist
       serial: "218622279681"
 
-  # - id: rs-g26562-right
-  #   kind: realsense
-  #   name: "RealSense · G26562 Right (D435)"
-  #   params:
-  #     role: g26562_right
-  #     serial: "337122074288"
+  - id: rs-g26562-right
+    kind: realsense
+    name: "RealSense · G26562 Right (D435)"
+    params:
+      role: g26562_right
+      serial: "337122074288"
 
-  # - id: rs-g26562-left
-  #   kind: realsense
-  #   name: "RealSense · G26562 Left (D435)"
-  #   params:
-  #     role: g26562_left
-  #     serial: "334622072861"
+  - id: rs-g26562-left
+    kind: realsense
+    name: "RealSense · G26562 Left (D435)"
+    params:
+      role: g26562_left
+      serial: "334622072861"
 
   - id: arm-cs66
     kind: arm_cs_write
@@ -119,6 +119,8 @@ devices:
       servoj_gain: 300
       kinematics: cs66_kin_g26562
       kinematics_profile: elite_cs66
-      # local_ip: "192.168.1.xxx"
-      rtsi_output_recipe: configs/rtsi/output_recipe.txt
-      rtsi_input_recipe: configs/rtsi/input_recipe.txt
+      # PC↔CS66 同网段地址；外控脚本反连 50001/3/4 时必须可达
+      local_ip: "192.168.1.33"
+      # Relative to this YAML's directory (…/configs/rtsi/… after seed).
+      rtsi_output_recipe: rtsi/output_recipe.txt
+      rtsi_input_recipe: rtsi/input_recipe.txt

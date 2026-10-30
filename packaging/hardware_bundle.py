@@ -21,6 +21,9 @@ HARDWARE_PACKAGES = (
     "loguru",
     "pyrealsense2",
 )
+# CS66 / arm_cs_write — not on PyPI; install wheel into build env (see build_desktop._install_elite_cs_sdk).
+# Soft-collected: Wine/EC-only builds may omit it; native-win verifies presence separately.
+CS_SDK_PACKAGES = ("elite_cs_sdk",)
 
 # pyproject [realsense] alias — bundled via HARDWARE_PACKAGES for desktop
 TARGET_OPTIONAL: tuple[str, ...] = ()
@@ -135,7 +138,7 @@ def extend_analysis(
         _collect_package(pkg, datas=datas, binaries=binaries, hiddenimports=hiddenimports, missing=missing)
 
     soft_missing: list[str] = []
-    for pkg in RUNTIME_OPTIONAL_PACKAGES:
+    for pkg in (*RUNTIME_OPTIONAL_PACKAGES, *CS_SDK_PACKAGES):
         _collect_package(
             pkg, datas=datas, binaries=binaries, hiddenimports=hiddenimports, missing=soft_missing
         )
@@ -144,8 +147,9 @@ def extend_analysis(
             "[hardware_bundle] optional package collect skipped (Wine/DLL ok to miss): "
             + "; ".join(soft_missing)
         )
-        # Still list the top-level name so frozen uvicorn can try to import it.
-        hiddenimports += list(RUNTIME_OPTIONAL_PACKAGES)
+    # Keep import names so Analysis can resolve them when the wheel is present.
+    hiddenimports += list(RUNTIME_OPTIONAL_PACKAGES)
+    hiddenimports += list(CS_SDK_PACKAGES)
 
     # SciPy is not collect_all'd above — only listed in hiddenimports + dynamic libs
     # loops below (IK needs optimize + spatial; full collect_all OOMs Wine 2GiB cgroup).
@@ -180,6 +184,8 @@ def extend_analysis(
         "elite",
         "elite._ec",
         "elite._monitor",
+        "elite_cs_sdk",
+        "elite_cs_sdk.elite_cs_sdk",
         "loguru",
         "pyrealsense2",
         "pyrealsense2.pyrealsense2",
@@ -208,11 +214,32 @@ def extend_analysis(
             datas += copy_metadata(pkg)
         except Exception:  # noqa: BLE001
             pass
-        if pkg in ("pyrealsense2", "cv2", "pyarrow", "pandas", "scipy"):
+        if pkg in ("pyrealsense2", "cv2", "pyarrow", "pandas", "scipy", "elite_cs_sdk"):
             try:
                 binaries += collect_dynamic_libs(pkg)
             except Exception:  # noqa: BLE001
                 pass
+    for pkg in CS_SDK_PACKAGES:
+        try:
+            datas += copy_metadata(pkg)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            binaries += collect_dynamic_libs(pkg)
+        except Exception:  # noqa: BLE001
+            pass
+        # Package ships elite_cs_series_sdk.dll + external_control.script beside the pyd.
+        try:
+            import elite_cs_sdk as _cs  # type: ignore
+
+            from pathlib import Path as _Path
+
+            cs_root = _Path(_cs.__file__).resolve().parent
+            for item in sorted(cs_root.iterdir()):
+                if item.suffix.lower() in {".dll", ".pyd", ".script", ".py", ".pyi", ".lib"}:
+                    datas.append((str(item), "elite_cs_sdk"))
+        except Exception:  # noqa: BLE001
+            pass
 
     hiddenimports += [
         "pyarrow._parquet",

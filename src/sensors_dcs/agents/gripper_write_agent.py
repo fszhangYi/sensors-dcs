@@ -93,6 +93,7 @@ class GripperWriteAgent(BaseAgent):
                 "position_raw": body.get("position_raw", result.get("position_raw")),
                 "position_mm": body.get("position_mm", result.get("position_mm")),
                 "initialized": result.get("initialized"),
+                "init_code": result.get("init_code"),
                 "ok": bool(result.get("ok")),
                 "error": result.get("error"),
                 "t_wall": time.time(),
@@ -104,7 +105,17 @@ class GripperWriteAgent(BaseAgent):
             self.ring.push(self._frame_from_cmd(snap))
         except Exception:  # noqa: BLE001
             pass
-        return {"ok": bool(snap.get("ok")), **{k: snap[k] for k in snap if k != "result"}, "result": result}
+        out = {
+            "ok": bool(snap.get("ok")),
+            **{k: snap[k] for k in snap if k != "result"},
+            "result": result,
+        }
+        # Promote driver fields so the UI can show init_code without digging into result.
+        if result.get("init_code") is not None:
+            out["init_code"] = result.get("init_code")
+        if result.get("init_ms") is not None:
+            out["init_ms"] = result.get("init_ms")
+        return out
 
     def read_frame(self) -> Frame:
         with self._cmd_lock:
@@ -118,7 +129,9 @@ class GripperWriteAgent(BaseAgent):
         payload: dict[str, Any] = {
             "command_position_norm": snap.get("position_norm"),
             "command_position_raw": snap.get("position_raw"),
+            "command_position_mm": snap.get("position_mm"),
             "initialized": snap.get("initialized"),
+            "init_code": snap.get("init_code"),
             "last_ok": snap.get("ok"),
             "last_error": snap.get("error"),
             "last_result": snap.get("result"),

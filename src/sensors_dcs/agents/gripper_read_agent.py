@@ -39,22 +39,53 @@ class GripperReadAgent(BaseAgent):
             buffer_frames=buffer_frames,
         )
         self.dry_run_synth = dry_run_synth
+        self._last_good: dict[str, Any] | None = None
 
     def read_frame(self) -> Frame:
-        sample = dict(self.sensor.read())
-        t_wall = float(sample.get("ts") or time.time())
+        t_wall = time.time()
         t_mono = time.perf_counter()
         self._seq += 1
+        sample: dict[str, Any]
+        bus_busy = False
+        # If init/write holds the Modbus lock, skip this tick (do not block for seconds).
+        # Hold the lock across read() so init cannot sneak in after a probe-release
+        # and park this thread for the whole initialize() timeout.
+        lock = getattr(self.sensor, "_io_lock", None)
+        if lock is not None and hasattr(lock, "acquire"):
+            got = False
+            try:
+                got = bool(lock.acquire(blocking=False))
+            except Exception:  # noqa: BLE001
+                got = False
+            if got:
+                try:
+                    sample = dict(self.sensor.read())
+                    t_wall = float(sample.get("ts") or t_wall)
+                finally:
+                    try:
+                        lock.release()
+                    except Exception:  # noqa: BLE001
+                        pass
+            else:
+                bus_busy = True
+                sample = {"ok": False, "error": "bus busy (init/write in progress)", "dry_run": False}
+        else:
+            sample = dict(self.sensor.read())
+            t_wall = float(sample.get("ts") or t_wall)
 
         pos = sample.get("position_norm")
         raw = sample.get("raw_value")
         if raw is None:
             raw = sample.get("position_raw")
+        ctx_dry = bool(getattr(getattr(self.sensor, "ctx", None), "dry_run", False))
         # Fake mode may return null until first command — do not synth over that.
         if sample.get("fake") and sample.get("position_source") == "last_command":
-            dry = bool(sample.get("dry_run"))
+            dry = bool(sample.get("dry_run")) or ctx_dry
         else:
-            dry = bool(sample.get("dry_run")) or pos is None
+            # Live Modbus miss must NOT be labeled dry_run (was: pos is None → synth).
+            dry = bool(sample.get("dry_run")) or ctx_dry
+        synth = False
+        stale = False
         if dry and self.dry_run_synth and not sample.get("fake"):
             pos = self._synth_position(t_wall)
             # Inverse of (1000 - raw) * 0.000637 for viz-only synth
@@ -67,6 +98,34 @@ class GripperReadAgent(BaseAgent):
                 "dry_run": True,
                 "synth": True,
             }
+            synth = True
+        elif not dry and pos is not None:
+            self._last_good = {
+                "position_norm": pos,
+                "raw_value": raw,
+                "position_mm": sample.get("position_mm"),
+                "speed_mm_s": sample.get("speed_mm_s"),
+                "current_a": sample.get("current_a"),
+                "init_code": sample.get("init_code"),
+                "grip_code": sample.get("grip_code"),
+                "init_text": sample.get("init_text"),
+                "grip_text": sample.get("grip_text"),
+                "initialized": sample.get("initialized"),
+            }
+        elif not dry and pos is None and self._last_good is not None:
+            # Serial contention / bus busy: keep last good sample.
+            g = self._last_good
+            pos = g.get("position_norm")
+            raw = g.get("raw_value")
+            for k, v in g.items():
+                sample.setdefault(k, v)
+            stale = True
+            if not sample.get("error"):
+                sample["error"] = (
+                    "bus busy (holding last good)"
+                    if bus_busy
+                    else "status read failed (holding last good)"
+                )
 
         payload: dict[str, Any] = {
             "position_norm": pos,
@@ -86,7 +145,8 @@ class GripperReadAgent(BaseAgent):
             "read_ms": sample.get("read_ms"),
             "port": getattr(self.sensor, "port", None) or sample.get("port"),
             "dry_run": dry,
-            "synth": bool(sample.get("synth")),
+            "synth": synth or bool(sample.get("synth")),
+            "stale": stale,
             "fake": bool(sample.get("fake")),
             "position_source": sample.get("position_source"),
             "command_t_wall": sample.get("command_t_wall"),
@@ -100,6 +160,7 @@ class GripperReadAgent(BaseAgent):
             t_mono=t_mono,
             payload=payload,
             seq=self._seq,
+            error=str(sample["error"]) if sample.get("error") and not dry else None,
         )
 
     def _synth_position(self, t_wall: float) -> float:

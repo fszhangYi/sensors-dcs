@@ -65,6 +65,8 @@ hiddenimports = [
     "elite",
     "elite._ec",
     "elite._monitor",
+    "elite_cs_sdk",
+    "elite_cs_sdk.elite_cs_sdk",
     "loguru",
     "pyrealsense2",
     "pkgutil",

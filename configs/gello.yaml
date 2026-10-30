@@ -1,0 +1,118 @@
+# sensors-dcs — Cell C 单硬件切片：仅 Gello（+ reinforce）
+# 设备清单：./sensors_g26562.yaml（与全栈共用）
+# 用法：gello.bat → sensors-dcs run -c configs/gello.yaml --no-dry-run
+version: 1
+site: dcs-g26562
+
+station:
+  role: master
+  id: cell-c-g26562
+  advertise_ip: 192.168.1.33
+  peer_port: 7010
+
+sensors_config: ./sensors_g26562.yaml
+dry_run: false
+
+tcp_xyz: [0.0, 0.0, 0.1505]
+
+runtime:
+  control_host: "0.0.0.0"
+  control_port: 7010
+  viz_host: "0.0.0.0"
+  viz_port: 7011
+  viz_hz: 5
+  console_hz: 5
+
+gello_arm_sync:
+  align_max_rad: 0.8
+  ramp_duration_s: 20
+  ramp_hz: 5
+  sync_done_eps_rad: 0.03
+  max_ramp_rounds: 3
+
+gripper_gello_sync:
+  clamp_min: 0.0
+  clamp_max: 65.0
+  command_as: position_mm
+
+arm_abs_ramp:
+  t_min_s: 0.1
+  t_max_s: 30.0
+  v_norm_rad_s: 0.02
+  profile: seven_segment
+  jerk_seg_frac: 0.10
+  accel_seg_frac: 0.15
+  ramp_hz: 20
+  cs_ramp_hz: 50
+  gripper_ramp_hz: 5
+
+record:
+  save_dir: C:\Users\user\Desktop\autodl-tmp\_dcs_data
+  episode_index: 0
+
+home_joints_rad: [2.8695, -1.9539, 1.8019, -1.6618, 4.7475, -0.0275]
+
+agents:
+  # —— 本切片启用：Gello + reinforce ——
+  - id: gello
+    type: gello
+    sensor_id: gello-leader
+    hz: 50
+    buffer_frames: 64
+  - id: gello-reinforce
+    type: gello_reinforce
+    hz: 20
+    buffer_frames: 8
+    gello_agent_id: gello
+
+  # - id: gripper-hl-read
+  #   type: gripper_read
+  #   sensor_id: gripper-huiling
+  #   hz: 10
+  #   buffer_frames: 64
+  # - id: gripper-hl-write
+  #   type: gripper_write
+  #   sensor_id: gripper-huiling
+  #   hz: 5
+  #   buffer_frames: 8
+
+  # - id: cam-g26562-wrist
+  #   type: realsense
+  #   sensor_id: rs-g26562-wrist
+  #   hz: 60
+  #   buffer_frames: 2
+  # - id: cam-g26562-right
+  #   type: realsense
+  #   sensor_id: rs-g26562-right
+  #   hz: 60
+  #   buffer_frames: 2
+  # - id: cam-g26562-left
+  #   type: realsense
+  #   sensor_id: rs-g26562-left
+  #   hz: 60
+  #   buffer_frames: 2
+
+  # - id: arm-cs66
+  #   type: arm
+  #   sensor_id: arm-cs66
+  #   hz: 50
+  #   buffer_frames: 64
+  # - id: arm-cs66-write
+  #   type: arm_write
+  #   sensor_id: arm-cs66
+  #   hz: 5
+  #   buffer_frames: 8
+
+  # - id: pi05
+  #   type: pi05
+  #   hz: 2
+  #   buffer_frames: 8
+  #   host: "127.0.0.1"
+  #   port: 5000
+  #   prompt: ""
+  #   camera_map:
+  #     top: cam-g26562-left
+  #     chest: cam-g26562-right
+  #     wrist2: cam-g26562-wrist
+  #   arm_agent_id: arm-cs66
+  #   gripper_agent_id: gripper-hl-read

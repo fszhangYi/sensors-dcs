@@ -564,7 +564,41 @@ sensors-dcs filter-timeline -e episode_00000 \
 | `configs/hik_camera_map.yaml` | filter/`export-hik-dataset`：序列号→hik 相机名（按工位改） |
 | `sensors/configs/*.yaml` | 软链接指向的 hik-sensors 设备清单 |
 
-## 桌面打包（Linux → Windows）
+## 桌面打包
+
+产物目录：`release/sensors-dcs-desktop-windows-x64-<UTC>/`（含 `sensors-dcs.exe`、同名 `.zip`；有上一版时另生成 `*-delta.zip`）。
+
+### Windows 本机（native-win）
+
+在 Windows 上用本机 Python + PyInstaller（**不需要 Wine**）：
+
+```bat
+REM 需已有 .\sensors junction（mklink /J sensors ..\sensors）
+build.bat
+REM 或
+scripts\build-desktop.bat
+scripts\build-desktop.bat --no-delta
+python scripts\build_desktop.py --target native-win
+```
+
+发布目录快捷启动（与 `sensors-dcs.exe` 同级；**默认无头**，不带 `--ui`，浏览器自行打开提示的 URL；需要弹窗时手动加 `--ui`）：
+
+| bat | 配置 |
+|-----|------|
+| `ec616.bat` | `full_cell_plus.yaml`（EC 真机） |
+| `cs66.bat` | `g26562.yaml`（CS66 / G26562） |
+| `dry-run.bat` | `default.yaml`（合成 dry-run） |
+
+手动指定配置：
+
+```bat
+sensors-dcs.exe -c "%APPDATA%\sensors-dcs\configs\g26562.yaml"
+sensors-dcs.exe -c "D:\path\to\my.yaml" --ui
+```
+
+`--target windows` 在 Windows 主机上会自动走同一条 native-win 路径。native-win 使用嵌入式 CPython **3.12**（以便打进 CS66 用的 `elite_cs_sdk` cp312 wheel，路径：`../vendor/Elite_Robots_CS_SDK_Python/dist/`）；Wine 交叉仍用 3.10。缓存：`.tools\win-python312`、`.tools\build-tmp`。
+
+### Linux → Windows（Wine 交叉）
 
 基于 `scheme-a-linux-to-windows-desktop`：Wine + 嵌入式 CPython + PyInstaller onedir。
 
@@ -574,12 +608,6 @@ sensors-dcs filter-timeline -e episode_00000 \
 # 或
 bash scripts/build-desktop.sh --target windows
 ```
-
-产物：
-
-- `release/sensors-dcs-desktop-windows-x64-<UTC>/sensors-dcs.exe`
-- 同名 `.zip`
-- 若 `release/` 里已有上一版，还会生成 `<UTC>-delta.zip`（仅含相对上一版变更的文件，可直接解压覆盖旧安装目录）
 
 单独生成增量包（不重新 build）：
 

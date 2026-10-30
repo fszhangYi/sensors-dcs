@@ -8,7 +8,7 @@ site: dcs-g26562
 station:
   role: master
   id: cell-c-g26562
-  advertise_ip: 192.168.1.10  # 主站可路由局域网 IP；按本机改
+  advertise_ip: 192.168.1.33  # 本机网卡（与 CS66 同网段）；原 192.168.1.10 已过期
   peer_port: 7010
 
 sensors_config: ./sensors_g26562.yaml
@@ -47,6 +47,8 @@ arm_abs_ramp:
   jerk_seg_frac: 0.10
   accel_seg_frac: 0.15
   ramp_hz: 20
+  # CS66 dense servoj_once floor (Home / 点位下发)
+  cs_ramp_hz: 50
   gripper_ramp_hz: 5
 
 record:
@@ -72,7 +74,8 @@ agents:
   - id: gripper-hl-read
     type: gripper_read
     sensor_id: gripper-huiling
-    hz: 50
+    # Keep low: shares COM with write/init; high Hz caused Modbus frame theft.
+    hz: 10
     buffer_frames: 64
   - id: gripper-hl-write
     type: gripper_write

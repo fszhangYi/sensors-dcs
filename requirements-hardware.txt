@@ -1,7 +1,9 @@
 # Gello agent needs Dynamixel + serial
 pyserial>=3.5
 dynamixel-sdk>=3.7
-# Elite arm_read (PyPI elirobots provides ``from elite import EC``)
+# Elite EC arm (PyPI elirobots → ``from elite import EC``). CS66 needs elite_cs_sdk wheel
+# (not on PyPI): vendor/Elite_Robots_CS_SDK_Python/dist/elite_cs_sdk-*-win_amd64.whl
+# native-win packaging installs that wheel into embed 3.12 automatically.
 elirobots>=0.0.7
 loguru>=0.6.0,<0.7
 # RealSense live camera (bundled for zero-deps desktop; still needs USB + Intel driver)

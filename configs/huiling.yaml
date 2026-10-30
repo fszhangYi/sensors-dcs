@@ -1,0 +1,125 @@
+# sensors-dcs — Cell C / G26562 真机配置
+# 设备清单：./sensors_g26562.yaml
+# agents：gello(+reinforce 新仿射) + 慧灵夹爪 + G26562 三相机 + CS66 臂 + pi05
+version: 1
+site: dcs-g26562
+
+# 主站身份（YAML 配置，前端只读回显）。整段省略 ≡ master + peer 不参与控制
+station:
+  role: master
+  id: cell-c-g26562
+  advertise_ip: 192.168.1.33  # 本机网卡（与 CS66 同网段）；原 192.168.1.10 已过期
+  peer_port: 7010
+
+sensors_config: ./sensors_g26562.yaml
+# true = 合成假数据；false = 真机
+dry_run: false
+
+# Flange→TCP（m）：对齐 sensors-arm Cell C（KWR75 + EFG-C65）
+tcp_xyz: [0.0, 0.0, 0.1505]
+
+runtime:
+  control_host: "0.0.0.0"
+  control_port: 7010
+  viz_host: "0.0.0.0"
+  viz_port: 7011
+  viz_hz: 5
+  console_hz: 5
+
+gello_arm_sync:
+  align_max_rad: 0.8
+  ramp_duration_s: 20
+  ramp_hz: 5
+  sync_done_eps_rad: 0.03
+  max_ramp_rounds: 3
+
+# Gello J7（仿射后 mm）→ 慧灵 position_mm；勿用 AG95 的 0.637 norm clamp。
+gripper_gello_sync:
+  clamp_min: 0.0
+  clamp_max: 65.0
+  command_as: position_mm
+
+arm_abs_ramp:
+  t_min_s: 0.1
+  t_max_s: 30.0
+  v_norm_rad_s: 0.02
+  profile: seven_segment
+  jerk_seg_frac: 0.10
+  accel_seg_frac: 0.15
+  ramp_hz: 20
+  # CS66 dense servoj_once floor (Home / 点位下发)
+  cs_ramp_hz: 50
+  gripper_ramp_hz: 5
+
+record:
+  save_dir: C:\Users\user\Desktop\autodl-tmp\_dcs_data
+  episode_index: 0
+
+# Cell C home（rad）；FK/IK = cs66_kin_g26562
+home_joints_rad: [2.8695, -1.9539, 1.8019, -1.6618, 4.7475, -0.0275]
+
+agents:
+  # Gello + reinforce（仿射在 sensors_g26562.yaml；reinforce 只挂本 gello）
+  # - id: gello
+  #   type: gello
+  #   sensor_id: gello-leader
+  #   hz: 50
+  #   buffer_frames: 64
+  # - id: gello-reinforce
+  #   type: gello_reinforce
+  #   hz: 20
+  #   buffer_frames: 8
+  #   gello_agent_id: gello
+
+  - id: gripper-hl-read
+    type: gripper_read
+    sensor_id: gripper-huiling
+    # Keep low: shares COM with write/init; high Hz caused Modbus frame theft.
+    hz: 10
+    buffer_frames: 64
+  - id: gripper-hl-write
+    type: gripper_write
+    sensor_id: gripper-huiling
+    hz: 5
+    buffer_frames: 8
+
+  # - id: cam-g26562-wrist
+  #   type: realsense
+  #   sensor_id: rs-g26562-wrist
+  #   hz: 60
+  #   buffer_frames: 2
+  # - id: cam-g26562-right
+  #   type: realsense
+  #   sensor_id: rs-g26562-right
+  #   hz: 60
+  #   buffer_frames: 2
+  # - id: cam-g26562-left
+  #   type: realsense
+  #   sensor_id: rs-g26562-left
+  #   hz: 60
+  #   buffer_frames: 2
+
+  # - id: arm-cs66
+  #   type: arm
+  #   sensor_id: arm-cs66
+  #   hz: 50
+  #   buffer_frames: 64
+  # - id: arm-cs66-write
+  #   type: arm_write
+  #   sensor_id: arm-cs66
+  #   hz: 5
+  #   buffer_frames: 8
+
+  # - id: pi05
+  #   type: pi05
+  #   hz: 2
+  #   buffer_frames: 8
+  #   host: "127.0.0.1"
+  #   port: 5000
+  #   prompt: ""
+  #   camera_map:
+  #     top: cam-g26562-left
+  #     chest: cam-g26562-right
+  #     wrist2: cam-g26562-wrist
+  #   arm_agent_id: arm-cs66
+  #   gripper_agent_id: gripper-hl-read

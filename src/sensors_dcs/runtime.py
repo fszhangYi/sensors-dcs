@@ -51,10 +51,20 @@ class Orchestrator:
 
     def __init__(self, cfg: DcsConfig) -> None:
         self.cfg = cfg
-        from sensors_dcs.arm_pose import set_tcp_xyz
+        from sensors_dcs.arm_pose import set_active_kinematics, set_tcp_xyz
+        from sensors_dcs.arm_viz import resolve_arm_viz_model
 
         # Online FK/IK flange→TCP offset (YAML ``tcp_xyz``; default 0,0,0.18).
         self._tcp_xyz = list(set_tcp_xyz(getattr(cfg, "tcp_xyz", None)))
+        # Infer URDF + FK/IK pack from sensors devices linked by arm_write agents.
+        arm_viz = resolve_arm_viz_model(
+            sensors_config=cfg.sensors_config,
+            agents=cfg.agents,
+        )
+        set_active_kinematics(
+            arm_viz.get("kinematics"),
+            arm_viz.get("kinematics_profile"),
+        )
         dry = cfg.dry_run
         self.manager = SensorManager.from_yaml(cfg.sensors_config, dry_run=dry)
         self.agents: dict[str, BaseAgent] = {}
@@ -1092,7 +1102,12 @@ class Orchestrator:
                 return out
         return None
 
-    def _xyzrpy_to_joints(self, xyzrpy: list[float]) -> dict[str, Any]:
+    def _xyzrpy_to_joints(
+        self,
+        xyzrpy: list[float],
+        *,
+        interactive: bool = False,
+    ) -> dict[str, Any]:
         from sensors_dcs.arm_pose import xyzrpy_to_joints_rad
 
         if self._arm_read_agent() is None:
@@ -1104,10 +1119,21 @@ class Orchestrator:
                 "error": "no live arm joints for IK seed",
                 "joints_rad": None,
             }
+        if interactive:
+            # Amber-ball drag (esp. CS66): LM only — soft TRF made drag feel dead.
+            return xyzrpy_to_joints_rad(
+                xyzrpy,
+                q_seed_rad=seed,
+                interactive=True,
+                max_nfev=80,
+                soft_limit_retry=False,
+                enforce_teach_soft_limits=False,
+                solver_tol=1e-6,
+            )
         return xyzrpy_to_joints_rad(xyzrpy, q_seed_rad=seed)
 
     def arm_ik(self, xyzrpy: list[float] | None) -> dict[str, Any]:
-        """Public IK for TCP drag preview (no arm write)."""
+        """Public IK for TCP drag preview (no arm write). Always interactive LM."""
         if not isinstance(xyzrpy, (list, tuple)) or len(xyzrpy) < 6:
             return {"ok": False, "error": "xyzrpy must have 6 floats", "joints_rad": None}
         try:
@@ -1116,7 +1142,7 @@ class Orchestrator:
             return {"ok": False, "error": "xyzrpy must be 6 floats", "joints_rad": None}
         if any(not (v == v) or v in (float("inf"), float("-inf")) for v in vals):
             return {"ok": False, "error": "xyzrpy has non-finite values", "joints_rad": None}
-        return self._xyzrpy_to_joints(vals)
+        return self._xyzrpy_to_joints(vals, interactive=True)
 
     @staticmethod
     def _next_state_grip(next_state: Any) -> float | None:
@@ -1541,6 +1567,16 @@ class Orchestrator:
                 ),
                 "params": self.cfg.gello_arm_sync.model_dump(),
             }
+
+    @staticmethod
+    def _sensor_kind(sensor: Any) -> str:
+        kind_v = getattr(getattr(sensor, "kind", None), "value", None)
+        return str(kind_v if kind_v is not None else getattr(sensor, "kind", "") or "")
+
+    @classmethod
+    def _is_cs_arm_write(cls, sensor: Any) -> bool:
+        """Elite CS66/ES66 write path (EliteDriver servoj) — not EC TT."""
+        return cls._sensor_kind(sensor) == "arm_cs_write"
 
     @staticmethod
     def _joints6_from_ring(agent: BaseAgent, *, prefer_key: str = "joints_rad") -> list[float] | None:
@@ -2049,14 +2085,25 @@ class Orchestrator:
                     self._arm_sync_last_t_wall = time.time()
 
                 aborted = False
+                cs_dense = self._is_cs_arm_write(writer.sensor)
+                prev_cmd = list(qa0)
                 for k, qk in enumerate(path, start=1):
                     if self._arm_sync_stop.is_set() or self._stop.is_set():
                         aborted = True
                         break
-                    ref = self._joints6_from_ring(reader) or (
-                        path[k - 2] if k >= 2 else qa0
-                    )
-                    result = writer.command(joints_rad=list(qk), reference_joints_rad=list(ref))
+                    if cs_dense:
+                        result = writer.command(
+                            joints_rad=list(qk),
+                            reference_joints_rad=list(prev_cmd),
+                            servoj_once=True,
+                            relative_to_last=True,
+                            idle_after=False,
+                        )
+                    else:
+                        ref = self._joints6_from_ring(reader) or prev_cmd
+                        result = writer.command(
+                            joints_rad=list(qk), reference_joints_rad=list(ref)
+                        )
                     with self._arm_sync_lock:
                         self._arm_sync_ramp_index = k
                         self._arm_sync_write_count += 1
@@ -2071,7 +2118,18 @@ class Orchestrator:
                         final_error = str(result.get("error") or "ramp write failed")
                         aborted = True
                         break
+                    prev_cmd = list(qk)
                     self._arm_sync_stop.wait(period)
+                if cs_dense and not aborted and final_error is None:
+                    try:
+                        writer.command(
+                            joints_rad=list(prev_cmd),
+                            reference_joints_rad=list(prev_cmd),
+                            servoj_once=True,
+                            idle_after=True,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
 
                 if aborted:
                     if self._arm_sync_stop.is_set() or self._stop.is_set():
@@ -2384,8 +2442,20 @@ class Orchestrator:
                     else:
                         q_cmd = list(q_g)
 
-                ref = q_a if q_a is not None else (q_cmd_prev or q_cmd)
-                result = writer.command(joints_rad=list(q_cmd), reference_joints_rad=list(ref))
+                # CS66 teleop: dense servoj_once from last_cmd (not lagged RTSI).
+                # Nested _servoj_stream + writeIdle every tick is the documented jerk path.
+                if self._is_cs_arm_write(writer.sensor):
+                    result = writer.command(
+                        joints_rad=list(q_cmd),
+                        servoj_once=True,
+                        relative_to_last=True,
+                        idle_after=False,
+                    )
+                else:
+                    ref = q_a if q_a is not None else (q_cmd_prev or q_cmd)
+                    result = writer.command(
+                        joints_rad=list(q_cmd), reference_joints_rad=list(ref)
+                    )
                 ok = bool(result.get("ok"))
                 if ok:
                     fail_streak = 0
@@ -2668,6 +2738,11 @@ class Orchestrator:
             hz = float(abs_hz)
         else:
             hz = float(getattr(self.cfg.gello_arm_sync, "ramp_hz", 5.0) or 5.0)
+        # CS66 dense servoj_once: denser ticks → smaller steps → smoother motion.
+        cs_dense = self._is_cs_arm_write(writer.sensor)
+        if cs_dense:
+            cs_hz = float(getattr(cfg, "cs_ramp_hz", 50.0) if cfg is not None else 50.0)
+            hz = max(hz, cs_hz)
         hz = max(0.1, hz)
         n = max(1, int(round(dur * hz)))
 
@@ -2736,8 +2811,10 @@ class Orchestrator:
                 grip_msg = f"；夹爪一次下发 {float(grip_end):g}（与关节斜坡解耦）"
             else:
                 grip_msg = ""
+            dens = " · CS dense servoj" if cs_dense else ""
             self._abs_ramp_last_message = (
                 f"关节斜坡开始：{dur:g}s @ {hz:g}Hz × {n} 点 ({mode}, {profile})"
+                + dens
                 + grip_msg
             )
             self._abs_ramp_write_count = 0
@@ -2763,6 +2840,7 @@ class Orchestrator:
                 accel_frac,
                 grip_end,
                 bool(apply_gello_bias),
+                bool(cs_dense),
             ),
             daemon=True,
         )
@@ -2793,6 +2871,7 @@ class Orchestrator:
         accel_seg_frac: float = 0.15,
         gripper_position_norm: float | None = None,
         apply_gello_bias: bool = True,
+        cs_dense: bool = False,
     ) -> None:
         from sensors_dcs.agents.arm_agent import ArmAgent
         from sensors_dcs.agents.arm_write_agent import ArmWriteAgent
@@ -2861,22 +2940,31 @@ class Orchestrator:
                 final_error = "abs ramp agents missing"
             else:
                 next_t = time.perf_counter()
+                # Guard max_delta vs previous *command* (not lagged RTSI) on CS.
+                prev_cmd = list(qa0)
                 for k, qk in enumerate(path, start=1):
                     if self._abs_ramp_stop.is_set() or self._stop.is_set():
                         final_message = "绝对下发已取消"
                         break
-                    ref = self._joints6_from_ring(reader) or (
-                        path[k - 2] if k >= 2 else qa0
-                    )
                     q_cmd = list(qk)
                     if apply_gello_bias:
                         q_cmd = self.joints_plus_gello_bias(q_cmd)
                     # Grip tracks bias on the same ticks as joints, but the
                     # Modbus write itself stays off this deadline.
                     _maybe_kick_grip()
-                    result = writer.command(
-                        joints_rad=q_cmd, reference_joints_rad=list(ref)
-                    )
+                    if cs_dense:
+                        result = writer.command(
+                            joints_rad=q_cmd,
+                            reference_joints_rad=list(prev_cmd),
+                            servoj_once=True,
+                            relative_to_last=True,
+                            idle_after=False,
+                        )
+                    else:
+                        ref = self._joints6_from_ring(reader) or prev_cmd
+                        result = writer.command(
+                            joints_rad=q_cmd, reference_joints_rad=list(ref)
+                        )
                     with self._abs_ramp_lock:
                         self._abs_ramp_index = k
                         self._abs_ramp_write_count += 1
@@ -2892,6 +2980,7 @@ class Orchestrator:
                     if not result.get("ok"):
                         final_error = str(result.get("error") or "ramp write failed")
                         break
+                    prev_cmd = list(q_cmd)
                     # Deadline schedule: arm write time must not add onto period.
                     next_t += period
                     delay = next_t - time.perf_counter()
@@ -2902,7 +2991,21 @@ class Orchestrator:
                         next_t = time.perf_counter()
                 else:
                     completed = True
-                    final_message = f"绝对下发完成：{n} 点已写入（关节空间/{profile}）"
+                    dens = " · CS dense" if cs_dense else ""
+                    final_message = (
+                        f"绝对下发完成：{n} 点已写入（关节空间/{profile}{dens}）"
+                    )
+                    # Hold reverse socket open after dense CS ramp (no per-point idle).
+                    if cs_dense:
+                        try:
+                            writer.command(
+                                joints_rad=list(prev_cmd),
+                                reference_joints_rad=list(prev_cmd),
+                                servoj_once=True,
+                                idle_after=True,
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
                     if gripper_position_norm is not None:
                         deadline = time.perf_counter() + 0.25
                         for th in grip_threads:
@@ -3077,9 +3180,13 @@ class Orchestrator:
             idx = int(jog_joint)
             if idx < 0 or idx >= len(base):
                 return {"ok": False, "error": f"jog_joint out of range 0..{len(base)-1}"}
+            # CS66: pass jog to the driver so it streams from continuous last_cmd
+            # (pre-baking target from lagged RTSI caused no-move / rewind shake).
+            # EC TT: still expand to absolute joints from measured read.
+            if self._is_cs_arm_write(agent.sensor):
+                return agent.command(jog_joint=idx, delta_rad=d)
             target = list(base)
             target[idx] = float(base[idx]) + d
-            # Absolute write anchored to read pose (guards still apply max Δq vs reference).
             return agent.command(joints_rad=target, reference_joints_rad=base)
 
         if joints_rad is not None:
@@ -3095,8 +3202,9 @@ class Orchestrator:
                 else:
                     mode = "scale_by_d"
             mode_l = str(mode or "").strip().lower()
-            # TCP-drag / scrub: one-shot write of the target joints (no jerk ramp).
-            if mode_l in ("direct", "immediate", "step"):
+            # TCP-drag / teleop scrub: one setpoint per call (no jerk abs-ramp).
+            # CS66: servoj_once + relative_to_last (never nested _servoj_stream).
+            if mode_l in ("direct", "immediate", "step", "teleop"):
                 if self._abs_ramp_enabled:
                     self.cancel_arm_abs_ramp(message="因直接下发取消斜坡")
                 armed = bool(getattr(agent.sensor, "armed", False))
@@ -3121,10 +3229,24 @@ class Orchestrator:
                         "ok": False,
                         "error": "no live arm read joints; refuse direct write without current pose",
                     }
-                wr = agent.command(
-                    joints_rad=q_star,
-                    reference_joints_rad=list(base),
-                )
+                cs_dense = self._is_cs_arm_write(agent.sensor)
+                if cs_dense:
+                    wr = agent.command(
+                        joints_rad=q_star,
+                        servoj_once=True,
+                        relative_to_last=True,
+                        idle_after=False,
+                    )
+                else:
+                    wr = agent.command(
+                        joints_rad=q_star,
+                        reference_joints_rad=list(base),
+                    )
+                wr = dict(wr) if isinstance(wr, dict) else {"ok": bool(wr)}
+                wr["timing"] = mode_l if mode_l != "teleop" else "teleop"
+                wr["write_path"] = "cs_servoj_once" if cs_dense else "ec_tt"
+                if cs_dense:
+                    wr["servoj_once"] = True
                 # Direct write has no interp path — apply grip immediately if provided.
                 if (
                     wr.get("ok")

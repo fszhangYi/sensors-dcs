@@ -146,6 +146,8 @@ class ArmAbsRampConfig(BaseModel):
     accel_seg_frac: float = 0.15
     # Abs command rate; None → fall back to gello_arm_sync.ramp_hz.
     ramp_hz: float | None = 20.0
+    # CS66 dense servoj floor (servoj_once ticks); ignored for EC TT.
+    cs_ramp_hz: float = 50.0
     # Deprecated / ignored: grip is one-shot at abs-ramp start (not in joint loop).
     gripper_ramp_hz: float = 5.0
 
@@ -210,6 +212,16 @@ class ArmAbsRampConfig(BaseModel):
         if f != f or f in (float("inf"), float("-inf")) or f <= 0:
             raise ValueError("arm_abs_ramp.ramp_hz must be a positive finite float")
         return max(0.1, min(200.0, f))
+
+    @field_validator("cs_ramp_hz", mode="before")
+    @classmethod
+    def _cs_ramp_hz(cls, v: Any) -> float:
+        if v is None or v == "":
+            return 50.0
+        f = float(v)
+        if f != f or f in (float("inf"), float("-inf")) or f <= 0:
+            raise ValueError("arm_abs_ramp.cs_ramp_hz must be a positive finite float")
+        return max(1.0, min(200.0, f))
 
     @field_validator("gripper_ramp_hz", mode="before")
     @classmethod
@@ -478,8 +490,13 @@ def station_summary(cfg: DcsConfig) -> dict[str, Any]:
 
 def config_summary(cfg: DcsConfig) -> dict[str, Any]:
     from sensors_dcs.arm_pose import DEFAULT_TCP_XYZ, normalize_tcp_xyz
+    from sensors_dcs.arm_viz import resolve_arm_viz_model
 
     tcp = list(normalize_tcp_xyz(cfg.tcp_xyz))
+    arm_viz = resolve_arm_viz_model(
+        sensors_config=cfg.sensors_config,
+        agents=cfg.agents,
+    )
     return {
         "site": cfg.site,
         "version": cfg.version,
@@ -488,6 +505,7 @@ def config_summary(cfg: DcsConfig) -> dict[str, Any]:
         "home_duration_s": float(cfg.home_duration_s),
         "tcp_xyz": tcp,
         "tcp_xyz_default": list(DEFAULT_TCP_XYZ),
+        "arm_viz": arm_viz,
         "sensors_config": cfg.sensors_config,
         "runtime": cfg.runtime.model_dump(),
         "record": cfg.record.model_dump(),

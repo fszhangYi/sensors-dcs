@@ -36,7 +36,8 @@
 .settings-overlay {
   position: fixed;
   inset: 0;
-  z-index: 2147483647;
+  /* Below #pathPickerOverlay (11000) so Settings「浏览…」不被挡住 */
+  z-index: 10000;
   display: flex;
   align-items: center;
   justify-content: center;

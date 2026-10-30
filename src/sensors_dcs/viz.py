@@ -2335,9 +2335,41 @@ PREVIEW_HTML = """<!DOCTYPE html>
       background: color-mix(in srgb, var(--danger) 28%, var(--chrome)); border-color: var(--danger);
     }
     .arm-cmd .arm-jog-row {
-      display: grid; grid-template-columns: 2.8rem auto auto 1fr; gap: 0.4rem; align-items: center;
+      display: grid;
+      grid-template-columns: 2.2rem 2.2rem 2.2rem minmax(7.5rem, 1fr) minmax(4.5rem, auto);
+      gap: 0.35rem 0.45rem;
+      align-items: center;
     }
     .arm-cmd .arm-jog-row button { min-width: 2.2rem; padding-left: 0.55rem; padding-right: 0.55rem; }
+    .arm-cmd .arm-jval {
+      font-variant-numeric: tabular-nums;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--muted);
+      min-width: 0;
+    }
+    .arm-cmd .arm-jval-deg {
+      font-variant-numeric: tabular-nums;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      white-space: nowrap;
+      color: var(--accent);
+      text-align: right;
+    }
+    .arm-cmd .arm-status {
+      flex-basis: 100%;
+      width: 100%;
+      color: var(--accent);
+      font-size: 0.78rem;
+      min-height: 1.15em;
+      margin-top: 0.15rem;
+    }
+    .arm-cmd button.arm-arm.arm-on {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 22%, var(--chrome));
+      color: var(--text);
+    }
     .arm-cmd .arm-abs-row {
       display: flex; flex-wrap: wrap; gap: 0.4rem 0.55rem; align-items: center;
       margin-top: 0.35rem;
@@ -2419,7 +2451,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     .path-picker-overlay {
       position: fixed;
       inset: 0;
-      z-index: 1200;
+      /* Above .settings-overlay (10000) — path picker opened from Settings browse */
+      z-index: 11000;
       display: none;
       align-items: center;
       justify-content: center;
@@ -2684,8 +2717,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
   </nav>
   <div class="app-stage">
   <div class="boot-banner" id="bootBanner" role="alert" hidden>
-    <strong data-i18n="boot.banner_title">配置错误 — 采集不可用</strong>
-    <span id="bootBannerHint" data-i18n="boot.collect_locked">YAML/agent 启动失败，无法进入数据采集与推理。后处理仍可用；请修正配置后重新启动。</span>
+    <strong data-i18n="boot.banner_title">配置错误 — 数据采集不可用</strong>
+    <span id="bootBannerHint" data-i18n="boot.collect_locked">YAML/agent 启动失败或缺少可用 gello，无法进入数据采集。推理与后处理仍可用；请修正配置后重新启动。</span>
     <div class="boot-path" id="bootBannerPath"></div>
     <pre id="bootBannerErr"></pre>
   </div>
@@ -3011,7 +3044,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         <canvas id="infPoseCanvas"></canvas>
         <div class="inf-pose-load is-indeterminate" id="infPoseLoad" role="status" aria-live="polite">
           <div class="inf-pose-load-spinner" aria-hidden="true"></div>
-          <div class="inf-pose-load-label" id="infPoseLoadLabel" data-i18n="infer.pose_loading">正在加载 EC616 数模…</div>
+          <div class="inf-pose-load-label" id="infPoseLoadLabel" data-i18n="infer.pose_loading">正在加载机械臂数模…</div>
           <div class="inf-pose-load-bar" aria-hidden="true"><i id="infPoseLoadBar"></i></div>
         </div>
         <button type="button" class="inf-pose-trail-clear" id="infPoseTrailClear" data-i18n-attr="aria-label" data-i18n="infer.pose_trail_clear" aria-label="清除轨迹" data-i18n-title="infer.pose_trail_clear_hint" title="清除目标轨迹点与连线">
@@ -3671,6 +3704,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
   </div>
   <script>
     const DCS_I18N = __DCS_I18N_JSON__;
+    window.__armViz = (typeof __DCS_ARM_VIZ_JSON__ !== 'undefined')
+      ? __DCS_ARM_VIZ_JSON__
+      : null;
     const LS_LOCALE = 'sensors-dcs.locale';
     let currentLocale = 'zh';
     try {
@@ -4695,6 +4731,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         try {
           ik = await fetch('/api/arm/ik', {
             method: 'POST',
+            credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ xyzrpy: xyz.slice(0, 6).map(Number) }),
           }).then((x) => x.json());
@@ -5066,6 +5103,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const loadEl = document.getElementById('infPoseLoad');
       const loadLabel = document.getElementById('infPoseLoadLabel');
       const loadBar = document.getElementById('infPoseLoadBar');
+      function armVizModelLabel() {
+        const v = window.__armViz || {};
+        return String(v.product || v.id || 'EC616');
+      }
       function setLoadUi(state, pct) {
         if (!loadEl) return;
         // After a successful close, ignore late LoadingManager progress/start events.
@@ -5092,12 +5133,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
           loadBar.style.width = '';
         }
         if (loadLabel) {
+          const model = armVizModelLabel();
           if (state === 'error') {
-            loadLabel.textContent = t('infer.pose_load_fail');
+            loadLabel.textContent = t('infer.pose_load_fail', { model: model });
           } else if (hasPct) {
-            loadLabel.textContent = t('infer.pose_loading_pct', { pct: Math.round(pct) });
+            loadLabel.textContent = t('infer.pose_loading_pct', { pct: Math.round(pct), model: model });
           } else {
-            loadLabel.textContent = t('infer.pose_loading');
+            loadLabel.textContent = t('infer.pose_loading', { model: model });
           }
         }
       }
@@ -5134,18 +5176,27 @@ PREVIEW_HTML = """<!DOCTYPE html>
       scene.add(grid);
       const axes = new THREE.AxesHelper(0.3);
       scene.add(axes);
-      // EC616 URDF (embody models/ec616). Machine joints → URDF:
-      //   q_urdf = signs ⊙ (q_machine − offset); then mirror robot-Y (SolidWorks vs DH).
-      // Offsets match arm_kin / sensors.kinematics JOINT_OFFSET_DEG; signs +1 (URDF axis
-      // already 0 0 -1). Mirror scale.y=-1 aligns flange with FK TCP (~6–9 mm).
-      const EC616_JOINT_NAMES = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6'];
-      const EC616_JOINT_OFFSET_RAD = [0, -Math.PI / 2, 0, -Math.PI / 2, Math.PI, 0];
-      const EC616_JOINT_SIGNS = [1, 1, 1, 1, 1, 1];
-      // Cache-bust when end-effector mesh / URDF changes (browsers cache /assets/*.urdf).
-      const EC616_URDF_URL = '/assets/models/ec616/ec616.urdf?v=ee-full-1';
+      // Arm URDF from window.__armViz (sensors-arm Cell C catalog when yaml uses CS66).
+      // Machine joints → URDF: q_urdf = signs ⊙ (q_machine − offset); optional mirror_y.
       const DEG2RAD = Math.PI / 180;
-      let ec616Robot = null;
-      let ec616LoadError = '';
+      let armRobot = null;
+      let armLoadError = '';
+      function activeArmViz() {
+        const v = window.__armViz;
+        if (v && typeof v === 'object' && v.urdf) return v;
+        // Fallback EC616 (same defaults as sensors_dcs.arm_viz).
+        return {
+          id: 'elite_ec616',
+          product: 'EC616',
+          urdf: '/assets/models/ec616/ec616.urdf?v=ee-full-1',
+          joint_names: ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6'],
+          joint_offset_rad: [0, -Math.PI / 2, 0, -Math.PI / 2, Math.PI, 0],
+          joint_signs: [1, 1, 1, 1, 1, 1],
+          mirror_y: true,
+          gripper_rpy: null,
+          browser_ik: true,
+        };
+      }
       function softArmMaterials(robot) {
         robot.traverse((c) => {
           if (!c.isMesh || !c.material) return;
@@ -5161,26 +5212,58 @@ PREVIEW_HTML = """<!DOCTYPE html>
           });
         });
       }
-      function setEc616JointsFromMachineRad(jointsRad) {
-        if (!ec616Robot || !Array.isArray(jointsRad) || jointsRad.length < 6) return false;
+      /** Catalog ``gripper_rpy`` — assembly-only mesh twist (Cell C EOAT +π about Z). */
+      function applyGripperAssemblyRpy(robotRoot, arm) {
+        const rpy = arm && arm.gripper_rpy;
+        if (!robotRoot || !Array.isArray(rpy) || rpy.length < 3) return;
+        const rx = Number(rpy[0]) || 0;
+        const ry = Number(rpy[1]) || 0;
+        const rz = Number(rpy[2]) || 0;
+        if (![rx, ry, rz].some((v) => Math.abs(v) > 1e-12)) return;
+        const links = robotRoot.links || {};
+        const link =
+          links.gripper_centor_link ||
+          links.gripper_center_link ||
+          links.ee_link ||
+          null;
+        if (!link) return;
+        const extra = new THREE.Euler(rx, ry, rz, 'XYZ');
+        const q = new THREE.Quaternion().setFromEuler(extra);
+        link.quaternion.multiply(q);
+        link.updateMatrix();
+      }
+      function setArmJointsFromMachineRad(jointsRad) {
+        const arm = activeArmViz();
+        if (!armRobot || !Array.isArray(jointsRad) || jointsRad.length < 6) return false;
+        const names = Array.isArray(arm.joint_names) ? arm.joint_names : [];
+        const offs = Array.isArray(arm.joint_offset_rad) ? arm.joint_offset_rad : [];
+        const signs = Array.isArray(arm.joint_signs) ? arm.joint_signs : [];
         for (let i = 0; i < 6; i++) {
           const qMachine = Number(jointsRad[i]);
           if (!Number.isFinite(qMachine)) return false;
-          const joint = ec616Robot.joints && ec616Robot.joints[EC616_JOINT_NAMES[i]];
+          const joint = armRobot.joints && armRobot.joints[names[i]];
           if (!joint) continue;
-          const qUrdf = EC616_JOINT_SIGNS[i] * (qMachine - EC616_JOINT_OFFSET_RAD[i]);
+          if (joint.limit && Number(joint.limit.lower) === 0 && Number(joint.limit.upper) === 0) {
+            joint.limit.lower = -Math.PI * 2;
+            joint.limit.upper = Math.PI * 2;
+          }
+          const sign = signs[i] == null ? 1 : Number(signs[i]);
+          const off = Number(offs[i] || 0);
+          const qUrdf = sign * (qMachine - off);
           joint.ignoreLimits = true;
           joint.setJointValue(qUrdf);
         }
-        ec616Robot.updateMatrixWorld(true);
+        armRobot.updateMatrixWorld(true);
         return true;
       }
+      // Back-compat alias used by TCP-drag IK path.
+      const setEc616JointsFromMachineRad = setArmJointsFromMachineRad;
       /**
-       * Display-only joint source for the EC616 URDF.
+       * Display-only joint source for the Infer URDF.
        * NEVER sends Arm / Home / abs-send — only picks angles for setJointValue.
        * Prefer configured home_joints_rad when live Read is missing or ~0.
        */
-      function jointsForEc616Viz() {
+      function jointsForArmViz() {
         const dragQ = window.__infPoseDragJoints;
         if (Array.isArray(dragQ) && dragQ.length >= 6
           && dragQ.slice(0, 6).every((v) => Number.isFinite(Number(v)))) {
@@ -5200,14 +5283,22 @@ PREVIEW_HTML = """<!DOCTYPE html>
         return null;
       }
       /** Paint URDF joints only (no robot write / no /api/arm/home/go). */
-      function applyEc616VizJoints() {
-        const q = jointsForEc616Viz();
+      function applyArmVizJoints() {
+        const q = jointsForArmViz();
         if (!q) return false;
-        return setEc616JointsFromMachineRad(q);
+        return setArmJointsFromMachineRad(q);
       }
-      function loadEc616Arm() {
+      const applyEc616VizJoints = applyArmVizJoints;
+      function loadArmUrdf() {
+        const arm = activeArmViz();
+        const urdfUrl = String(arm.urdf || '');
+        if (!urdfUrl) {
+          armLoadError = 'no-urdf';
+          setLoadUi('error', 0);
+          return;
+        }
         if (typeof URDFLoader === 'undefined' || typeof THREE.STLLoader !== 'function') {
-          ec616LoadError = 'urdf-loader';
+          armLoadError = 'urdf-loader';
           console.warn('[infPose] URDFLoader / STLLoader missing');
           setLoadUi('error', 0);
           return;
@@ -5225,41 +5316,42 @@ PREVIEW_HTML = """<!DOCTYPE html>
           setLoadUi('loading', pct);
         };
         manager.onError = (url) => {
-          console.warn('[infPose] EC616 asset error', url);
+          console.warn('[infPose] arm asset error', url);
         };
         const loader = new URDFLoader(manager);
         loader.parseCollision = false;
         loader.packages = '';
-        loader.workingPath = EC616_URDF_URL.replace(/[^/]+$/, '');
-        // Kick off URDF fetch immediately (before orbit markers / trail setup).
+        loader.workingPath = urdfUrl.split('?')[0].replace(/[^/]+$/, '');
         loader.load(
-          EC616_URDF_URL,
+          urdfUrl,
           (robot) => {
             try {
               robot.ignoreLimits = true;
               // Z-up URDF → Y-up Three.js (same as robotToThree).
               robot.rotation.set(-Math.PI / 2, 0, 0);
-              // Mirror robot-Y so SolidWorks chain matches Elite/DH base frame.
-              robot.scale.set(1, -1, 1);
+              // EC616: mirror robot-Y so SolidWorks chain matches Elite/DH.
+              // CS66 Cell C: mirror_y=false (sensors-arm catalog).
+              if (arm.mirror_y) robot.scale.set(1, -1, 1);
+              else robot.scale.set(1, 1, 1);
               softArmMaterials(robot);
-              if (ec616Robot) scene.remove(ec616Robot);
-              ec616Robot = robot;
+              applyGripperAssemblyRpy(robot, arm);
+              if (armRobot) scene.remove(armRobot);
+              armRobot = robot;
               scene.add(robot);
-              if (!applyEc616VizJoints()) {
+              if (!applyArmVizJoints()) {
                 // Last-resort fold until home / Read arrives.
-                setEc616JointsFromMachineRad([0, -45, 60, 0, 30, 0].map((d) => d * DEG2RAD));
+                setArmJointsFromMachineRad([0, -45, 60, 0, 30, 0].map((d) => d * DEG2RAD));
               }
-              // Do not hide here — wait for manager.onLoad (all meshes).
             } catch (err) {
-              console.warn('[infPose] EC616 mount failed', err);
-              ec616LoadError = String(err && err.message ? err.message : err);
+              console.warn('[infPose] arm mount failed', err);
+              armLoadError = String(err && err.message ? err.message : err);
               setLoadUi('error', 0);
             }
           },
           undefined,
           (err) => {
-            console.warn('[infPose] EC616 URDF load failed', err);
-            ec616LoadError = String(err && err.message ? err.message : err);
+            console.warn('[infPose] URDF load failed', err);
+            armLoadError = String(err && err.message ? err.message : err);
             setLoadUi('error', 0);
             if (hud) {
               const base = hud.textContent || '';
@@ -5269,7 +5361,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           },
         );
       }
-      loadEc616Arm();
+      loadArmUrdf();
       // Live TCP — small amber
       const tcpMarker = new THREE.Mesh(
         new THREE.SphereGeometry(0.005, 12, 12),
@@ -5751,8 +5843,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
         }
         return null;
       }
+      function browserIkAllowed() {
+        const v = window.__armViz;
+        // CS66 Cell B/C: no browser Ec616Ik — always use server cs66_* IK.
+        if (v && v.browser_ik === false) return false;
+        return !!(window.Ec616Ik && typeof window.Ec616Ik.xyzrpyToJoints === 'function');
+      }
       function solveIkLocal(xyzrpy) {
-        if (!window.Ec616Ik || typeof window.Ec616Ik.xyzrpyToJoints !== 'function') return null;
+        if (!browserIkAllowed()) return null;
         const seed = ikSeedJoints();
         if (!seed) return { ok: false, error: 'no live arm joints for IK seed', joints_rad: null };
         const t0 = performance.now();
@@ -5774,17 +5872,23 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (!tcpPointerDown) setDragStatus('', t('infer.tcp_drag_waiting'));
         try {
           let r = solveIkLocal(dragXyzrpy.slice(0, 6));
-          // Server fallback: no local solver, or final settle when local failed.
-          const needServer = !window.Ec616Ik
+          // Server fallback: no local solver (CS66), or final settle when local failed.
+          const needServer = !browserIkAllowed()
             || (r && !r.ok && !tcpPointerDown)
             || (r && r.error === 'no live arm joints for IK seed');
           if (needServer) {
             const body = { xyzrpy: dragXyzrpy.slice(0, 6) };
+            const t0 = performance.now();
             r = await fetch('/api/arm/ik', {
               method: 'POST',
+              credentials: 'same-origin',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(body),
             }).then((x) => x.json());
+            if (r && typeof r === 'object' && r.solve_ms == null) {
+              r.solve_ms = performance.now() - t0;
+              r.source = 'server';
+            }
           }
           if (!tcpDragActive) return;
           if (r && r.ok && Array.isArray(r.joints_rad) && r.joints_rad.length >= 6) {
@@ -5792,6 +5896,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
             renderDragJoints(window.__infPoseDragJoints);
             fillInfArmJointsFromIk(window.__infPoseDragJoints);
             setEc616JointsFromMachineRad(window.__infPoseDragJoints);
+            // Keep drag rpy reachable (sensors-arm translate path): xyz from ball, rpy from FK.
+            const achieved = r.cartesian_xyzrpy || (r.cartesian && r.cartesian.cartesian_xyzrpy);
+            if (dragXyzrpy && Array.isArray(achieved) && achieved.length >= 6) {
+              for (let i = 3; i < 6; i++) {
+                const v = Number(achieved[i]);
+                if (Number.isFinite(v)) dragXyzrpy[i] = v;
+              }
+            }
             // Live stream: every successful IK triggers abs-send (coalesced).
             queueTcpIkSend();
             if (!tcpPointerDown && !tcpAutoSendInFlight) {
@@ -5947,7 +6059,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             else if (ikPending) scheduleIk(true);
           }
         } else {
-          const qLive = jointsForEc616Viz();
+          const qLive = jointsForArmViz();
           const homeQ = window.__armHome && window.__armHome.home_joints_rad;
           const showingHome = !!(qLive && Array.isArray(homeQ) && homeQ.length >= 6
             && qLive.every((v, i) => Math.abs(Number(v) - Number(homeQ[i])) < 1e-6));
@@ -5959,7 +6071,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             setTcpPose(window.__armHome.home_cartesian_xyzrpy);
           }
         }
-        const q = jointsForEc616Viz();
+        const q = jointsForArmViz();
         if (q) setEc616JointsFromMachineRad(q);
         if (goalMarker.visible && goalMarker.material) {
           if (goalClipped) {
@@ -6042,7 +6154,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
     function parseInfArmJoints6() {
       const raw = ((infArmJoints && infArmJoints.value) || '').trim();
-      const parts = raw.split(/[,\s;]+/).filter(Boolean);
+      const parts = raw.split(/[,\\s;]+/).filter(Boolean);
       if (parts.length < 6) return { ok: false, error: t('arm.abs_need6') };
       const joints = parts.slice(0, 6).map((x) => Number(x));
       if (joints.some((v) => !Number.isFinite(v))) return { ok: false, error: t('arm.abs_bad') };
@@ -6273,7 +6385,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (!src || src.length < 6 || src.some((v) => !Number.isFinite(v))) {
         return { ok: false, error: 'bad_xyzrpy' };
       }
-      if (window.Ec616Ik && typeof window.Ec616Ik.xyzrpyToJoints === 'function') {
+      const allowLocal = !(window.__armViz && window.__armViz.browser_ik === false)
+        && window.Ec616Ik && typeof window.Ec616Ik.xyzrpyToJoints === 'function';
+      if (allowLocal) {
         const seed = (Array.isArray(window.__armReadJoints) && window.__armReadJoints.length >= 6)
           ? window.__armReadJoints.slice(0, 6).map(Number)
           : null;
@@ -6287,6 +6401,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       try {
         const r = await fetch('/api/arm/ik', {
           method: 'POST',
+          credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ xyzrpy: src }),
         }).then((x) => x.json());
@@ -6541,7 +6656,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     function isArmJointLimitError(err) {
       const s = String(err || '');
-      return /outside soft limits|soft\s*limits?|关节.{0,8}超限/i.test(s);
+      return /outside soft limits|soft\\s*limits?|关节.{0,8}超限/i.test(s);
     }
     async function stopPi05LoopForError(n, error) {
       const err = String(error || 'error');
@@ -7223,6 +7338,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const ppBatchLog = document.getElementById('ppBatchLog');
     let ppBusy = false;
     let collectOk = true;
+    let inferOk = true;
 
     const SENSORS_EMBED_URL_KEY = 'sensors-dcs.sensorsEmbedUrl';
     const DEFAULT_SENSORS_EMBED_URL = 'http://127.0.0.1:6008/';
@@ -7432,9 +7548,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
     });
 
     function applyTcpXyzFromStatus(info) {
-      // Sync browser Ec616Ik TCP offset with DCS YAML tcp_xyz (via /api/status.config).
+      // Sync arm_viz + browser Ec616Ik TCP offset with DCS YAML (via /api/status.config).
       try {
         const cfg = info && info.config;
+        if (cfg && cfg.arm_viz && typeof cfg.arm_viz === 'object') {
+          window.__armViz = cfg.arm_viz;
+        }
         const xyz = cfg && cfg.tcp_xyz;
         if (!xyz || typeof xyz.length !== 'number' || xyz.length < 3) return;
         window.__tcpXyz = [Number(xyz[0]), Number(xyz[1]), Number(xyz[2])];
@@ -7488,11 +7607,36 @@ PREVIEW_HTML = """<!DOCTYPE html>
           el.disabled = true;
           el.setAttribute('aria-disabled', 'true');
           if (tip && el.title !== tip) el.title = tip;
+        } else {
+          // Clear sticky disable from a prior slave lock; per-widget UI re-applies
+          // sync/manual rules on the next frame (e.g. grip applySyncUi).
+          el.disabled = false;
+          el.removeAttribute('aria-disabled');
+          if (tip && el.title === tip) el.title = '';
         }
       });
       const hint = document.getElementById('runHint');
       if (hint && stationControlLocked) {
         hint.textContent = tip;
+      }
+    }
+
+    function applyInferGate(ok) {
+      inferOk = !!ok;
+      if (tabBtnInfer) {
+        tabBtnInfer.classList.toggle('tab-locked', !inferOk);
+        tabBtnInfer.disabled = !inferOk;
+        tabBtnInfer.setAttribute('aria-disabled', inferOk ? 'false' : 'true');
+        tabBtnInfer.title = inferOk ? '' : t('boot.infer_title');
+      }
+      const btnHomeInfer = document.getElementById('btnHomeInfer');
+      if (btnHomeInfer) {
+        btnHomeInfer.disabled = !inferOk;
+        btnHomeInfer.setAttribute('aria-disabled', inferOk ? 'false' : 'true');
+        btnHomeInfer.title = inferOk ? '' : t('boot.infer_title');
+      }
+      if (!inferOk && tabInfer && tabInfer.classList.contains('active')) {
+        switchTab('home');
       }
     }
 
@@ -7502,35 +7646,29 @@ PREVIEW_HTML = """<!DOCTYPE html>
       tabBtnCollect.disabled = !collectOk;
       tabBtnCollect.setAttribute('aria-disabled', collectOk ? 'false' : 'true');
       tabBtnCollect.title = collectOk ? '' : t('boot.collect_title');
-      if (tabBtnInfer) {
-        tabBtnInfer.classList.toggle('tab-locked', !collectOk);
-        tabBtnInfer.disabled = !collectOk;
-        tabBtnInfer.setAttribute('aria-disabled', collectOk ? 'false' : 'true');
-        tabBtnInfer.title = collectOk ? '' : t('boot.infer_title');
-      }
+      // Infer is independent of Collect: missing gello locks Collect only
+      // (optional gello-reinforce on Infer is handled inside that tab).
+      const iOk = info && info.infer_ok === false ? false : true;
+      applyInferGate(iOk);
       const btnHomeCollect = document.getElementById('btnHomeCollect');
       if (btnHomeCollect) {
         btnHomeCollect.disabled = !collectOk;
         btnHomeCollect.setAttribute('aria-disabled', collectOk ? 'false' : 'true');
         btnHomeCollect.title = collectOk ? '' : t('boot.collect_title');
       }
-      const btnHomeInfer = document.getElementById('btnHomeInfer');
-      if (btnHomeInfer) {
-        btnHomeInfer.disabled = !collectOk;
-        btnHomeInfer.setAttribute('aria-disabled', collectOk ? 'false' : 'true');
-        btnHomeInfer.title = collectOk ? '' : t('boot.infer_title');
-      }
       if (!collectOk) {
         if (bootBanner) {
           bootBanner.hidden = false;
           bootBanner.classList.add('visible');
           if (bootBannerPath) bootBannerPath.textContent = (info && info.config_path) || '';
-          if (bootBannerErr) bootBannerErr.textContent = (info && info.error) || '';
+          if (bootBannerErr) {
+            const errText = (info && info.error)
+              || (info && info.collect_reason)
+              || t('boot.collect_no_gello');
+            bootBannerErr.textContent = errText;
+          }
         }
-        if (
-          (tabCollect && tabCollect.classList.contains('active'))
-          || (tabInfer && tabInfer.classList.contains('active'))
-        ) {
+        if (tabCollect && tabCollect.classList.contains('active')) {
           switchTab('home');
         }
       } else if (bootBanner) {
@@ -7575,8 +7713,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (runHint) runHint.textContent = t('boot.collect_locked');
         return;
       }
-      if (name === 'infer' && !collectOk) {
-        if (runHint) runHint.textContent = t('boot.collect_locked');
+      if (name === 'infer' && !inferOk) {
+        if (runHint) runHint.textContent = t('boot.infer_title');
         return;
       }
       if (name === 'sensors' && sensorsEmbed.reachability === 'fail') {
@@ -8563,7 +8701,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     if (btnSettingsHomeSave) {
       btnSettingsHomeSave.addEventListener('click', async () => {
         const raw = ((settingsHomeJoints && settingsHomeJoints.value) || '').trim();
-        const parts = raw.split(/[,\s;]+/).filter(Boolean);
+        const parts = raw.split(/[,\\s;]+/).filter(Boolean);
         if (parts.length !== 6 || parts.some((x) => !Number.isFinite(Number(x)))) {
           setSettingsMsg(settingsHomeMsg, t('arm.home_missing'), true);
           showAppModal(t('arm.home_bad_title'), t('arm.home_missing'));
@@ -8979,13 +9117,23 @@ PREVIEW_HTML = """<!DOCTYPE html>
       });
     }
 
-    fetch('/api/status', { credentials: 'same-origin' }).then((r) => r.json()).then((j) => {
-      const ok = j.collect_ok !== false && !j.boot_error;
-      applyCollectGate(ok, j);
-      applyTcpXyzFromStatus(j);
-      applyStationFromStatus(j);
-    }).catch(() => {});
-    setInterval(() => { refreshStationStatus(); }, 2000);
+    function refreshCollectGate() {
+      return fetch('/api/status', { credentials: 'same-origin' })
+        .then((r) => r.json())
+        .then((j) => {
+          const ok = j.collect_ok !== false && !j.boot_error;
+          applyCollectGate(ok, j);
+          applyTcpXyzFromStatus(j);
+          applyStationFromStatus(j);
+          return j;
+        })
+        .catch(() => null);
+    }
+    refreshCollectGate();
+    setInterval(() => {
+      refreshStationStatus();
+      refreshCollectGate();
+    }, 2000);
     refreshSettingsAuth().catch(() => {});
     if (sensorsEmbedFrame) sensorsEmbedFrame.title = t('sensors.title');
 
@@ -10952,12 +11100,27 @@ PREVIEW_HTML = """<!DOCTYPE html>
         window.__gripReadNorm = Number(norm);
         window.__gripReadAgentId = frame.agent_id;
       }
-      renderJointVals(root, [{
+      const mm = p.position_mm;
+      const initCode = p.init_code;
+      const initTxt = p.init_text || (p.initialized ? '已初始化' : '未初始化');
+      const mmTxt = mm == null || !Number.isFinite(Number(mm))
+        ? null
+        : (Number(mm).toFixed(1) + ' mm');
+      const statusTxt = (initCode != null && Number.isFinite(Number(initCode)))
+        ? ('init=' + String(initCode) + ' ' + initTxt)
+        : initTxt;
+      const items = [{
         lab: 'grip',
         showRaw: true,
-        calText: norm == null || !Number.isFinite(Number(norm)) ? 'norm —' : ('norm ' + Number(norm).toFixed(3)),
+        calText: norm == null || !Number.isFinite(Number(norm))
+          ? (mmTxt ? mmTxt : 'norm —')
+          : ('norm ' + Number(norm).toFixed(3) + (mmTxt ? ' · ' + mmTxt : '')),
         rawText: raw == null || !Number.isFinite(Number(raw)) ? 'raw —' : ('raw ' + String(Math.round(Number(raw)))),
-      }]);
+      }, {
+        lab: 'init',
+        calText: statusTxt + (p.stale ? ' (stale)' : '') + (p.error ? ' · ' + p.error : ''),
+      }];
+      renderJointVals(root, items);
     }
 
     function gripGelloSyncParams() {
@@ -11018,6 +11181,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       let calText;
       if (norm == null) calText = p.initialized ? '已初始化' : '未下发';
       else calText = 'cmd ' + Number(norm).toFixed(3) + (ok === false ? ' ✗' : ok ? ' ✓' : '');
+      if (p.last_error) calText += ' · ' + String(p.last_error);
       renderJointVals(root, [{ lab: 'cmd', calText: calText }]);
       let box = card.querySelector('.grip-cmd');
       if (!box) {
@@ -11039,21 +11203,37 @@ PREVIEW_HTML = """<!DOCTYPE html>
           '<button type="button" class="grip-send">下发</button>' +
           (inferScope
             ? '<span class="cmd-hint">推理页不提供 gello→夹爪同步</span>'
-            : '<span class="cmd-hint">同步=服务端 gello→夹爪；前端只开关</span>');
+            : '<span class="cmd-hint">同步=服务端 gello→夹爪；前端只开关</span>') +
+          '<div class="grip-status" style="flex-basis:100%;color:var(--accent);font-size:0.8rem;margin-top:0.25rem;"></div>';
         card.appendChild(box);
         if (stationControlLocked) applySlaveControlGate(true);
         const btn = box.querySelector('.grip-send');
         const initBtn = box.querySelector('.grip-init');
         const syncBtn = box.querySelector('.grip-sync');
         const inp = box.querySelector('.grip-norm');
+        const statusEl = box.querySelector('.grip-status');
+        const setStatus = (msg, isErr) => {
+          if (!statusEl) return;
+          statusEl.textContent = msg || '';
+          statusEl.style.color = isErr ? 'var(--danger, #f66)' : 'var(--accent)';
+        };
         const setManualEnabled = (on) => {
-          if (stationControlLocked) {
-            btn.disabled = true;
-            inp.disabled = true;
-            return;
+          // Sync mode only blocks manual 下发/输入. 初始化 stays available so the
+          // gripper can be homed before / while gello→gripper sync is on.
+          // While a command is in flight, do not fight postGrip's disable state
+          // (applySyncUi runs every viz frame and was wiping init feedback).
+          if (box._gripBusy) return;
+          const locked = !!stationControlLocked;
+          btn.disabled = locked || !on;
+          inp.disabled = locked || !on;
+          if (initBtn) {
+            initBtn.disabled = locked;
+            initBtn.setAttribute('aria-disabled', locked ? 'true' : 'false');
           }
-          btn.disabled = !on;
-          inp.disabled = !on;
+          if (syncBtn) {
+            syncBtn.disabled = locked;
+            syncBtn.setAttribute('aria-disabled', locked ? 'true' : 'false');
+          }
         };
         const applySyncUi = (sync) => {
           applyGripCmdBounds(box);
@@ -11065,6 +11245,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
           syncBtn.textContent = on ? t('grip.unsync') : t('grip.sync');
           syncBtn.dataset.enabled = on ? '1' : '0';
           setManualEnabled(!on);
+          const hintEl = box.querySelector('.cmd-hint');
+          if (hintEl && box.dataset.scope !== 'infer' && !box._gripBusy) {
+            hintEl.textContent = on
+              ? '同步中：服务端 gello→夹爪；可初始化，手动下发已禁用'
+              : (gripGelloSyncParams().commandAs === 'position_mm'
+                ? '同步=服务端 gello j7(cal mm)→夹爪；前端只开关'
+                : '同步=服务端 gello j6(cal)→夹爪；前端只开关');
+          }
           if (on && sync.last_norm != null && Number.isFinite(Number(sync.last_norm))) {
             const gp = gripGelloSyncParams();
             const n = Number(sync.last_norm);
@@ -11075,6 +11263,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         };
         box._applySyncUi = applySyncUi;
         const postGrip = async (body, busyEl) => {
+          box._gripBusy = true;
           busyEl.disabled = true;
           btn.disabled = true;
           initBtn.disabled = true;
@@ -11083,77 +11272,107 @@ PREVIEW_HTML = """<!DOCTYPE html>
             const r = await fetch('/api/gripper/command', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
+              credentials: 'same-origin',
               body: JSON.stringify(body),
-            }).then((x) => x.json());
+            }).then(async (x) => {
+              const j = await x.json().catch(() => ({}));
+              if (!x.ok && j && j.ok === undefined) {
+                return { ok: false, error: 'HTTP ' + x.status + (j.detail ? (': ' + j.detail) : '') };
+              }
+              return j;
+            });
             return r;
           } finally {
+            box._gripBusy = false;
             busyEl.disabled = false;
             initBtn.disabled = false;
             if (syncBtn) syncBtn.disabled = false;
             applySyncUi(window.__gripGelloSync || { enabled: syncBtn && syncBtn.dataset.enabled === '1' });
           }
         };
+        const gripAgentId = () => window.__gripWriteAgentId || frame.agent_id;
         initBtn.addEventListener('click', async () => {
-          runHint.textContent = t('grip.init_busy');
+          setStatus(t('grip.init_busy') || '夹爪初始化中（约数秒，夹爪会动作）…', false);
+          if (runHint) runHint.textContent = t('grip.init_busy');
           try {
-            const r = await postGrip({ agent_id: frame.agent_id, initialize: true }, initBtn);
-            runHint.textContent = r.ok
-              ? '夹爪初始化成功，可下发 / 同步'
+            const r = await postGrip({ agent_id: gripAgentId(), initialize: true }, initBtn);
+            const msg = r.ok
+              ? ('夹爪初始化成功' + (r.init_code != null ? ' (init_code=' + r.init_code + ')' : '') + '，可下发 / 同步')
               : ('夹爪初始化失败：' + (r.error || JSON.stringify(r)));
+            setStatus(msg, !r.ok);
+            if (runHint) runHint.textContent = msg;
           } catch (e) {
-            runHint.textContent = t('grip.init_err', { error: e });
+            const msg = t('grip.init_err', { error: e });
+            setStatus(msg, true);
+            if (runHint) runHint.textContent = msg;
           }
         });
         if (syncBtn) syncBtn.addEventListener('click', async () => {
           const want = syncBtn.dataset.enabled !== '1';
+          box._gripBusy = true;
           syncBtn.disabled = true;
           try {
             const r = await fetch('/api/gripper/gello-sync', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
+              credentials: 'same-origin',
               body: JSON.stringify({
                 enabled: want,
-                gripper_agent_id: frame.agent_id,
+                gripper_agent_id: gripAgentId(),
                 joint_index: 6,
               }),
             }).then((x) => x.json());
             if (!r.ok) {
-              runHint.textContent = t('grip.sync_fail', { error: r.error || JSON.stringify(r) });
+              const msg = t('grip.sync_fail', { error: r.error || JSON.stringify(r) });
+              setStatus(msg, true);
+              if (runHint) runHint.textContent = msg;
               return;
             }
             window.__gripGelloSync = r;
             applySyncUi(r);
-            runHint.textContent = r.enabled
+            const msg = r.enabled
               ? '已同步：服务端 gello → gripper（数据不经前端）'
               : '已取消同步';
+            setStatus(msg, false);
+            if (runHint) runHint.textContent = msg;
           } catch (e) {
-            runHint.textContent = t('grip.sync_err', { error: e });
+            const msg = t('grip.sync_err', { error: e });
+            setStatus(msg, true);
+            if (runHint) runHint.textContent = msg;
           } finally {
+            box._gripBusy = false;
             syncBtn.disabled = false;
+            applySyncUi(window.__gripGelloSync || { enabled: false });
           }
         });
         btn.addEventListener('click', async () => {
           const v = Number(inp.value);
           if (!Number.isFinite(v)) {
-            runHint.textContent = t('grip.bad_num');
+            const msg = t('grip.bad_num');
+            setStatus(msg, true);
+            if (runHint) runHint.textContent = msg;
             return;
           }
           const gp = gripGelloSyncParams();
-          const body = { agent_id: frame.agent_id };
+          const body = { agent_id: gripAgentId() };
           if (gp.commandAs === 'position_mm') body.position_mm = v;
           else body.position_norm = v;
           try {
             const r = await postGrip(body, btn);
-            runHint.textContent = r.ok
+            const msg = r.ok
               ? ('夹爪已下发 ' + gp.commandAs + '=' + v)
               : ('夹爪下发失败：' + (r.error || JSON.stringify(r)));
+            setStatus(msg, !r.ok);
+            if (runHint) runHint.textContent = msg;
           } catch (e) {
-            runHint.textContent = t('grip.cmd_err', { error: e });
+            const msg = t('grip.cmd_err', { error: e });
+            setStatus(msg, true);
+            if (runHint) runHint.textContent = msg;
           }
         });
       }
       applyGripCmdBounds(box);
-      if (box && box._applySyncUi) {
+      if (box && box._applySyncUi && !box._gripBusy) {
         box._applySyncUi(window.__gripGelloSync || { enabled: false });
       }
     }
@@ -11172,23 +11391,32 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const fb = usingRead
         ? window.__armReadJoints
         : (p.feedback_joints_rad || p.command_joints_rad || []);
+      // Jog rows already show joints — keep agent-vals as a short status strip
+      // so rad/deg text does not stack on top of the ± rows.
       const root = ensureValsRoot(card);
-      const items = [];
-      for (let i = 0; i < n; i++) {
-        items.push({ lab: 'j' + i, cal: fb[i] });
-      }
-      if (p.command_joints_rad) {
-        items.push({
+      const statusItems = [{
+        lab: 'state',
+        calText: p.armed ? 'armed' : 'idle',
+      }];
+      if (p.last_ok === false && p.last_error) {
+        statusItems.push({ lab: 'err', calText: String(p.last_error) });
+      } else if (p.command_joints_rad) {
+        statusItems.push({
           lab: 'last_cmd',
           calText: p.last_ok === false ? 'fail' : (p.last_ok ? 'ok' : '—'),
         });
       }
-      renderJointVals(root, items);
+      renderJointVals(root, statusItems);
       const poseSrc = (usingRead && window.__armReadCartesian)
         ? window.__armReadCartesian
         : p.cartesian_xyzrpy;
       renderPoseRow(card, poseSrc);
       let box = card.querySelector('.arm-cmd');
+      // Drop pre-layout boxes (rad/deg were concatenated and visually overlapped).
+      if (box && (!box.querySelector('.arm-jval-deg') || !box.querySelector('.arm-status'))) {
+        box.remove();
+        box = null;
+      }
       if (!box) {
         box = document.createElement('div');
         box.className = 'arm-cmd';
@@ -11200,6 +11428,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
               '<button type="button" class="arm-minus" data-j="' + i + '">−</button>' +
               '<button type="button" class="arm-plus" data-j="' + i + '">+</button>' +
               '<span class="arm-jval">—</span>' +
+              '<span class="arm-jval-deg">—</span>' +
             '</div>';
         }
         const inferScope = card.dataset.scope === 'infer';
@@ -11244,7 +11473,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
           '<div class="arm-abs-prog" data-i18n="arm.abs_idle">绝对下发：空闲</div>' +
           (inferScope
             ? '<span class="cmd-hint">推理页保留点动/绝对下发展示；不提供 gello 同步/摇操，pi05 不控臂</span>'
-            : '<span class="cmd-hint">须先有 robot·Read；Arm →「同步」对齐 →「摇操」跟随；解除后 gello 不再控臂</span>');
+            : '<span class="cmd-hint">须先有 robot·Read；Arm →「同步」对齐 →「摇操」跟随；解除后 gello 不再控臂</span>') +
+          '<div class="arm-status"></div>';
         card.appendChild(box);
         applyDomI18n(box);
         if (stationControlLocked) applySlaveControlGate(true);
@@ -11264,6 +11494,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const absLabel = box.querySelector('.arm-abs-label');
         const absTiming = box.querySelector('.arm-abs-timing');
         const absProg = box.querySelector('.arm-abs-prog');
+        const armStatus = box.querySelector('.arm-status');
+        const setArmStatus = (msg, isErr) => {
+          if (!armStatus) return;
+          armStatus.textContent = msg || '';
+          armStatus.style.color = isErr ? 'var(--danger, #f66)' : 'var(--accent)';
+        };
         applyArmAbsTimingTo(box, window.__armAbsTiming);
         wireArmAbsTimingInputs(box);
         const fillAbsFromRead = () => {
@@ -11299,8 +11535,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
           const r = await fetch('/api/arm/command', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ agent_id: frame.agent_id, ...body }),
-          }).then((x) => x.json());
+            credentials: 'same-origin',
+            body: JSON.stringify({
+              agent_id: window.__armWriteAgentId || frame.agent_id,
+              ...body,
+            }),
+          }).then(async (x) => {
+            const j = await x.json().catch(() => ({}));
+            if (!x.ok && j && j.ok === undefined) {
+              return { ok: false, error: 'HTTP ' + x.status + (j.detail ? (': ' + j.detail) : '') };
+            }
+            return j;
+          });
           return r;
         };
         const setJogEnabled = (on) => {
@@ -11321,6 +11567,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
           const teleoping = !!teleop.enabled;
           const absRamping = !!absRamp.enabled;
           armedTag.textContent = !hasRead ? 'need read' : (armed ? 'armed' : 'idle');
+          if (armBtn) armBtn.classList.toggle('arm-on', !!armed && hasRead);
           setJogEnabled(!!armed && hasRead && !syncing && !teleoping && !absRamping);
           if (absRamping && absSend) {
             absSend.disabled = false;
@@ -11404,31 +11651,51 @@ PREVIEW_HTML = """<!DOCTYPE html>
           }
         };
         armBtn.addEventListener('click', async () => {
-          runHint.textContent = t('arm.arming');
+          const busy = t('arm.arming');
+          setArmStatus(busy, false);
+          if (runHint) runHint.textContent = busy;
           try {
             const r = await postArm({ arm: true });
-            runHint.textContent = r.ok ? t('arm.arm_ok') : t('arm.arm_fail', { error: r.error || JSON.stringify(r) });
+            const msg = r.ok
+              ? t('arm.arm_ok')
+              : t('arm.arm_fail', { error: r.error || JSON.stringify(r) });
+            setArmStatus(msg, !r.ok);
+            if (runHint) runHint.textContent = msg;
             box._applyArmUi(!!(r.ok && r.armed));
           } catch (e) {
-            runHint.textContent = t('arm.arm_err', { error: e });
+            const msg = t('arm.arm_err', { error: e });
+            setArmStatus(msg, true);
+            if (runHint) runHint.textContent = msg;
           }
         });
         disarmBtn.addEventListener('click', async () => {
           try {
             const r = await postArm({ disarm: true });
-            runHint.textContent = r.ok ? t('arm.disarm_ok') : t('arm.disarm_fail', { error: r.error || JSON.stringify(r) });
+            const msg = r.ok
+              ? t('arm.disarm_ok')
+              : t('arm.disarm_fail', { error: r.error || JSON.stringify(r) });
+            setArmStatus(msg, !r.ok);
+            if (runHint) runHint.textContent = msg;
             box._applyArmUi(false);
           } catch (e) {
-            runHint.textContent = t('arm.disarm_err', { error: e });
+            const msg = t('arm.disarm_err', { error: e });
+            setArmStatus(msg, true);
+            if (runHint) runHint.textContent = msg;
           }
         });
         estopBtn.addEventListener('click', async () => {
           try {
             const r = await postArm({ stop: true });
-            runHint.textContent = r.ok ? t('arm.estop_ok') : t('arm.estop_fail', { error: r.error || JSON.stringify(r) });
+            const msg = r.ok
+              ? t('arm.estop_ok')
+              : t('arm.estop_fail', { error: r.error || JSON.stringify(r) });
+            setArmStatus(msg, !r.ok);
+            if (runHint) runHint.textContent = msg;
             box._applyArmUi(false);
           } catch (e) {
-            runHint.textContent = t('arm.estop_err', { error: e });
+            const msg = t('arm.estop_err', { error: e });
+            setArmStatus(msg, true);
+            if (runHint) runHint.textContent = msg;
           }
         });
         if (syncBtn) syncBtn.addEventListener('click', async () => {
@@ -11505,20 +11772,28 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const jog = async (jointIndex, sign) => {
           const dDeg = Number(delta.value);
           if (!Number.isFinite(dDeg) || dDeg <= 0) {
-            runHint.textContent = t('arm.bad_delta');
+            const msg = t('arm.bad_delta');
+            setArmStatus(msg, true);
+            if (runHint) runHint.textContent = msg;
             return;
           }
+          const pending = '点动 j' + jointIndex + ' ' + (sign > 0 ? '+' : '−') + dDeg.toFixed(1) + '°…';
+          setArmStatus(pending, false);
           try {
             const r = await postArm({
               jog_joint: jointIndex,
               delta_deg: sign * dDeg,
             });
-            runHint.textContent = r.ok
+            const msg = r.ok
               ? ('点动 j' + jointIndex + ' ' + (sign > 0 ? '+' : '−') + dDeg.toFixed(1) + '°')
               : ('点动失败：' + (r.error || JSON.stringify(r)));
+            setArmStatus(msg, !r.ok);
+            if (runHint) runHint.textContent = msg;
             if (r.armed === false) box._applyArmUi(false);
           } catch (e) {
-            runHint.textContent = t('arm.jog_err', { error: e });
+            const msg = t('arm.jog_err', { error: e });
+            setArmStatus(msg, true);
+            if (runHint) runHint.textContent = msg;
           }
         };
         box.querySelectorAll('.arm-minus').forEach((b) => {
@@ -11596,12 +11871,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
         rows.forEach((row) => {
           const i = Number(row.dataset.j);
           const span = row.querySelector('.arm-jval');
+          const degSpan = row.querySelector('.arm-jval-deg');
           const v = fb[i];
-          if (span) {
-            span.textContent = v == null || !Number.isFinite(Number(v))
-              ? '—'
-              : (Number(v).toFixed(3) + ' rad / ' + (Number(v) * 180 / Math.PI).toFixed(1) + '°');
+          if (v == null || !Number.isFinite(Number(v))) {
+            if (span) span.textContent = '—';
+            if (degSpan) degSpan.textContent = '—';
+            return;
           }
+          const rad = Number(v);
+          if (span) span.textContent = rad.toFixed(3) + ' rad';
+          if (degSpan) degSpan.textContent = (rad * 180 / Math.PI).toFixed(1) + '°';
         });
       }
     }
@@ -11957,6 +12236,18 @@ def create_viz_app(
             return str(err)
         return boot_error
 
+    def _gello_collect_ready(agents: Any) -> tuple[bool, str | None]:
+        """Collect requires at least one kind=gello agent (not optional gello_reinforce).
+
+        Missing gello locks Collect. Open/connect failure is already a boot_error.
+        """
+        if not isinstance(agents, dict):
+            return False, "no gello agent — Collect requires kind=gello"
+        for st in agents.values():
+            if isinstance(st, dict) and str(st.get("kind") or "") == "gello":
+                return True, None
+        return False, "no gello agent — Collect requires kind=gello"
+
     def _station_is_slave() -> bool:
         try:
             p = dict(status_fn() or {})
@@ -12024,20 +12315,57 @@ def create_viz_app(
     async def login_page() -> str:
         return inject_i18n_json(LOGIN_HTML)
 
+    def _arm_viz_for_html() -> dict[str, Any]:
+        from sensors_dcs.arm_viz import get_arm_viz_model, resolve_arm_viz_model
+
+        try:
+            cfg = (status_fn() or {}).get("config") or {}
+            av = cfg.get("arm_viz") if isinstance(cfg, dict) else None
+            if isinstance(av, dict) and av.get("urdf"):
+                return av
+        except Exception:  # noqa: BLE001
+            pass
+        if config_path:
+            try:
+                from sensors_dcs.config import load_dcs_config
+
+                dcfg = load_dcs_config(config_path)
+                return resolve_arm_viz_model(
+                    sensors_config=dcfg.sensors_config,
+                    agents=dcfg.agents,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        return get_arm_viz_model("elite_ec616")
+
+    def _inject_preview_html() -> str:
+        from sensors_dcs.arm_viz import inject_arm_viz_json
+
+        return inject_arm_viz_json(inject_i18n_json(PREVIEW_HTML), _arm_viz_for_html())
+
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request):
         if path_requires_auth("/") and not is_authenticated(request.headers.get("cookie")):
             return RedirectResponse(url="/login?from=/", status_code=302)
-        return HTMLResponse(inject_i18n_json(PREVIEW_HTML))
+        return HTMLResponse(_inject_preview_html())
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
         err = _current_boot_error()
+        collect_ok = err is None
+        collect_reason: str | None = None
+        if collect_ok:
+            try:
+                agents = (status_fn() or {}).get("agents")
+            except Exception:  # noqa: BLE001
+                agents = None
+            collect_ok, collect_reason = _gello_collect_ready(agents)
         return {
             "ok": err is None,
             "authRequired": auth_enabled(),
             "boot_error": err is not None,
-            "collect_ok": err is None,
+            "collect_ok": collect_ok,
+            "collect_reason": collect_reason,
             # Infer is independent of gello/collect boot lock (shared YAML).
             "infer_ok": True,
         }
@@ -12263,12 +12591,22 @@ def create_viz_app(
             payload.setdefault("ok", False)
             payload["boot_error"] = True
             payload["collect_ok"] = False
+            payload["collect_reason"] = "boot_error"
             payload["error"] = err
             if config_path is not None:
                 payload["config_path"] = config_path
         else:
             payload.setdefault("boot_error", False)
-            payload.setdefault("collect_ok", True)
+            gello_ok, gello_reason = _gello_collect_ready(payload.get("agents"))
+            payload["collect_ok"] = gello_ok
+            if gello_ok:
+                payload.pop("collect_reason", None)
+            else:
+                payload["collect_reason"] = gello_reason
+                # Surface reason for boot banner without marking full YAML boot failure.
+                payload.setdefault("error", gello_reason)
+                if config_path is not None:
+                    payload.setdefault("config_path", config_path)
         # Infer tab stays reachable even when Collect is locked (no gello / agent open fail).
         payload["infer_ok"] = True
         st = payload.get("station") if isinstance(payload.get("station"), dict) else {}
@@ -12287,6 +12625,20 @@ def create_viz_app(
                 "boot_error": True,
                 "collect_ok": False,
             }
+        try:
+            agents = (status_fn() or {}).get("agents")
+        except Exception:  # noqa: BLE001
+            agents = None
+        gello_ok, gello_reason = _gello_collect_ready(agents)
+        if not gello_ok:
+            return {
+                "ok": False,
+                "error": gello_reason or "collect unavailable (no gello)",
+                "state": "idle",
+                "boot_error": False,
+                "collect_ok": False,
+                "collect_reason": gello_reason,
+            }
         if recorder is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
         return {"ok": True, **recorder.status()}
@@ -12295,6 +12647,18 @@ def create_viz_app(
     async def record_start(req: RecordStartBody | None = None) -> dict[str, Any]:
         if _current_boot_error() is not None:
             return {"ok": False, "error": "collect unavailable (boot error)", "state": "idle"}
+        try:
+            agents = (status_fn() or {}).get("agents")
+        except Exception:  # noqa: BLE001
+            agents = None
+        gello_ok, gello_reason = _gello_collect_ready(agents)
+        if not gello_ok:
+            return {
+                "ok": False,
+                "error": gello_reason or "collect unavailable (no gello)",
+                "state": "idle",
+                "collect_ok": False,
+            }
         if _station_is_slave():
             return _deny_slave("start recording")
         if recorder is None and record_start_fn is None:
@@ -12930,7 +13294,7 @@ def create_error_app(
     err = error
 
     def status_fn() -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "ok": False,
             "boot_error": True,
             "collect_ok": False,
@@ -12939,6 +13303,23 @@ def create_error_app(
             "config_path": cfg,
             "agents": [],
         }
+        if cfg:
+            try:
+                from sensors_dcs.arm_viz import resolve_arm_viz_model
+                from sensors_dcs.config import load_dcs_config
+
+                dcfg = load_dcs_config(cfg)
+                payload["config"] = {
+                    "arm_viz": resolve_arm_viz_model(
+                        sensors_config=dcfg.sensors_config,
+                        agents=dcfg.agents,
+                    ),
+                    "tcp_xyz": list(dcfg.tcp_xyz) if dcfg.tcp_xyz else None,
+                    "sensors_config": dcfg.sensors_config,
+                }
+            except Exception:  # noqa: BLE001
+                pass
+        return payload
 
     def _shutdown() -> dict[str, Any]:
         if shutdown is not None:

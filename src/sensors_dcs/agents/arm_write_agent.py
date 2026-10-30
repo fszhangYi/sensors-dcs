@@ -77,8 +77,18 @@ class ArmWriteAgent(BaseAgent):
         jog_joint: int | None = None,
         delta_rad: float | None = None,
         delta_deg: float | None = None,
+        servoj_once: bool = False,
+        dense: bool = False,
+        idle_after: bool = False,
+        relative_to_last: bool = False,
     ) -> dict[str, Any]:
-        """Arm/disarm/stop or send absolute / jog command through the sensor."""
+        """Arm/disarm/stop or send absolute / jog command through the sensor.
+
+        CS66 dense paths (abs ramp / teleop / direct) must pass
+        ``servoj_once`` (+ usually ``relative_to_last``) so the driver uses a
+        single ``writeServoj`` instead of nested ``_servoj_stream`` + per-point
+        ``writeIdle``.
+        """
         body: dict[str, Any] = {}
         if arm:
             body["arm"] = True
@@ -89,8 +99,14 @@ class ArmWriteAgent(BaseAgent):
             body["joints_rad"] = [float(x) for x in joints_rad]
             if reference_joints_rad is not None:
                 body["reference_joints_rad"] = [float(x) for x in reference_joints_rad]
+            if servoj_once or dense:
+                body["servoj_once"] = True
+            if idle_after:
+                body["idle_after"] = True
+            if relative_to_last:
+                body["relative_to_last"] = True
         elif jog_joint is not None:
-            # Prefer orchestrator converting jog→absolute from arm_read; keep for tests.
+            # CS66: orchestrator passes jog through so the driver streams from last_cmd.
             body["jog_joint"] = int(jog_joint)
             if delta_rad is not None:
                 body["delta_rad"] = float(delta_rad)

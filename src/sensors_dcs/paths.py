@@ -163,10 +163,24 @@ def _seed_file(src: Path, dst: Path) -> None:
 
 
 def _seed_tree(src: Path, dst: Path) -> None:
+    """Copy tree; if ``dst`` already exists, only fill missing files (e.g. RTSI .txt)."""
     if not src.is_dir():
         return
     if not dst.exists():
         shutil.copytree(src, dst)
+        return
+    for path in src.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            rel = path.relative_to(src)
+        except ValueError:
+            continue
+        target = dst / rel
+        if target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
 
 
 def ensure_runtime_env(*, desktop: bool = False) -> Path:
@@ -200,9 +214,17 @@ def ensure_runtime_env(*, desktop: bool = False) -> Path:
         "sensors_robot_write.yaml",
         "gello_arm_sync.yaml",
         "sensors_gello_arm_sync.yaml",
+        "g26562.yaml",
+        "sensors_g26562.yaml",
         "hik_camera_map.yaml",
     ):
         _seed_file(root / "configs" / name, data / "configs" / name)
+    # CS66 RTSI recipes referenced by sensors_g26562.yaml (cwd often user-data/run)
+    rtsi_src = root / "configs" / "rtsi"
+    if rtsi_src.is_dir():
+        _seed_tree(rtsi_src, data / "configs" / "rtsi")
+        (data / "run").mkdir(parents=True, exist_ok=True)
+        _seed_tree(rtsi_src, data / "run" / "configs" / "rtsi")
 
     bundled_sensors_cfg = root / "sensors" / "configs"
     if not bundled_sensors_cfg.is_dir():
@@ -224,6 +246,7 @@ def ensure_runtime_env(*, desktop: bool = False) -> Path:
         ("robot_only.yaml", "sensors_robot.yaml"),
         ("robot_write.yaml", "sensors_robot_write.yaml"),
         ("gello_arm_sync.yaml", "sensors_gello_arm_sync.yaml"),
+        ("g26562.yaml", "sensors_g26562.yaml"),
     ):
         seeded = data / "configs" / dcs_name
         sensors_local = data / "configs" / sensors_name

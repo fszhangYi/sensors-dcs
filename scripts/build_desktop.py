@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Build sensors-dcs desktop packages (Windows via Wine — Scheme A)."""
+"""Build sensors-dcs desktop packages (Scheme A).
+
+Targets:
+  - windows on Linux  → Wine + embeddable CPython (scheme-a-linux-to-windows-desktop)
+  - windows / native-win on Windows → host PyInstaller (native-win)
+  - linux / native on Linux → host PyInstaller (scheme-a-linux-to-linux-desktop)
+"""
 
 from __future__ import annotations
 
@@ -12,13 +18,36 @@ import sys
 import time
 import zipfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 APP_ID = "sensors-dcs"
 APP_EXE = "sensors-dcs"
 PIP_INDEX = os.environ.get("PIP_INDEX_URL", "https://pypi.tuna.tsinghua.edu.cn/simple")
-TMP_BASE = Path(os.environ.get("SENSORS_DCS_BUILD_TMP", "/root/autodl-tmp/tmp"))
+# Tsinghua TLS EOF is common on some networks; try other mirrors automatically.
+_PIP_FALLBACK_INDEXES = (
+    "https://pypi.tuna.tsinghua.edu.cn/simple",
+    "https://mirrors.aliyun.com/pypi/simple",
+    "https://mirrors.cloud.tencent.com/pypi/simple",
+    "https://pypi.org/simple",
+)
+
+
+def _default_tmp_base() -> Path:
+    env = os.environ.get("SENSORS_DCS_BUILD_TMP")
+    if env:
+        return Path(env)
+    if sys.platform.startswith("win"):
+        return ROOT / ".tools" / "build-tmp"
+    return Path("/root/autodl-tmp/tmp")
+
+
+TMP_BASE = _default_tmp_base()
+
+
+def _is_windows_host() -> bool:
+    return sys.platform.startswith("win")
 
 
 def _utc_stamp() -> str:
@@ -39,29 +68,232 @@ def _run(
     return rc
 
 
+_PIP_BAD_INDEXES: set[str] = set()
+_PIP_INDEX_ORDER: list[str] | None = None
+
+
+def _pip_index_candidates() -> list[str]:
+    """Primary PIP_INDEX_URL, optional PIP_INDEX_URLS CSV, then built-in fallbacks."""
+    raw = (os.environ.get("PIP_INDEX_URLS") or "").strip()
+    if raw:
+        return [u.strip().rstrip("/") for u in raw.split(",") if u.strip()]
+    out: list[str] = []
+    for u in (PIP_INDEX, *_PIP_FALLBACK_INDEXES):
+        u = (u or "").strip().rstrip("/")
+        if u and u not in out:
+            out.append(u)
+    return out
+
+
+def _https_index_reachable(index_url: str, *, timeout_s: float = 6.0) -> bool:
+    """Cheap TLS/HTTP probe so we skip dead mirrors before long pip retries."""
+    import ssl
+    import urllib.error
+    import urllib.request
+
+    url = index_url.rstrip("/") + "/pip/"
+    ctx = ssl.create_default_context()
+    try:
+        req = urllib.request.Request(url, method="GET", headers={"User-Agent": "sensors-dcs-build"})
+        with urllib.request.urlopen(req, timeout=timeout_s, context=ctx) as resp:
+            return int(getattr(resp, "status", 200) or 200) < 500
+    except Exception as e:  # noqa: BLE001
+        print(f"[pip] probe fail {index_url}: {e}", flush=True)
+        return False
+
+
+def _resolved_pip_indexes() -> list[str]:
+    """Probe once per process; prefer reachable mirrors; remember failures."""
+    global _PIP_INDEX_ORDER
+    if _PIP_INDEX_ORDER is None:
+        ordered = _pip_index_candidates()
+        reachable = [u for u in ordered if _https_index_reachable(u)]
+        if reachable:
+            # Keep relative preference among reachable; drop unreachable for this run.
+            _PIP_INDEX_ORDER = reachable
+            skipped = [u for u in ordered if u not in reachable]
+            if skipped:
+                print(f"[pip] skipping unreachable mirrors: {', '.join(skipped)}", flush=True)
+            print(f"[pip] using mirrors: {', '.join(reachable)}", flush=True)
+        else:
+            print("[pip] all probes failed; will still try candidates in order", flush=True)
+            _PIP_INDEX_ORDER = ordered
+    return [u for u in _PIP_INDEX_ORDER if u not in _PIP_BAD_INDEXES] or list(_PIP_INDEX_ORDER)
+
+
+def _pip_trusted_host_args(index_url: str) -> list[str]:
+    host = urlparse(index_url).hostname
+    hosts: list[str] = []
+    if host:
+        hosts.append(host)
+    for h in ("files.pythonhosted.org", "pypi.python.org", "pypi.org"):
+        if h not in hosts:
+            hosts.append(h)
+    args: list[str] = []
+    for h in hosts:
+        args.extend(["--trusted-host", h])
+    return args
+
+
+def _pip_install(py_cmd: list[str], *pip_args: str, env: dict | None = None) -> None:
+    """``python -m pip install …`` with mirror fallback on SSL/network failure."""
+    base_env = dict(env or os.environ)
+    last: subprocess.CalledProcessError | None = None
+    indexes = _resolved_pip_indexes()
+    for i, index in enumerate(indexes):
+        cmd = [
+            *py_cmd,
+            "-m",
+            "pip",
+            "install",
+            *pip_args,
+            "-i",
+            index,
+            *_pip_trusted_host_args(index),
+        ]
+        e = dict(base_env)
+        e["PIP_INDEX_URL"] = index
+        print(f"[pip] index ({i + 1}/{len(indexes)}): {index}", flush=True)
+        try:
+            _run(cmd, env=e)
+            return
+        except subprocess.CalledProcessError as err:
+            last = err
+            _PIP_BAD_INDEXES.add(index)
+            if i + 1 < len(indexes):
+                print(f"[pip] failed with {index}; trying next mirror…", flush=True)
+    assert last is not None
+    raise last
+
+
+def _run_get_pip(py_cmd: list[str], get_pip: str | Path, *, env: dict | None = None) -> None:
+    """Bootstrap pip via get-pip.py with the same mirror fallbacks."""
+    base_env = dict(env or os.environ)
+    last: subprocess.CalledProcessError | None = None
+    indexes = _resolved_pip_indexes()
+    script = str(get_pip)
+    for i, index in enumerate(indexes):
+        cmd = [
+            *py_cmd,
+            script,
+            "-i",
+            index,
+            *_pip_trusted_host_args(index),
+        ]
+        e = dict(base_env)
+        e["PIP_INDEX_URL"] = index
+        print(f"[get-pip] index ({i + 1}/{len(indexes)}): {index}", flush=True)
+        try:
+            _run(cmd, env=e)
+            return
+        except subprocess.CalledProcessError as err:
+            last = err
+            _PIP_BAD_INDEXES.add(index)
+            if i + 1 < len(indexes):
+                print(f"[get-pip] failed with {index}; trying next mirror…", flush=True)
+    assert last is not None
+    raise last
+
+
+def _rmtree_robust(path: Path) -> None:
+    """Remove a directory; on Windows locks, rename aside instead of failing hard."""
+    if not path.exists():
+        return
+    try:
+        shutil.rmtree(path)
+        return
+    except OSError as first:
+        print(f"[warn] rmtree failed ({first}); trying rename-aside", flush=True)
+    trash = path.with_name(f"{path.name}.trash-{_utc_stamp()}")
+    try:
+        path.rename(trash)
+    except OSError as e:
+        raise SystemExit(
+            f"cannot remove locked build dir:\n  {path}\n"
+            "Close any running sensors-dcs.exe, Explorer windows on that folder, "
+            "or antivirus scan; then retry build.bat.\n"
+            f"cause: {e}"
+        ) from e
+    shutil.rmtree(trash, ignore_errors=True)
+
+
+def _stop_stale_sensors_dcs() -> None:
+    """Best-effort: quit leftover frozen sensors-dcs that lock dist DLLs on Windows."""
+    if not _is_windows_host():
+        return
+    try:
+        _run(
+            [
+                "taskkill",
+                "/F",
+                "/IM",
+                "sensors-dcs.exe",
+            ],
+            check=False,
+        )
+    except Exception:
+        pass
+
+
 def _linux_to_wine_path(path: Path) -> str:
     p = path.resolve()
     return "Z:" + str(p).replace("/", "\\")
 
 
-def _ensure_win_python(tools: Path) -> Path:
-    py = tools / "win-python"
+def _download_file(url: str, dest: Path) -> bool:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if shutil.which("curl"):
+        try:
+            _run(["curl", "-L", "--retry", "3", "-o", str(dest), url])
+            if dest.is_file() and dest.stat().st_size > 100_000:
+                return True
+        except Exception:
+            pass
+    try:
+        import urllib.request
+
+        print(f"+ urllib download {url}", flush=True)
+        urllib.request.urlretrieve(url, str(dest))  # noqa: S310
+        return dest.is_file() and dest.stat().st_size > 100_000
+    except Exception as e:
+        print(f"[warn] download failed: {e}", flush=True)
+        return False
+
+
+def _extract_zip(zip_path: Path, dest: Path) -> None:
+    dest.mkdir(parents=True, exist_ok=True)
+    if shutil.which("unzip"):
+        _run(["unzip", "-o", str(zip_path), "-d", str(dest)])
+        return
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(dest)
+
+
+def _ensure_win_python(
+    tools: Path,
+    *,
+    ver: str = "3.10.11",
+    dirname: str | None = None,
+) -> Path:
+    """Embeddable CPython for Wine (3.10) or native-win CS SDK builds (3.12)."""
+    dirname = dirname or ("win-python312" if ver.startswith("3.12") else "win-python")
+    py = tools / dirname
     python_exe = py / "python.exe"
     if python_exe.is_file():
         return py
 
-    # Reuse sibling sensors-view embed Python when available (saves download).
-    sibling = ROOT.parent / "sensors-view" / ".tools" / "win-python" / "python.exe"
-    if sibling.is_file():
-        print(f"[win-python] copy from {sibling.parent}", flush=True)
-        tools.mkdir(parents=True, exist_ok=True)
-        if py.exists():
-            shutil.rmtree(py)
-        shutil.copytree(sibling.parent, py)
-        return py
+    # Reuse sibling sensors-view embed only when requesting the same 3.10 tree.
+    if ver.startswith("3.10"):
+        sibling = ROOT.parent / "sensors-view" / ".tools" / "win-python" / "python.exe"
+        if sibling.is_file():
+            print(f"[win-python] copy from {sibling.parent}", flush=True)
+            tools.mkdir(parents=True, exist_ok=True)
+            if py.exists():
+                shutil.rmtree(py)
+            shutil.copytree(sibling.parent, py)
+            return py
 
     tools.mkdir(parents=True, exist_ok=True)
-    ver = "3.10.11"
     urls = [
         f"https://registry.npmmirror.com/-/binary/python/{ver}/python-{ver}-embed-amd64.zip",
         f"https://www.python.org/ftp/python/{ver}/python-{ver}-embed-amd64.zip",
@@ -70,19 +302,15 @@ def _ensure_win_python(tools: Path) -> Path:
     if not zip_path.is_file() or zip_path.stat().st_size < 1_000_000:
         ok = False
         for url in urls:
-            try:
-                _run(["curl", "-L", "--retry", "3", "-o", str(zip_path), url])
-                if zip_path.is_file() and zip_path.stat().st_size > 1_000_000:
-                    ok = True
-                    break
-            except Exception:
-                continue
+            if _download_file(url, zip_path):
+                ok = True
+                break
         if not ok:
-            raise SystemExit("failed to download embeddable CPython")
+            raise SystemExit(f"failed to download embeddable CPython {ver}")
     if py.exists():
         shutil.rmtree(py)
     py.mkdir(parents=True)
-    _run(["unzip", "-o", str(zip_path), "-d", str(py)])
+    _extract_zip(zip_path, py)
 
     pth = next(py.glob("python*._pth"))
     lines = pth.read_text(encoding="utf-8").splitlines()
@@ -104,7 +332,11 @@ def _ensure_win_python(tools: Path) -> Path:
 
     get_pip = tools / "get-pip.py"
     if not get_pip.is_file():
-        _run(["curl", "-L", "-o", str(get_pip), "https://bootstrap.pypa.io/get-pip.py"])
+        if not _download_file("https://bootstrap.pypa.io/get-pip.py", get_pip):
+            _download_file(
+                "https://cdn.jsdelivr.net/gh/pypa/get-pip@main/public/get-pip.py",
+                get_pip,
+            )
     return py
 
 
@@ -125,7 +357,12 @@ def _wine_bin() -> str:
     raise SystemExit("wine64/wine not found — install wine (win64) first")
 
 
-def _verify_bundled_imports(py_cmd: list[str], *, env: dict | None = None) -> None:
+def _verify_bundled_imports(
+    py_cmd: list[str],
+    *,
+    env: dict | None = None,
+    require_elite_cs_sdk: bool = False,
+) -> None:
     required = [
         "dynamixel_sdk",
         "serial",
@@ -144,8 +381,13 @@ def _verify_bundled_imports(py_cmd: list[str], *, env: dict | None = None) -> No
         "fastapi",
         "uvicorn",
     ]
+    if require_elite_cs_sdk:
+        required = [*required, "elite_cs_sdk"]
     # watchfiles is optional under Wine (Rust extension often fails DLL load); still try.
     optional = ["watchfiles"]
+    if not require_elite_cs_sdk:
+        optional = [*optional, "elite_cs_sdk"]
+    TMP_BASE.mkdir(parents=True, exist_ok=True)
     script = TMP_BASE / "_verify_wine_imports.py"
     script.write_text(
         "\n".join(
@@ -187,6 +429,71 @@ def _verify_bundled_imports(py_cmd: list[str], *, env: dict | None = None) -> No
     )
     script_arg = _linux_to_wine_path(script) if py_cmd[0] in ("wine64", "wine") else str(script)
     _run([*py_cmd, script_arg], env=env)
+
+
+def _py_tag(py_cmd: list[str], *, env: dict | None = None) -> str:
+    """Return e.g. ``cp312`` for the build interpreter."""
+    out = subprocess.check_output(
+        [*py_cmd, "-c", "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')"],
+        env=env,
+        cwd=str(ROOT),
+        text=True,
+    ).strip()
+    return out
+
+
+def _find_elite_cs_sdk_wheel(tag: str) -> Path | None:
+    """Locate ``elite_cs_sdk-*-{tag}-*-win_amd64.whl`` under workspace vendor trees."""
+    roots = [
+        ROOT / "vendor" / "Elite_Robots_CS_SDK_Python" / "dist",
+        ROOT.parent / "vendor" / "Elite_Robots_CS_SDK_Python" / "dist",
+    ]
+    hits: list[Path] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for whl in sorted(root.glob("elite_cs_sdk-*.whl")):
+            name = whl.name.lower()
+            if tag in name and "win_amd64" in name:
+                hits.append(whl)
+    return hits[-1] if hits else None
+
+
+def _install_elite_cs_sdk(py_cmd: list[str], *, env: dict | None = None) -> Path:
+    """Install Elite CS SDK wheel matching build Python (not PyPI elirobots)."""
+    tag = _py_tag(py_cmd, env=env)
+    whl = _find_elite_cs_sdk_wheel(tag)
+    if whl is None:
+        raise SystemExit(
+            f"elite_cs_sdk wheel for {tag}-win_amd64 not found under "
+            "vendor/Elite_Robots_CS_SDK_Python/dist (or ../vendor/...). "
+            "CS66 / arm_cs_write needs Elite_Robots_CS_SDK_Python — not elirobots. "
+            f"Build a {tag} wheel or place one in that dist/ folder."
+        )
+    print(f"[elite_cs_sdk] installing {whl.name}", flush=True)
+    _pip_install(py_cmd, "--force-reinstall", str(whl), env=env)
+    return whl
+
+
+def _requirements_for_build_python(req_path: Path, *, tag: str) -> Path:
+    """Rewrite numpy pin for CPython 3.12+ (1.23.5 has no cp312 wheel)."""
+    if tag in {"cp310", "cp311"}:
+        return req_path
+    lines = req_path.read_text(encoding="utf-8").splitlines()
+    out: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("numpy==1.23.5") or stripped.startswith("numpy>="):
+            # pyarrow 26 / opencv 5 on cp312 need NumPy 2; scipy 1.11 cannot.
+            out.append("numpy>=2.0,<2.3  # desktop 3.12+: align pyarrow/opencv")
+        elif stripped.startswith("scipy>=") and ("<1.12" in stripped or "<1.15" in stripped):
+            out.append("scipy>=1.14,<1.16  # desktop 3.12+: NumPy 2 compatible")
+        else:
+            out.append(line)
+    TMP_BASE.mkdir(parents=True, exist_ok=True)
+    dest = TMP_BASE / f"{req_path.stem}-{tag}.txt"
+    dest.write_text("\n".join(out) + "\n", encoding="utf-8")
+    return dest
 
 
 def _verify_bundled_pyarrow(release: Path) -> None:
@@ -286,7 +593,92 @@ def _verify_frozen_parquet_smoke(
     _run([wine, py_wine, script_w], env=env)
 
 
-def _verify_bundled_robot_sdk(release: Path) -> None:
+def _verify_frozen_parquet_smoke_native(py_exe: Path, built: Path, env: dict[str, str]) -> None:
+    """Import pyarrow from the onedir _internal tree using host Python (native-win)."""
+    internal = str((built / "_internal").resolve())
+    script = TMP_BASE / "_verify_frozen_parquet_native.py"
+    script.write_text(
+        "\n".join(
+            [
+                "import os, sys, tempfile",
+                f"internal = {internal!r}",
+                'pyarrow_libs = os.path.join(internal, "pyarrow.libs")',
+                'pyarrow_dir = os.path.join(internal, "pyarrow")',
+                "path_add = os.pathsep.join([pyarrow_libs, pyarrow_dir, internal])",
+                'os.environ["PATH"] = path_add + os.pathsep + os.environ.get("PATH", "")',
+                "sys.path.insert(0, internal)",
+                "import pyarrow",
+                "import pandas as pd",
+                'p = os.path.join(tempfile.gettempdir(), "sensors_dcs_parquet_smoke.parquet")',
+                'pd.DataFrame({"x": [1]}).to_parquet(p, index=False, engine="pyarrow")',
+                "os.remove(p)",
+                'print("frozen_parquet_ok", pyarrow.__version__)',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _run([str(py_exe), str(script)], env=env)
+
+
+def _windows_release_readme() -> str:
+    return "\n".join(
+        [
+            "sensors-dcs desktop (Windows x64)",
+            "",
+            "1. Unzip this folder",
+            "2. Double-click sensors-dcs.exe (headless backend; no window)",
+            "   Or in cmd: sensors-dcs.exe --ui  (open viz window/browser)",
+            "   Viz URL default: http://127.0.0.1:7011/",
+            "3. No need to install Python / Node",
+            "4. User data: %APPDATA%\\sensors-dcs\\",
+            "5. Config after first run: %APPDATA%\\sensors-dcs\\configs\\",
+            "   default / gello_only / gello_gripper / camera-only / camera-multi / full_cell / g26562",
+            "   sensors_gello*.yaml → endpoint: \"COM3\" (or your COM port)",
+            "   sensors_camera.yaml  → serial already 336222075436",
+            "   sensors_cameras.yaml / sensors_full_cell.yaml",
+            "     → middle fixed; fill left/right serials",
+            "6. Or set env before launch: set SENSORS_DCS_DRY_RUN=0",
+            "7. Live UI shows dry_run=false and no [synth] tag when real",
+            "8. Open UI from terminal: sensors-dcs.exe --ui",
+            "   Or env: set SENSORS_DCS_UI=1",
+            "9. Force browser instead of webview: SENSORS_DCS_BROWSER=1",
+            "10. Desktop window needs Microsoft Edge WebView2 Runtime",
+            "11. Hardware: dynamixel-sdk + pyserial bundled (Gello)",
+            "    Install FTDI/USB-serial driver; match baudrate (default 57600)",
+            "12. RealSense: pyrealsense2 bundled; USB camera still needs Intel driver",
+            "13. Export: sensors-dcs.exe export-timeline -e episode_00000 --align asof",
+            "    filter-timeline also bundled (pandas/pyarrow in _internal/pyarrow/)",
+            "    First install: use the FULL .zip; delta.zip only patches an existing install",
+            "14. Elite arm: EC (elirobots) and/or CS (arm_cs_write) drivers bundled per config",
+            "",
+        ]
+    )
+
+
+def _copy_windows_launchers(release: Path) -> None:
+    """Copy packaging/launchers/*.bat next to sensors-dcs.exe."""
+    src_dir = ROOT / "packaging" / "launchers"
+    if not src_dir.is_dir():
+        return
+    for bat in sorted(src_dir.glob("*.bat")):
+        dst = release / bat.name
+        shutil.copy2(bat, dst)
+        print(f"[postprocess] launcher {dst.name}")
+
+
+def _zip_release_dir(release: Path) -> Path:
+    zip_path = release.with_suffix(".zip")
+    if zip_path.exists():
+        zip_path.unlink()
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for path in release.rglob("*"):
+            if path.is_file():
+                zf.write(path, arcname=str(path.relative_to(release.parent)))
+    return zip_path
+
+
+def _verify_bundled_robot_sdk(release: Path, *, require_elite_cs_sdk: bool = False) -> None:
     internal = release / "_internal"
     elite_dir = internal / "elite"
     if not elite_dir.is_dir():
@@ -299,7 +691,20 @@ def _verify_bundled_robot_sdk(release: Path) -> None:
         raise SystemExit(
             f"build verification failed: pyrealsense2 binaries missing under {internal / 'pyrealsense2'}"
         )
-    print(f"[verify] elite + pyrealsense2 bundled ({len(list(elite_dir.rglob('*.py')))} elite py files)")
+    cs_dir = internal / "elite_cs_sdk"
+    cs_pyd = list(cs_dir.rglob("*.pyd")) if cs_dir.is_dir() else []
+    cs_dll = list(cs_dir.rglob("*.dll")) if cs_dir.is_dir() else []
+    if require_elite_cs_sdk:
+        if not cs_dir.is_dir() or not cs_pyd:
+            raise SystemExit(
+                f"build verification failed: missing elite_cs_sdk under {internal} "
+                "(install Elite_Robots_CS_SDK_Python wheel matching build Python; not elirobots)"
+            )
+    print(
+        f"[verify] elite + pyrealsense2 bundled "
+        f"({len(list(elite_dir.rglob('*.py')))} elite py files; "
+        f"elite_cs_sdk pyd={len(cs_pyd)} dll={len(cs_dll)})"
+    )
 
 
 def _postprocess_windows(built: Path, py_dir: Path) -> None:
@@ -307,8 +712,11 @@ def _postprocess_windows(built: Path, py_dir: Path) -> None:
     internal = built / "_internal"
     internal.mkdir(parents=True, exist_ok=True)
     embed_zip = py_dir / "python310.zip"
+    if not embed_zip.is_file():
+        zips = sorted(py_dir.glob("python3*.zip"))
+        embed_zip = zips[0] if zips else embed_zip
     if embed_zip.is_file():
-        shutil.copy2(embed_zip, internal / "python310.zip")
+        shutil.copy2(embed_zip, internal / embed_zip.name)
 
     base = internal / "base_library.zip"
     if not base.is_file():
@@ -399,9 +807,10 @@ def build_windows(*, skip_frontend: bool = True, delta: bool = True) -> Path:
 
     py_wine = _linux_to_wine_path(py_dir / "python.exe")
     get_pip_w = _linux_to_wine_path(get_pip)
-    _run([wine, py_wine, get_pip_w, "-i", PIP_INDEX], env=env)
+    wine_py = [wine, py_wine]
+    _run_get_pip(wine_py, get_pip_w, env=env)
     try:
-        _run([wine, py_wine, "-m", "pip", "--version"], env=env)
+        _run([*wine_py, "-m", "pip", "--version"], env=env)
     except subprocess.CalledProcessError as e:
         raise SystemExit(
             "pip not available in Wine embed Python after get-pip; "
@@ -411,40 +820,19 @@ def build_windows(*, skip_frontend: bool = True, delta: bool = True) -> Path:
     req = _linux_to_wine_path(ROOT / "requirements.txt")
     req_d = _linux_to_wine_path(ROOT / "requirements-desktop.txt")
     req_h = _linux_to_wine_path(ROOT / "requirements-hardware.txt")
-    _run([wine, py_wine, "-m", "pip", "install", "-i", PIP_INDEX, "-r", req], env=env)
-    _run([wine, py_wine, "-m", "pip", "install", "-i", PIP_INDEX, "-r", req_d], env=env)
-    _run([wine, py_wine, "-m", "pip", "install", "-i", PIP_INDEX, "-r", req_h], env=env)
+    _pip_install(wine_py, "-r", req, env=env)
+    _pip_install(wine_py, "-r", req_d, env=env)
+    _pip_install(wine_py, "-r", req_h, env=env)
     # Force numpy pin last, then reinstall scipy in the range compatible with 1.23.5.
-    _run(
-        [
-            wine,
-            py_wine,
-            "-m",
-            "pip",
-            "install",
-            "-i",
-            PIP_INDEX,
-            "numpy==1.23.5",
-            "scipy>=1.10,<1.12",
-        ],
-        env=env,
-    )
+    _pip_install(wine_py, "numpy==1.23.5", "scipy>=1.10,<1.12", env=env)
     # Wine 6 / Win7-ish prefixes lack bcryptprimitives.dll; pydantic-core>=2.18 links it
     # and breaks PyInstaller Analysis (`import pydantic` → DLL load failed). Pin a stack
     # that still uses bcrypt.dll (present under Wine). Real Win10+ targets are fine either way.
-    _run(
-        [
-            wine,
-            py_wine,
-            "-m",
-            "pip",
-            "install",
-            "-i",
-            PIP_INDEX,
-            "pydantic-core==2.14.6",
-            "pydantic==2.5.3",
-            "fastapi==0.115.6",
-        ],
+    _pip_install(
+        wine_py,
+        "pydantic-core==2.14.6",
+        "pydantic==2.5.3",
+        "fastapi==0.115.6",
         env=env,
     )
     # Drop watchfiles before Analysis: its _rust_notify.pyd also needs
@@ -518,50 +906,151 @@ def build_windows(*, skip_frontend: bool = True, delta: bool = True) -> Path:
         "notes": "Built on Linux via Wine + embeddable CPython + PyInstaller (scheme-a-linux-to-windows-desktop)",
     }
     (release / "BUILD_INFO.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
-    (release / "README.txt").write_text(
-        "\n".join(
-            [
-                "sensors-dcs desktop (Windows x64)",
-                "",
-                "1. Unzip this folder",
-                "2. Double-click sensors-dcs.exe (headless backend; no window)",
-                "   Or in cmd: sensors-dcs.exe --ui  (open viz window/browser)",
-                "   Viz URL default: http://127.0.0.1:7011/",
-                "3. No need to install Python / Node",
-                "4. User data: %APPDATA%\\sensors-dcs\\",
-                "5. Config after first run: %APPDATA%\\sensors-dcs\\configs\\",
-                "   default / gello_only / gello_gripper / camera-only / camera-multi / full_cell",
-                "   sensors_gello*.yaml → endpoint: \"COM3\" (or your COM port)",
-                "   sensors_camera.yaml  → serial already 336222075436",
-                "   sensors_cameras.yaml / sensors_full_cell.yaml",
-                "     → middle fixed; fill left/right serials",
-                "6. Or set env before launch: set SENSORS_DCS_DRY_RUN=0",
-                "7. Live UI shows dry_run=false and no [synth] tag when real",
-                "8. Open UI from terminal: sensors-dcs.exe --ui",
-                "   Or env: set SENSORS_DCS_UI=1",
-                "9. Force browser instead of webview: SENSORS_DCS_BROWSER=1",
-                "10. Desktop window needs Microsoft Edge WebView2 Runtime",
-                "11. Hardware: dynamixel-sdk + pyserial bundled (Gello)",
-                "    Install FTDI/USB-serial driver; match baudrate (default 57600)",
-                "12. RealSense: pyrealsense2 bundled; USB camera still needs Intel driver",
-                "13. Export: sensors-dcs.exe export-timeline -e episode_00000 --align asof",
-                "    filter-timeline also bundled (pandas/pyarrow in _internal/pyarrow/)",
-                "    First install: use the FULL .zip; delta.zip only patches an existing install",
-                "14. Elite arm (arm_read): elite SDK bundled (PyPI elirobots); set robot_ip in config",
-                "    Monitor port 8056; control port not used (read-only driver)",
-                "",
-            ]
-        ),
-        encoding="utf-8",
+    (release / "README.txt").write_text(_windows_release_readme(), encoding="utf-8")
+    _copy_windows_launchers(release)
+
+    zip_path = _zip_release_dir(release)
+    print(f"release: {release}")
+    print(f"zip: {zip_path}")
+    if delta:
+        _maybe_build_delta(release)
+    return release
+
+
+def build_windows_native(*, skip_frontend: bool = True, delta: bool = True) -> Path:
+    """Windows host → Windows onedir (no Wine).
+
+    Uses embeddable CPython **3.12** so the workspace ``elite_cs_sdk`` cp312 wheel
+    (Elite CS66 / ``arm_cs_write``) can be bundled. Wine cross-builds stay on 3.10.
+    """
+    del skip_frontend
+    if not _is_windows_host():
+        raise SystemExit("native-win / Windows host build requires running on Windows")
+    if not (ROOT / "sensors" / "src" / "sensors").is_dir():
+        raise SystemExit(
+            "missing ./sensors junction/symlink → hik-sensors src "
+            "(mklink /J sensors ..\\sensors)"
+        )
+
+    tools = ROOT / ".tools"
+    # 3.12: matches vendor elite_cs_sdk-*-cp312-*-win_amd64.whl (CS SDK not on PyPI).
+    py_dir = _ensure_win_python(tools, ver="3.12.10", dirname="win-python312")
+    py = py_dir / "python.exe"
+    get_pip = tools / "get-pip.py"
+    if not get_pip.is_file():
+        if not _download_file("https://bootstrap.pypa.io/get-pip.py", get_pip):
+            raise SystemExit("failed to download get-pip.py")
+
+    env = os.environ.copy()
+    env["PIP_INDEX_URL"] = PIP_INDEX
+    env["PYTHONNOUSERSITE"] = "1"
+
+    py_cmd = [str(py)]
+    _run_get_pip(py_cmd, get_pip, env=env)
+    try:
+        _run([*py_cmd, "-m", "pip", "--version"], env=env)
+    except subprocess.CalledProcessError as e:
+        raise SystemExit(
+            "pip not available in embed Python after get-pip; "
+            "ensure python*._pth enables 'import site'"
+        ) from e
+
+    # Embed 3.12 get-pip may omit setuptools; sdists then fail with BackendUnavailable.
+    _pip_install(py_cmd, "-U", "pip", "setuptools", "wheel", env=env)
+
+    tag = _py_tag(py_cmd, env=env)
+    req = _requirements_for_build_python(ROOT / "requirements.txt", tag=tag)
+    req_d = _requirements_for_build_python(ROOT / "requirements-desktop.txt", tag=tag)
+    _pip_install(py_cmd, "-r", str(req), env=env)
+    _pip_install(py_cmd, "-r", str(req_d), env=env)
+    _pip_install(py_cmd, "-r", str(ROOT / "requirements-hardware.txt"), env=env)
+    _install_elite_cs_sdk(py_cmd, env=env)
+    # Prefer wheels compatible with embed 3.12 (desktop file still pins scipy<1.12 for 3.10).
+    if tag not in {"cp310", "cp311"}:
+        # Final pin after hardware extras may have yanked numpy around.
+        _pip_install(
+            py_cmd,
+            "numpy>=2.0,<2.3",
+            "scipy>=1.14,<1.16",
+            "pyinstaller>=6.3",
+            env=env,
+        )
+    else:
+        _pip_install(
+            py_cmd,
+            "numpy==1.23.5",
+            "scipy>=1.10,<1.12",
+            "pyinstaller>=6.3",
+            env=env,
+        )
+    _run([*py_cmd, "-m", "pip", "uninstall", "-y", "watchfiles"], env=env, check=False)
+    _verify_bundled_imports([str(py)], env=env, require_elite_cs_sdk=True)
+
+    # Avoid WinError 5 when a previous sensors-dcs.exe / Explorer holds dist DLLs:
+    # unique dist/work paths + best-effort kill + rename-aside cleanup.
+    _stop_stale_sensors_dcs()
+    time.sleep(0.5)
+    TMP_BASE.mkdir(parents=True, exist_ok=True)
+    for old in TMP_BASE.glob("sensors-dcs-dist-win-native*"):
+        _rmtree_robust(old)
+    for old in TMP_BASE.glob("sensors-dcs-work-win-native*"):
+        _rmtree_robust(old)
+    stamp_tmp = _utc_stamp()
+    dist = TMP_BASE / f"sensors-dcs-dist-win-native-{stamp_tmp}"
+    work = TMP_BASE / f"sensors-dcs-work-win-native-{stamp_tmp}"
+    dist.mkdir(parents=True)
+    work.mkdir(parents=True)
+
+    spec = ROOT / "packaging" / "sensors-dcs-desktop-win.spec"
+    _run(
+        [
+            str(py),
+            "-m",
+            "PyInstaller",
+            "--noconfirm",
+            "--clean",
+            f"--distpath={dist}",
+            f"--workpath={work}",
+            str(spec),
+        ],
+        env=env,
     )
 
-    zip_path = release.with_suffix(".zip")
-    if zip_path.exists():
-        zip_path.unlink()
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for path in release.rglob("*"):
-            if path.is_file():
-                zf.write(path, arcname=str(path.relative_to(release.parent)))
+    built = dist / APP_EXE
+    if not built.is_dir():
+        raise SystemExit(f"PyInstaller output missing: {built}")
+
+    _postprocess_windows(built, py_dir)
+    _verify_bundled_pyarrow(built)
+    _verify_bundled_scipy(built)
+    _verify_bundled_robot_sdk(built, require_elite_cs_sdk=True)
+    _verify_frozen_parquet_smoke_native(py, built, env)
+
+    stamp = _utc_stamp()
+    release = ROOT / "release" / f"{APP_ID}-desktop-windows-x64-{stamp}"
+    if release.exists():
+        shutil.rmtree(release)
+    shutil.copytree(built, release)
+
+    info = {
+        "app_id": APP_ID,
+        "platform": "windows-x64",
+        "self_contained": True,
+        "requires_python_on_target": False,
+        "built_at": stamp,
+        "entry": f"{APP_EXE}.exe",
+        "notes": (
+            "Built on Windows host with embed CPython 3.12 + native PyInstaller "
+            "(includes elite_cs_sdk for CS66 / arm_cs_write)"
+        ),
+        "host_python": sys.version.split()[0],
+        "bundle_python": "3.12.10-embed",
+    }
+    (release / "BUILD_INFO.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
+    (release / "README.txt").write_text(_windows_release_readme(), encoding="utf-8")
+    _copy_windows_launchers(release)
+
+    zip_path = _zip_release_dir(release)
     print(f"release: {release}")
     print(f"zip: {zip_path}")
     if delta:
@@ -584,42 +1073,16 @@ def build_linux(*, skip_frontend: bool = True, delta: bool = True) -> Path:
     env = os.environ.copy()
     env["PIP_INDEX_URL"] = PIP_INDEX
     env["PYTHONNOUSERSITE"] = "1"
-    _run([str(py), "-m", "pip", "install", "-U", "pip", "wheel", "-i", PIP_INDEX], env=env)
-    _run(
-        [str(py), "-m", "pip", "install", "-i", PIP_INDEX, "-r", str(ROOT / "requirements.txt")],
-        env=env,
-    )
-    _run(
-        [
-            str(py),
-            "-m",
-            "pip",
-            "install",
-            "-i",
-            PIP_INDEX,
-            "-r",
-            str(ROOT / "requirements-desktop.txt"),
-        ],
-        env=env,
-    )
+    py_cmd = [str(py)]
+    _pip_install(py_cmd, "-U", "pip", "wheel", env=env)
+    _pip_install(py_cmd, "-r", str(ROOT / "requirements.txt"), env=env)
+    _pip_install(py_cmd, "-r", str(ROOT / "requirements-desktop.txt"), env=env)
     # Hardware extras are optional on Linux hosts without RealSense/Elite wheels.
     try:
-        _run(
-            [
-                str(py),
-                "-m",
-                "pip",
-                "install",
-                "-i",
-                PIP_INDEX,
-                "-r",
-                str(ROOT / "requirements-hardware.txt"),
-            ],
-            env=env,
-        )
+        _pip_install(py_cmd, "-r", str(ROOT / "requirements-hardware.txt"), env=env)
     except subprocess.CalledProcessError as e:
         print(f"[linux] warn: hardware requirements install failed ({e}); continuing", flush=True)
-    _run([str(py), "-m", "pip", "install", "-i", PIP_INDEX, "pyinstaller"], env=env)
+    _pip_install(py_cmd, "pyinstaller", env=env)
     _verify_bundled_imports([str(py)], env=env)
 
     TMP_BASE.mkdir(parents=True, exist_ok=True)
@@ -703,9 +1166,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build sensors-dcs desktop packages")
     parser.add_argument(
         "--target",
-        choices=["windows", "linux", "native"],
+        choices=["windows", "linux", "native", "native-win"],
         default="windows",
-        help="windows = Wine cross-build; linux/native = host PyInstaller onedir",
+        help=(
+            "windows: Wine cross-build on Linux, or native PyInstaller on Windows; "
+            "native-win: Windows host only; "
+            "linux/native: Linux host PyInstaller onedir"
+        ),
     )
     parser.add_argument("--skip-frontend", action="store_true", default=True)
     parser.add_argument(
@@ -714,13 +1181,28 @@ def main() -> None:
         help="skip incremental delta.zip vs previous release",
     )
     args = parser.parse_args()
-    target = "linux" if args.target in ("linux", "native") else args.target
+    skip = args.skip_frontend
+    do_delta = not args.no_delta
+    target = args.target
+
+    if target == "native-win":
+        build_windows_native(skip_frontend=skip, delta=do_delta)
+        return
     if target == "windows":
-        build_windows(skip_frontend=args.skip_frontend, delta=not args.no_delta)
-    elif target == "linux":
-        build_linux(skip_frontend=args.skip_frontend, delta=not args.no_delta)
-    else:
-        raise SystemExit(f"unsupported target: {args.target}")
+        if _is_windows_host():
+            build_windows_native(skip_frontend=skip, delta=do_delta)
+        else:
+            build_windows(skip_frontend=skip, delta=do_delta)
+        return
+    if target in ("linux", "native"):
+        if _is_windows_host():
+            raise SystemExit(
+                f"--target {target} builds a Linux onedir; on Windows use "
+                "--target windows or --target native-win"
+            )
+        build_linux(skip_frontend=skip, delta=do_delta)
+        return
+    raise SystemExit(f"unsupported target: {target}")
 
 
 if __name__ == "__main__":

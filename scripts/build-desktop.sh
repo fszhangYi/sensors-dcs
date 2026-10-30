@@ -23,7 +23,10 @@ Usage: bash scripts/build-desktop.sh [options]
 Build a self-contained desktop onedir under release/.
 
 Options:
-  --target windows|linux|native   windows = Wine (default); linux/native = host PyInstaller
+  --target windows|linux|native|native-win
+      windows     Linux host = Wine cross-build (default); Windows host = native PyInstaller
+      native-win  Windows host only (same as windows on Win)
+      linux|native  Linux host PyInstaller onedir
   --skip-frontend                 Skip frontend build (default; UI is embedded)
   --no-delta                      Skip incremental delta.zip vs previous release
   -h, --help                      Show this help
@@ -32,15 +35,19 @@ Environment:
   PIP_INDEX_URL           pip mirror (default: Tsinghua)
   WINEPREFIX              Wine prefix (default: .wine-sensors-dcs)
   WINEARCH                win64
-  SENSORS_DCS_BUILD_TMP   short work/dist path (default: /root/autodl-tmp/tmp)
+  SENSORS_DCS_BUILD_TMP   short work/dist path
+                          (Linux default: /root/autodl-tmp/tmp;
+                           Windows native: <repo>/.tools/build-tmp)
 
 Examples:
   ./build.sh
   ./build.sh --target windows
   ./build.sh --target linux
   bash scripts/build-desktop.sh --target windows
+  # On Windows (cmd): build.bat   or   scripts\\build-desktop.bat
 EOF
 }
+
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -67,8 +74,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$TARGET" != "windows" && "$TARGET" != "linux" && "$TARGET" != "native" ]]; then
-  echo "error: --target must be windows, linux, or native" >&2
+if [[ "$TARGET" != "windows" && "$TARGET" != "linux" && "$TARGET" != "native" && "$TARGET" != "native-win" ]]; then
+  echo "error: --target must be windows, linux, native, or native-win" >&2
   exit 1
 fi
 
@@ -77,12 +84,35 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+# Wine only for Linux→Windows cross-build. native-win / Windows host skip Wine.
 if [[ "$TARGET" == "windows" ]]; then
-  if ! command -v wine64 >/dev/null 2>&1 && ! command -v wine >/dev/null 2>&1; then
-    echo "error: wine64/wine not found — install Wine (win64) first" >&2
-    exit 1
-  fi
+  case "$(uname -s 2>/dev/null || echo unknown)" in
+    MINGW*|MSYS*|CYGWIN*|Windows_NT)
+      ;;
+    *)
+      if ! command -v wine64 >/dev/null 2>&1 && ! command -v wine >/dev/null 2>&1; then
+        echo "error: wine64/wine not found — install Wine (win64) first" >&2
+        echo "  (On Windows use build.bat / --target native-win instead)" >&2
+        exit 1
+      fi
+      ;;
+  esac
 fi
+
+if [[ "$TARGET" == "native-win" ]]; then
+  case "$(uname -s 2>/dev/null || echo unknown)" in
+    MINGW*|MSYS*|CYGWIN*|Windows_NT)
+      ;;
+    *)
+      # Still allow if python reports win32 (unlikely under bash on Linux).
+      if ! python3 -c "import sys; raise SystemExit(0 if sys.platform.startswith('win') else 1)"; then
+        echo "error: --target native-win requires a Windows host" >&2
+        exit 1
+      fi
+      ;;
+  esac
+fi
+
 
 if [[ ! -d "$ROOT/sensors/src/sensors" ]]; then
   echo "error: missing ./sensors symlink to hik-sensors" >&2

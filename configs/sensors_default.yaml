@@ -179,5 +179,5 @@ devices:
       kinematics: cs66_kin_g26562
       kinematics_profile: elite_cs66
       # local_ip: "192.168.1.xxx"
-      rtsi_output_recipe: configs/rtsi/output_recipe.txt
-      rtsi_input_recipe: configs/rtsi/input_recipe.txt
+      rtsi_output_recipe: rtsi/output_recipe.txt
+      rtsi_input_recipe: rtsi/input_recipe.txt
