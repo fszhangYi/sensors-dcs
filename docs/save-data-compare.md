@@ -159,16 +159,10 @@ Realsense 多路 get_camera_frame
 - **仍差于基线**：filter/timeline 未切到 HW 时钟轴。  
 - **影响（残留）**：多相机同步保真度仍弱于基线，但已可事后重对齐。
 
-### 【错误 E2】写通道失败帧被 sampler 丢弃
+### 【错误 E2】写通道失败帧被 sampler 丢弃 — **已修**
 
-```336:337:/root/autodl-tmp/sensors-dcs/src/sensors_dcs/record.py
-                if fr is None or fr.error:
-                    continue
-```
-
-- `arm_write` / `gripper_write` 在失败时把错误放进 `Frame.error`。  
-- **结果**：失败指令 **完全不进** jsonl，与基线「只要 `get_command_state` 有值就记」相反；排障时看不到拒写/跳变中断。  
-- **建议**：对 write kind 即使有 `error` 也落盘（payload 带 error）；或 error 与 payload 并存时仍写。
+- **原状**：`arm_write` / `gripper_write` 失败时 `Frame.error` 非空，sampler `if fr.error: continue` → 失败指令不进 jsonl。  
+- **现况**：`gripper_write` / `arm_write` 即使有 `error` 也落盘（payload 含 `command_*` + `last_ok`/`last_error`，行级可带 `error`）；其它 kind 仍跳过错误帧。同步侧另暴露 `fail_streak`。
 
 ### 【错误 E3】缺 JPEG 仍增加 `written` 计数
 

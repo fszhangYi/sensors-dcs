@@ -575,7 +575,11 @@ class RecordController:
                 break
             for aid, agent in self.agents.items():
                 fr = agent.ring.latest.get()
-                if fr is None or fr.error:
+                if fr is None:
+                    continue
+                # Write kinds: keep failed commands (command_* + last_ok/last_error).
+                # Other kinds: skip error frames (bad sensor samples).
+                if fr.error and fr.kind not in ("gripper_write", "arm_write"):
                     continue
                 # Shared YAML: Collect skips pi05; Infer skips gello.
                 if mode == "collect" and fr.kind == "pi05":
@@ -722,6 +726,8 @@ class RecordController:
             "t_mono": fr.t_mono,
             "payload": payload,
         }
+        if fr.error:
+            rec["error"] = fr.error
         fp = state_fp(fr.agent_id)
         fp.write(json.dumps(rec, ensure_ascii=False) + "\n")
         fp.flush()

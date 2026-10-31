@@ -10230,9 +10230,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
           '/api/postprocess/episode?path=' + encodeURIComponent(want),
           { credentials: 'same-origin' }
         ).then((r) => r.json());
-        const camsPrefer = window._ppSavedPrimaryCamera || 'cam-middle';
+        const camsPrefer =
+          j.suggested_primary_camera
+          || window._ppSavedPrimaryCamera
+          || 'cam-middle';
         if (!j.ok) {
-          const prefer = window._ppSavedMaster || j.suggested_master || '';
+          const prefer = j.suggested_master || window._ppSavedMaster || '';
           // Still offer agents so allow-invalid / quick-collect discard can pick master.
           fillMasterSelect(j.master_candidates || [], prefer);
           fillPrimaryCameraSelect(j.master_candidates || [], camsPrefer);
@@ -10242,9 +10245,21 @@ PREVIEW_HTML = """<!DOCTYPE html>
           }
           return j;
         }
-        const prefer = window._ppSavedMaster || j.suggested_master || '';
+        const prefer = j.suggested_master || window._ppSavedMaster || '';
         fillMasterSelect(j.master_candidates || [], prefer);
         fillPrimaryCameraSelect(j.master_candidates || [], camsPrefer);
+        // Prefer manifest-derived require for this episode (avoids stale cam-left defaults).
+        if (j.suggested_require && ppRequire) {
+          const legacy =
+            /^(arm,)?cam-left,cam-right,cam-middle,gripper-read$/.test(
+              (ppRequire.value || '').trim()
+            )
+            || !(ppRequire.value || '').trim();
+          if (legacy || window._ppRequireFromManifest !== j.path) {
+            ppRequire.value = j.suggested_require;
+            window._ppRequireFromManifest = j.path;
+          }
+        }
         if (ppMaster.value) window._ppSavedMaster = ppMaster.value;
         if (ppPrimaryCamera && ppPrimaryCamera.value) {
           window._ppSavedPrimaryCamera = ppPrimaryCamera.value;
@@ -11290,6 +11305,22 @@ PREVIEW_HTML = """<!DOCTYPE html>
             inp.value = String(
               gp.commandAs === 'position_mm' ? Number(n.toFixed(1)) : Number(n.toFixed(3)),
             );
+          }
+          // Live sync write failures (enabled can stay on while Modbus rejects).
+          if (!box._gripBusy && statusEl) {
+            if (on && sync.last_ok === false) {
+              const streak = Number(sync.fail_streak) || 0;
+              const err = (sync.last_error && String(sync.last_error)) || 'write failed';
+              const prefix = streak > 1 ? ('同步写失败×' + streak + '：') : '同步写失败：';
+              setStatus(prefix + err, true);
+            } else if (
+              on &&
+              sync.last_ok === true &&
+              statusEl.textContent &&
+              statusEl.textContent.indexOf('同步写失败') === 0
+            ) {
+              setStatus('同步写恢复', false);
+            }
           }
         };
         box._applySyncUi = applySyncUi;

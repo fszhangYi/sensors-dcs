@@ -120,7 +120,7 @@
 
 - **现象**：`DEFAULT_REQUIRE=arm,cam-left,cam-right,cam-middle,gripper-read` 与真实 `arm-cs66` / `cam-g26562-*` / `gripper-hl-read` 不对齐；filter 全行 `missing_data`。叠加摇操写稀、臂读不稳时观感与成品双差。
 - **证据**：G26562 类 episode 上 `filter_meta.rows_out=0` / 全行 `missing_data`（require 别名与 agent id 不一致）。
-- **补法**：按 manifest 自动填 require；别名映射；提高默认 rate-policy；用 latest-wins / 吃流摇操重采。
+- **补法**：~~按 manifest 自动填~~ **已落地** `export/agent_ids.py`（选 episode 填 suggested_require；filter/run 解析 `cam-middle`→wrist 等；多匹配拒绝）。提高 rate-policy / 重采摇操仍建议做。
 
 ---
 

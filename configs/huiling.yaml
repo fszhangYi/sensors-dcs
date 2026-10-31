@@ -74,13 +74,13 @@ agents:
   - id: gripper-hl-read
     type: gripper_read
     sensor_id: gripper-huiling
-    # Keep low: shares COM with write/init; high Hz caused Modbus frame theft.
-    hz: 10
+    # Shared COM: _io_lock + init no longer holds bus for full timeout.
+    hz: 20
     buffer_frames: 64
   - id: gripper-hl-write
     type: gripper_write
     sensor_id: gripper-huiling
-    hz: 5
+    hz: 10
     buffer_frames: 8
 
   # - id: cam-g26562-wrist

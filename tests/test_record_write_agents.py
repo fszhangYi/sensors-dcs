@@ -3,13 +3,41 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
+from sensors_dcs.buffer import FrameRing
 from sensors_dcs.export.filter import _agent_kind
 from sensors_dcs.export.timeline import _flatten_state_row, build_events_frame
 from sensors_dcs.frame import Frame
 from sensors_dcs.record import RecordController
 from sensors_dcs.config import RecordConfig
+
+
+class _WriteFakeAgent:
+    hz = 10.0
+    sensor_id = "fake-grip"
+
+    def __init__(self, agent_id: str, kind: str) -> None:
+        self.agent_id = agent_id
+        self.kind = kind
+        self.ring = FrameRing(maxlen=8)
+        self._seq = 0
+
+    def push(self, payload: dict, *, error: str | None = None) -> None:
+        self._seq += 1
+        self.ring.push(
+            Frame(
+                sensor_id=self.sensor_id,
+                agent_id=self.agent_id,
+                kind=self.kind,
+                t_wall=time.time(),
+                t_mono=time.perf_counter(),
+                seq=self._seq,
+                payload=payload,
+                error=error,
+            )
+        )
 
 
 def test_record_writes_arm_write_state(tmp_path: Path) -> None:
@@ -90,3 +118,48 @@ def test_agent_kind_detects_writers() -> None:
     assert (
         _agent_kind(cols, "arm-write", kind_hint={"arm-write": "arm_write"}) == "arm_write"
     )
+
+
+def test_record_keeps_gripper_write_error_frames(tmp_path: Path) -> None:
+    """Failed gripper_write must land in jsonl (not skipped by sampler)."""
+    writer = _WriteFakeAgent("gripper-hl-write", "gripper_write")
+    reader = _WriteFakeAgent("gripper-hl-read", "gripper_read")
+    rec = RecordController(
+        RecordConfig(save_dir=str(tmp_path), episode_index=0, queue_maxsize=64),
+        agents={"gripper-hl-write": writer, "gripper-hl-read": reader},  # type: ignore[arg-type]
+        site="lab",
+    )
+    assert rec.start(mode="collect")["ok"] is True
+    ep = tmp_path / "episode_00000"
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        writer.push(
+            {
+                "command_position_norm": 0.25,
+                "command_position_mm": 16.25,
+                "last_ok": False,
+                "last_error": "modbus write failed (timeout / CRC / exception)",
+            },
+            error="modbus write failed (timeout / CRC / exception)",
+        )
+        reader.push(
+            {"position_norm": 0.2, "position_mm": 13.0},
+            error="status read failed",
+        )
+        write_path = ep / "states" / "gripper-hl-write.jsonl"
+        if write_path.is_file() and write_path.stat().st_size > 0:
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError(f"timed out; status={rec.status()}")
+
+    assert rec.stop(valid=True, timeout=5.0)["ok"] is True
+    lines = (ep / "states" / "gripper-hl-write.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) >= 1
+    row = json.loads(lines[0])
+    assert row["kind"] == "gripper_write"
+    assert row["payload"]["last_ok"] is False
+    assert row["payload"]["command_position_mm"] == 16.25
+    assert row.get("error")
+    # Read errors still skipped (not a write kind).
+    assert not (ep / "states" / "gripper-hl-read.jsonl").exists()

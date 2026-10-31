@@ -27,7 +27,11 @@ def test_inspect_episode_ok_and_master_list(tmp_path: Path) -> None:
     j = inspect_episode(ep)
     assert j["ok"] is True
     assert j["master_candidates"] == ["gello", "cam-left", "arm"]
-    assert j["suggested_master"] == "gello"
+    # Prefer camera master for align; legacy preferred gello.
+    assert j["suggested_master"] == "cam-left"
+    assert j["suggested_require"]
+    assert "cam-left" in j["suggested_require"]
+    assert "arm" in j["suggested_require"]
 
 
 def test_inspect_episode_invalid_shows_error(tmp_path: Path) -> None:

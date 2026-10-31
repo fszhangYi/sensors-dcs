@@ -194,11 +194,16 @@ def _master_candidates_from_manifest(manifest: dict[str, Any]) -> list[str]:
 def _suggest_master(manifest: dict[str, Any], candidates: list[str]) -> str | None:
     if not candidates:
         return None
+    from sensors_dcs.export.agent_ids import suggest_master_agent
+
+    suggested = suggest_master_agent(manifest)
+    if suggested and suggested in candidates:
+        return suggested
     kind_by_id: dict[str, str] = {}
     for item in manifest.get("agents") or []:
         if isinstance(item, dict) and item.get("agent_id"):
             kind_by_id[str(item["agent_id"])] = str(item.get("kind") or "")
-    for prefer in ("gello", "arm", "arm_read", "realsense"):
+    for prefer in ("realsense", "gello", "arm", "arm_read"):
         for aid in candidates:
             if kind_by_id.get(aid) == prefer or (
                 prefer == "realsense" and aid.startswith("cam-")
@@ -243,6 +248,8 @@ def inspect_episode(episode: str | Path) -> dict[str, Any]:
         "agents": [],
         "master_candidates": [],
         "suggested_master": None,
+        "suggested_require": None,
+        "suggested_primary_camera": None,
         "error": None,
     }
     if not ep.is_dir():
@@ -278,6 +285,18 @@ def inspect_episode(episode: str | Path) -> dict[str, Any]:
         if isinstance(a, dict) and a.get("agent_id")
     ]
     base["suggested_master"] = _suggest_master(manifest, candidates)
+    try:
+        from sensors_dcs.export.agent_ids import (
+            suggest_primary_camera,
+            suggest_require_agents,
+        )
+
+        req = suggest_require_agents(manifest)
+        base["suggested_require"] = ",".join(req) if req else None
+        base["suggested_primary_camera"] = suggest_primary_camera(manifest)
+    except Exception:  # noqa: BLE001
+        base["suggested_require"] = None
+        base["suggested_primary_camera"] = None
 
     if base["valid"] is False:
         note = base.get("note") or "manifest.valid=false"
@@ -513,6 +532,53 @@ def run_postprocess(
             "results": [],
         }
     primary = (primary_camera or DEFAULT_PRIMARY_CAMERA).strip() or DEFAULT_PRIMARY_CAMERA
+    require_s = (require or DEFAULT_REQUIRE).strip() or DEFAULT_REQUIRE
+    master_s = (master or DEFAULT_MASTER).strip() or DEFAULT_MASTER
+
+    # Resolve role/kind aliases against this episode's manifest (multi-station safe).
+    try:
+        import json as _json
+
+        from sensors_dcs.export.agent_ids import (
+            AgentResolveError,
+            agents_index_from_manifest,
+            resolve_agent_token,
+            resolve_require_list,
+            suggest_master_agent,
+            suggest_primary_camera,
+            suggest_require_agents,
+        )
+
+        man_path = ep / "manifest.json"
+        man: dict[str, Any] | None = None
+        if man_path.is_file():
+            man = _json.loads(man_path.read_text(encoding="utf-8"))
+        if isinstance(man, dict):
+            agents = agents_index_from_manifest(man)
+            if require_s == DEFAULT_REQUIRE:
+                sug = suggest_require_agents(man)
+                if sug:
+                    require_s = ",".join(sug)
+            else:
+                resolved, _ = resolve_require_list(require_s, manifest=man)
+                require_s = ",".join(resolved)
+            if master_s == DEFAULT_MASTER:
+                master_s = suggest_master_agent(man) or master_s
+            else:
+                master_s = resolve_agent_token(master_s, agents=agents)
+            if primary == DEFAULT_PRIMARY_CAMERA:
+                primary = suggest_primary_camera(man) or primary
+            else:
+                primary = resolve_agent_token(primary, agents=agents)
+    except AgentResolveError as e:
+        return {
+            "ok": False,
+            "error": f"agent resolve failed: {e}",
+            "episode": str(ep),
+            "results": [],
+        }
+    except Exception:  # noqa: BLE001
+        pass
 
     cam_map = (camera_map or "").strip() or None
     rate_path = (rate_policy or "").strip() or None
@@ -534,7 +600,7 @@ def run_postprocess(
                 meta = export_episode_timeline(
                     ep,
                     align=align,  # type: ignore[arg-type]
-                    master=master or None,
+                    master=master_s or None,
                     master_hz=use_master_hz,
                     rate_policy=rate_path,
                     allow_invalid=allow_invalid,
@@ -544,7 +610,8 @@ def run_postprocess(
             elif step == "filter-timeline":
                 meta = filter_episode_timeline(
                     ep,
-                    require=require or None,
+                    require=require_s or None,
+                    master=master_s or None,
                     max_match_dt=max_match_dt or None,
                     trim=trim,  # type: ignore[arg-type]
                     materialize=bool(materialize),

@@ -38,7 +38,20 @@ def parse_max_match_dt(spec: str | None, *, default: float = 0.033) -> tuple[flo
     return global_default, per_agent
 
 
-def parse_require_list(spec: str | None, df_columns: list[str]) -> list[str]:
+def parse_require_list(
+    spec: str | None,
+    df_columns: list[str],
+    *,
+    manifest: dict[str, Any] | None = None,
+) -> list[str]:
+    """Parse ``--require`` CSV; resolve role/kind aliases via ``manifest`` when given."""
+    if manifest is not None:
+        from sensors_dcs.export.agent_ids import resolve_require_list
+
+        resolved, _log = resolve_require_list(
+            spec, manifest=manifest, df_columns=df_columns
+        )
+        return resolved
     if spec and str(spec).strip():
         return [x.strip() for x in str(spec).split(",") if x.strip()]
     # infer from match_dt columns
@@ -704,11 +717,39 @@ def filter_episode_timeline(
         raise ValueError("aligned timeline is empty")
 
     default_dt, per_agent_dt = parse_max_match_dt(max_match_dt)
-    require_agents = parse_require_list(require, list(df.columns))
+    require_log: list[dict[str, str]] = []
+    try:
+        from sensors_dcs.export.agent_ids import (
+            AgentResolveError,
+            resolve_agent_token,
+            resolve_require_list,
+            agents_index_from_manifest,
+        )
+
+        require_agents, require_log = resolve_require_list(
+            require, manifest=source_manifest, df_columns=list(df.columns)
+        )
+    except AgentResolveError as e:
+        raise ValueError(f"require resolve failed: {e}") from e
+    except Exception:  # noqa: BLE001
+        require_agents = parse_require_list(
+            require, list(df.columns), manifest=source_manifest
+        )
     if not require_agents:
         raise ValueError("no agents to require; pass --require or use aligned table with match_dt columns")
 
     master_id = resolve_master(df, export_meta, master)
+    if master_id and source_manifest is not None:
+        try:
+            master_id = resolve_agent_token(
+                master_id,
+                agents=agents_index_from_manifest(source_manifest),
+                available_ids=list(
+                    {c.split(".", 1)[0] for c in df.columns if "." in c}
+                ),
+            )
+        except AgentResolveError as e:
+            raise ValueError(f"master resolve failed: {e}") from e
     mask, drop_reasons = compute_row_mask(
         df,
         require=require_agents,
@@ -827,6 +868,12 @@ def filter_episode_timeline(
             except ValueError:
                 align_plot_rel = str(p)
 
+    unresolved = [
+        aid
+        for aid in require_agents
+        if _agent_kind(list(df.columns), aid, kind_hint=kind_hint) == "unknown"
+        and not any(c.startswith(f"{aid}.") for c in df.columns)
+    ]
     meta = {
         "source_episode": root.name,
         "source_path": str(root),
@@ -834,6 +881,8 @@ def filter_episode_timeline(
         "output": str(out_path.relative_to(root)) if out_path.is_relative_to(root) else str(out_path),
         "master": master_id,
         "require": require_agents,
+        "require_resolve": require_log or None,
+        "require_unmatched_columns": unresolved or None,
         "max_match_dt": {"default": default_dt, **per_agent_dt},
         "trim": trim,
         "dedupe": dedupe_cols or None,
@@ -853,6 +902,12 @@ def filter_episode_timeline(
         "align_plot_info": align_plot_info,
         "align_quality": align_quality,
     }
+    if unresolved and drop_reasons.get("missing_data") == rows_in and rows_in > 0:
+        meta["diagnose"] = (
+            "require agents have no matching columns: "
+            + ", ".join(unresolved)
+            + " (legacy aliases? use manifest-resolved ids)"
+        )
     meta_path = out_dir / "filter_meta.json"
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     meta["output_dir"] = str(out_dir)

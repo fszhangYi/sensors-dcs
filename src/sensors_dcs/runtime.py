@@ -145,6 +145,7 @@ class Orchestrator:
         self._sync_last_error: str | None = None
         self._sync_last_t_wall: float | None = None
         self._sync_write_count = 0
+        self._sync_fail_streak = 0
         # Cumulative Gello reinforce offset (docs/gello-reinforce.md).
         self._delta_pose_offset_lock = threading.Lock()
         self._delta_pose_offset_configured = any(
@@ -1452,6 +1453,7 @@ class Orchestrator:
                 "last_error": self._sync_last_error,
                 "last_t_wall": self._sync_last_t_wall,
                 "write_count": self._sync_write_count,
+                "fail_streak": self._sync_fail_streak,
                 "params": self.cfg.gripper_gello_sync.model_dump(),
             }
 
@@ -1518,6 +1520,7 @@ class Orchestrator:
             self._sync_joint_index = idx
             self._sync_hz = rate
             self._sync_last_error = None
+            self._sync_fail_streak = 0
 
         self._sync_stop.clear()
         self._sync_thread = threading.Thread(
@@ -1527,6 +1530,13 @@ class Orchestrator:
         )
         self._sync_thread.start()
         return {"ok": True, **self.gripper_gello_sync_status()}
+
+    def _gello_gripper_sync_note_fail(self, error: str) -> None:
+        with self._sync_lock:
+            self._sync_last_ok = False
+            self._sync_last_error = error
+            self._sync_last_t_wall = time.time()
+            self._sync_fail_streak += 1
 
     def _gello_gripper_sync_loop(self) -> None:
         """Pull latest gello joints_rad[j] and write gripper — never via the browser.
@@ -1547,30 +1557,23 @@ class Orchestrator:
             gello = self.agents.get(gello_id or "")
             writer = self.agents.get(grip_id or "")
             if not isinstance(gello, GelloAgent) or not isinstance(writer, GripperWriteAgent):
-                with self._sync_lock:
-                    self._sync_last_ok = False
-                    self._sync_last_error = "sync agents missing"
-                    self._sync_last_t_wall = time.time()
+                self._gello_gripper_sync_note_fail("sync agents missing")
                 self._sync_stop.wait(period)
                 continue
 
             fr = gello.ring.latest.get()
             joints = (fr.payload.get("joints_rad") if fr is not None else None) or []
             if not isinstance(joints, list) or len(joints) <= idx:
-                with self._sync_lock:
-                    self._sync_last_ok = False
-                    self._sync_last_error = f"gello joints_rad missing index {idx}"
-                    self._sync_last_t_wall = time.time()
+                self._gello_gripper_sync_note_fail(
+                    f"gello joints_rad missing index {idx}"
+                )
                 self._sync_stop.wait(period)
                 continue
 
             try:
                 val = float(joints[idx])
             except (TypeError, ValueError):
-                with self._sync_lock:
-                    self._sync_last_ok = False
-                    self._sync_last_error = f"invalid joints_rad[{idx}]"
-                    self._sync_last_t_wall = time.time()
+                self._gello_gripper_sync_note_fail(f"invalid joints_rad[{idx}]")
                 self._sync_stop.wait(period)
                 continue
 
@@ -1590,6 +1593,10 @@ class Orchestrator:
                 self._sync_last_error = result.get("error")
                 self._sync_last_t_wall = time.time()
                 self._sync_write_count += 1
+                if self._sync_last_ok:
+                    self._sync_fail_streak = 0
+                else:
+                    self._sync_fail_streak += 1
             self._sync_stop.wait(period)
 
         with self._sync_lock:
