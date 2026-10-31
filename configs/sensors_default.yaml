@@ -36,7 +36,7 @@ defaults:
     headless_mode: true
     require_rtsi: true
     stream_max_rad_s: 1.0
-    servoj_time: 0.008
+    servoj_time: 0.01
     servoj_lookahead_time: 0.25
     servoj_gain: 300
     servoj_timeout_ms: 2000
@@ -173,7 +173,7 @@ devices:
       headless_mode: true
       require_rtsi: true
       stream_max_rad_s: 1.0
-      servoj_time: 0.008
+      servoj_time: 0.01
       servoj_lookahead_time: 0.25
       servoj_gain: 300
       kinematics: cs66_kin_g26562

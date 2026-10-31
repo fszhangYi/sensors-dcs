@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import threading
 import time
 from typing import Any
 
@@ -11,6 +12,9 @@ from sensors.core.base import Sensor  # noqa: E402
 
 from sensors_dcs.agents.base import BaseAgent
 from sensors_dcs.frame import Frame
+
+# Cap in-memory gello→arm trace (~30 min @ 50 Hz).
+_TRACE_MAX_SAMPLES = 100_000
 
 
 def _as_float_list(values: Any, *, n: int, fill: float) -> list[float]:
@@ -74,6 +78,140 @@ class GelloAgent(BaseAgent):
         self.dry_run_synth = dry_run_synth
         n = len(list(getattr(sensor, "joint_ids", None) or [1, 2, 3, 4, 5, 6, 7]))
         self._n_joints = n
+        # In-memory capture of calibrated joints (same space teleop sends toward the arm).
+        self._trace_lock = threading.Lock()
+        self._trace_recording = False
+        self._trace_samples: list[dict[str, Any]] = []
+        self._trace_started_wall: float | None = None
+        self._trace_prev_joints: list[float] | None = None
+        self._trace_dropped = 0
+
+    def trace_status(self) -> dict[str, Any]:
+        with self._trace_lock:
+            return {
+                "agent_id": self.agent_id,
+                "recording": self._trace_recording,
+                "sample_count": len(self._trace_samples),
+                "dropped": self._trace_dropped,
+                "started_t_wall": self._trace_started_wall,
+                "max_samples": _TRACE_MAX_SAMPLES,
+            }
+
+    def set_trace_recording(self, *, enabled: bool) -> dict[str, Any]:
+        """Start (clears buffer) or stop in-memory gello joint capture."""
+        with self._trace_lock:
+            if enabled:
+                self._trace_samples = []
+                self._trace_prev_joints = None
+                self._trace_dropped = 0
+                self._trace_started_wall = time.time()
+                self._trace_recording = True
+            else:
+                self._trace_recording = False
+            snap = {
+                "agent_id": self.agent_id,
+                "recording": self._trace_recording,
+                "sample_count": len(self._trace_samples),
+                "dropped": self._trace_dropped,
+                "started_t_wall": self._trace_started_wall,
+                "max_samples": _TRACE_MAX_SAMPLES,
+            }
+        return {"ok": True, **snap}
+
+    def export_trace(self) -> dict[str, Any]:
+        """Snapshot for download (calibrated joints = what teleop would feed the arm)."""
+        with self._trace_lock:
+            samples = list(self._trace_samples)
+            meta = {
+                "agent_id": self.agent_id,
+                "recording": self._trace_recording,
+                "sample_count": len(samples),
+                "dropped": self._trace_dropped,
+                "started_t_wall": self._trace_started_wall,
+                "exported_t_wall": time.time(),
+                "calib": self.calib_dict(),
+                "note": (
+                    "joints_rad = affine-calibrated (q=(q_raw-offsets)*signs); "
+                    "first 6 are the arm follow space used by gello→arm teleop. "
+                    "dmax / dmax_joint = |Δ| vs previous sample (rad)."
+                ),
+            }
+        return {"ok": True, "meta": meta, "samples": samples}
+
+    def _trace_append_unlocked(
+        self,
+        *,
+        t_wall: float,
+        t_mono: float,
+        seq: int,
+        joints_rad: list[float] | None,
+        joints_rad_raw: list[float] | None,
+        dry_run: bool,
+        synth: bool,
+        source: str = "gello_read",
+    ) -> None:
+        if not self._trace_recording:
+            return
+        if len(self._trace_samples) >= _TRACE_MAX_SAMPLES:
+            self._trace_dropped += 1
+            return
+        j = [float(x) for x in (joints_rad or [])]
+        j_raw = [float(x) for x in (joints_rad_raw or [])] if joints_rad_raw is not None else None
+        dmax = None
+        dmax_joint = None
+        prev = self._trace_prev_joints
+        if prev is not None and j:
+            n = min(len(prev), len(j), 6)
+            best_d = 0.0
+            best_i = 0
+            for i in range(n):
+                d = abs(j[i] - prev[i])
+                if d > best_d:
+                    best_d = d
+                    best_i = i
+            dmax = best_d
+            dmax_joint = best_i
+        if j:
+            self._trace_prev_joints = list(j)
+        self._trace_samples.append(
+            {
+                "i": len(self._trace_samples),
+                "t_wall": float(t_wall),
+                "t_mono": float(t_mono),
+                "seq": int(seq),
+                "source": source,
+                "joints_rad": j,
+                "joints_rad_arm6": j[:6] if len(j) >= 6 else j,
+                "joints_rad_raw": j_raw,
+                "dmax": dmax,
+                "dmax_joint": dmax_joint,
+                "dry_run": bool(dry_run),
+                "synth": bool(synth),
+            }
+        )
+
+    def note_teleop_command(
+        self,
+        joints_rad: list[float],
+        *,
+        t_wall: float | None = None,
+        rate_limited: bool = False,
+    ) -> None:
+        """Optional: append the rate-limited command actually written to the arm."""
+        with self._trace_lock:
+            if not self._trace_recording:
+                return
+            j = [float(x) for x in joints_rad[:6]]
+            self._trace_append_unlocked(
+                t_wall=float(t_wall if t_wall is not None else time.time()),
+                t_mono=time.perf_counter(),
+                seq=self._seq,
+                joints_rad=j,
+                joints_rad_raw=None,
+                dry_run=False,
+                synth=False,
+                source="teleop_cmd_rate_limited" if rate_limited else "teleop_cmd",
+            )
 
     def calib_dict(self) -> dict[str, Any]:
         """Affine parameters loaded from sensors YAML (next to port)."""
@@ -138,6 +276,19 @@ class GelloAgent(BaseAgent):
             "dry_run": dry,
             "synth": bool(sample.get("synth")),
         }
+        j_list = [float(x) for x in joints] if joints is not None else None
+        j_raw_list = [float(x) for x in joints_raw] if joints_raw is not None else None
+        with self._trace_lock:
+            self._trace_append_unlocked(
+                t_wall=t_wall,
+                t_mono=t_mono,
+                seq=self._seq,
+                joints_rad=j_list,
+                joints_rad_raw=j_raw_list,
+                dry_run=dry,
+                synth=bool(sample.get("synth")),
+                source="gello_read",
+            )
         return Frame(
             sensor_id=self.sensor_id,
             agent_id=self.agent_id,

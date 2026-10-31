@@ -143,12 +143,11 @@ a = Analysis(
         "watchfiles.main",
         "watchfiles.run",
         "watchfiles._rust_notify",
-        # Trim scipy surface for Wine 2GiB cgroup Analysis (IK only needs optimize + spatial).
-        "scipy.special",
+        # Trim unused scipy surface (Wine 2GiB Analysis). Do NOT exclude
+        # fft / _lib / optimize / linalg / spatial / sparse / special — IK needs them.
         "scipy.signal",
         "scipy.ndimage",
         "scipy.integrate",
-        "scipy.fft",
         "scipy.fftpack",
         "scipy.interpolate",
         "scipy.stats",

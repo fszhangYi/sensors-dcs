@@ -122,11 +122,17 @@ class GripperGelloSyncConfig(BaseModel):
 
 
 class GelloArmTeleopConfig(BaseModel):
-    """Live gello→arm teleop (see docs/gello-arm-teleop.md). Default off."""
+    """Live gello→arm teleop (see docs/gello-arm-teleop.md). Default off.
 
-    teleop_hz: float = 50.0
+    ``teleop_step_max_rad`` was removed (2026-10-31): follow is latest-wins
+    passthrough; only ``teleop_jump_abort_rad`` still gates abnormal jumps.
+    Extra YAML keys (including legacy ``teleop_step_max_rad``) are ignored.
+    """
+
+    model_config = {"extra": "ignore"}
+
+    teleop_hz: float = 100.0
     teleop_enter_max_rad: float = 0.05
-    teleop_step_max_rad: float = 0.05
     teleop_jump_abort_rad: float = 0.35
     teleop_stale_max_ticks: int = 3
     teleop_write_fail_max: int = 5

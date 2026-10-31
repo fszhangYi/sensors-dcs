@@ -103,17 +103,19 @@ def set_active_kinematics(
     profile_id: str | None = None,
 ) -> tuple[str, str | None]:
     """Install process-wide FK/IK backend (call once at Orchestrator boot)."""
-    global _active_kin_package, _active_kin_profile, _fk_fn, _ik_backend
+    global _active_kin_package, _active_kin_profile, _fk_fn, _ik_backend, _ik_backend_error
     pkg, prof = normalize_kinematics(package, profile_id)
     _active_kin_package = pkg
     _active_kin_profile = prof
     _fk_fn = None
     _ik_backend = None
+    _ik_backend_error = None
     return pkg, prof
 
 
 _fk_fn = None
 _ik_backend: dict[str, Any] | bool | None = None
+_ik_backend_error: str | None = None
 
 
 def _import_cs66_yaml(package: str):
@@ -137,18 +139,40 @@ def _get_fk():
     return _fk_fn
 
 
-def _get_ik_backend() -> dict[str, Any] | bool:
-    global _ik_backend
-    if _ik_backend is not None:
+def clear_ik_backend_cache() -> None:
+    """Drop cached IK backend so the next call retries import (e.g. after SciPy ready)."""
+    global _ik_backend, _ik_backend_error
+    _ik_backend = None
+    _ik_backend_error = None
+
+
+def ik_backend_error() -> str | None:
+    return _ik_backend_error
+
+
+def _get_ik_backend(*, retry: bool = True) -> dict[str, Any] | bool:
+    """Load IK backend. Failed loads are not sticky forever when ``retry=True``."""
+    global _ik_backend, _ik_backend_error
+    if isinstance(_ik_backend, dict):
         return _ik_backend
+    if _ik_backend is False and not retry:
+        return False
+    # Previous failure: retry once (SciPy / profile may have been unavailable earlier).
+    if _ik_backend is False:
+        _ik_backend = None
+        _ik_backend_error = None
     pkg, prof = get_active_kinematics()
     try:
         if pkg in _CS66_YAML_MODULES:
             mod = _import_cs66_yaml(pkg)
             model_mod = importlib.import_module(f"{_CS66_YAML_MODULES[pkg]}.model")
+            # Force lazy ``ik_flange`` (SciPy) now so failures surface here.
+            ik_fn = getattr(mod, "ik_flange")
+            if ik_fn is None or not callable(ik_fn):
+                raise RuntimeError(f"{pkg}.ik_flange is not callable")
             _ik_backend = {
                 "IkResult": model_mod.IkResult,
-                "ik_flange": mod.ik_flange,
+                "ik_flange": ik_fn,
                 "kin_cfg": mod.get_kinematic_config(prof),
             }
         else:
@@ -160,8 +184,10 @@ def _get_ik_backend() -> dict[str, Any] | bool:
                 "ik_flange": ik_flange,
                 "kin_cfg": None,
             }
-    except Exception:  # noqa: BLE001
+        _ik_backend_error = None
+    except Exception as e:  # noqa: BLE001
         _ik_backend = False
+        _ik_backend_error = f"{type(e).__name__}: {e}"
     return _ik_backend
 
 
@@ -435,10 +461,15 @@ def xyzrpy_to_joints_rad(
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"invalid xyzrpy: {e}", "joints_rad": None}
 
-    backend = _get_ik_backend()
+    backend = _get_ik_backend(retry=True)
     if backend is False or not isinstance(backend, dict):
         pkg, _prof = get_active_kinematics()
-        return {"ok": False, "error": f"IK unavailable ({pkg})", "joints_rad": None}
+        detail = _ik_backend_error or "unknown import/init failure"
+        return {
+            "ok": False,
+            "error": f"IK unavailable ({pkg}): {detail}",
+            "joints_rad": None,
+        }
     IkResult = backend["IkResult"]
     ik_flange = backend["ik_flange"]
     kin_cfg = backend.get("kin_cfg")

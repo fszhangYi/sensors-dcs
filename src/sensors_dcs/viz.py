@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from typing import Any, Callable
 
 from pydantic import BaseModel
@@ -204,6 +205,22 @@ class GelloArmTeleopBody(BaseModel):
     gello_agent_id: str | None = None
     arm_agent_id: str | None = None
     arm_write_agent_id: str | None = None
+
+
+class GelloTraceBody(BaseModel):
+    enabled: bool
+    gello_agent_id: str | None = None
+
+
+class FakeTeleopGenerateBody(BaseModel):
+    arm_write_agent_id: str | None = None
+    dx_m: float | None = None
+    step_m: float | None = None
+
+
+class FakeTeleopExecuteBody(BaseModel):
+    arm_write_agent_id: str | None = None
+    hz: float | None = None
 
 
 class Pi05ConnectBody(BaseModel):
@@ -2333,6 +2350,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
     .arm-cmd input[type="range"] { width: 10rem; accent-color: var(--accent); }
     .arm-cmd button.arm-estop {
       background: color-mix(in srgb, var(--danger) 28%, var(--chrome)); border-color: var(--danger);
+    }
+    .arm-cmd button.arm-gello-trace.recording {
+      background: color-mix(in srgb, var(--accent) 32%, var(--chrome));
+      border-color: var(--accent);
     }
     .arm-cmd .arm-jog-row {
       display: grid;
@@ -7597,6 +7618,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const dynSel = [
         '.inf-delta-cell',
         '.arm-arm', '.arm-disarm', '.arm-estop', '.arm-gello-sync', '.arm-gello-teleop',
+        '.arm-gello-trace', '.arm-fake-gen', '.arm-fake-run',
         '.arm-minus', '.arm-plus', '.arm-delta', '.arm-abs-send', '.arm-home-go',
         '.arm-abs-input', '.arm-abs-t-min', '.arm-abs-t-max', '.arm-abs-v-norm',
         '.arm-abs-jerk-frac', '.arm-abs-accel-frac',
@@ -11439,7 +11461,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
             '<button type="button" class="arm-estop">Estop</button>' +
             (inferScope ? '' :
               '<button type="button" class="arm-gello-sync">同步</button>' +
-              '<button type="button" class="arm-gello-teleop">摇操</button>') +
+              '<button type="button" class="arm-gello-teleop">摇操</button>' +
+              '<button type="button" class="arm-gello-trace" title="内存记录 gello 标定关节（将下发给臂的空间）；再点停止并下载 JSON">记录</button>' +
+              '<button type="button" class="arm-fake-gen" title="法兰 p0→+X 5cm→整圆→回 p0；稠密 IK 存内存（不写臂）">Fake遥操点生成</button>' +
+              '<button type="button" class="arm-fake-run" disabled title="按定点频回放已生成的 Fake 关节点（测臂侧卡顿）">Fake遥操点执行</button>') +
             '<label>delta°</label>' +
             '<input type="range" class="arm-delta" min="0.1" max="5" step="0.1" value="1.0" />' +
             '<span class="arm-delta-val">1.0°</span>' +
@@ -11447,7 +11472,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
           '</div>' +
           (inferScope ? '' :
             '<div class="arm-sync-prog">gello→arm：空闲（完成后 gello 不控臂）</div>' +
-            '<div class="arm-teleop-prog">摇操：空闲（gello 不控臂）</div>') +
+            '<div class="arm-teleop-prog">摇操：空闲（gello 不控臂）</div>' +
+            '<div class="arm-fake-prog">Fake 遥操：未生成</div>') +
           jogHtml +
           '<div class="arm-abs-row">' +
             '<label class="arm-abs-label" data-i18n="arm.abs_label" data-i18n-title="arm.abs_label_tip" title="双击填入当前关节角">joints</label>' +
@@ -11486,8 +11512,27 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const estopBtn = box.querySelector('.arm-estop');
         const syncBtn = box.querySelector('.arm-gello-sync');
         const teleopBtn = box.querySelector('.arm-gello-teleop');
+        const traceBtn = box.querySelector('.arm-gello-trace');
+        const fakeGenBtn = box.querySelector('.arm-fake-gen');
+        const fakeRunBtn = box.querySelector('.arm-fake-run');
         const syncProg = box.querySelector('.arm-sync-prog');
         const teleopProg = box.querySelector('.arm-teleop-prog');
+        const fakeProg = box.querySelector('.arm-fake-prog');
+        let gelloTraceRecording = false;
+        const paintGelloTraceBtn = () => {
+          if (!traceBtn) return;
+          traceBtn.textContent = gelloTraceRecording ? '停止记录' : '记录';
+          traceBtn.classList.toggle('recording', !!gelloTraceRecording);
+          traceBtn.title = gelloTraceRecording
+            ? '停止记录并自动下载 JSON（gello 标定关节 / teleop 命令）'
+            : '开始将 gello 将下发给臂的关节写入内存';
+        };
+        paintGelloTraceBtn();
+        box._paintGelloTraceBtn = paintGelloTraceBtn;
+        box._setGelloTraceRecording = (on) => {
+          gelloTraceRecording = !!on;
+          paintGelloTraceBtn();
+        };
         const absInput = box.querySelector('.arm-abs-input');
         const absSend = box.querySelector('.arm-abs-send');
         const absHome = box.querySelector('.arm-home-go');
@@ -11563,31 +11608,54 @@ PREVIEW_HTML = """<!DOCTYPE html>
           const sync = window.__gelloArmSync || {};
           const teleop = window.__gelloArmTeleop || {};
           const absRamp = window.__armAbsRamp || {};
+          const fake = window.__fakeTeleop || {};
           const syncing = !!sync.enabled;
           const teleoping = !!teleop.enabled;
           const absRamping = !!absRamp.enabled;
+          const fakeRunning = fake.phase === 'running';
+          const fakeReady = !!fake.can_execute || (!!fake.ready && !fakeRunning);
           armedTag.textContent = !hasRead ? 'need read' : (armed ? 'armed' : 'idle');
           if (armBtn) armBtn.classList.toggle('arm-on', !!armed && hasRead);
-          setJogEnabled(!!armed && hasRead && !syncing && !teleoping && !absRamping);
+          setJogEnabled(!!armed && hasRead && !syncing && !teleoping && !absRamping && !fakeRunning);
           if (absRamping && absSend) {
             absSend.disabled = false;
             absSend.textContent = t('arm.abs_cancel');
           } else if (absSend) {
             absSend.textContent = t('arm.abs_send');
           }
-          if (absHome) absHome.disabled = !armed || !hasRead || syncing || teleoping || absRamping;
-          armBtn.disabled = !hasRead || syncing || teleoping || absRamping;
+          if (absHome) absHome.disabled = !armed || !hasRead || syncing || teleoping || absRamping || fakeRunning;
+          armBtn.disabled = !hasRead || syncing || teleoping || absRamping || fakeRunning;
           if (syncBtn) {
-            syncBtn.disabled = !hasRead || teleoping || absRamping;
+            syncBtn.disabled = !hasRead || teleoping || absRamping || fakeRunning;
             syncBtn.textContent = syncing ? t('arm.unsync') : t('arm.sync');
             syncBtn.classList.toggle('arm-sync-on', syncing);
             syncBtn.dataset.enabled = syncing ? '1' : '0';
           }
           if (teleopBtn) {
-            teleopBtn.disabled = !hasRead || syncing || absRamping;
+            teleopBtn.disabled = !hasRead || syncing || absRamping || fakeRunning;
             teleopBtn.textContent = teleoping ? t('arm.unteelop') : t('arm.teleop');
             teleopBtn.classList.toggle('arm-teleop-on', teleoping);
             teleopBtn.dataset.enabled = teleoping ? '1' : '0';
+          }
+          if (fakeGenBtn) {
+            fakeGenBtn.disabled = !hasRead || syncing || teleoping || absRamping || fakeRunning;
+          }
+          if (fakeRunBtn) {
+            // Executable only after successful generate; while running, click = stop.
+            if (fakeRunning) {
+              fakeRunBtn.disabled = false;
+              fakeRunBtn.textContent = '停止Fake执行';
+            } else {
+              fakeRunBtn.disabled = !(
+                !!armed && hasRead && fakeReady && !syncing && !teleoping && !absRamping
+              );
+              fakeRunBtn.textContent = 'Fake遥操点执行';
+            }
+          }
+          if (fakeProg) {
+            if (fake.message) fakeProg.textContent = String(fake.message);
+            else if (fake.ready) fakeProg.textContent = 'Fake 遥操：已生成 ' + (fake.n || 0) + ' 点，可执行';
+            else fakeProg.textContent = 'Fake 遥操：未生成';
           }
           if (syncProg) {
             if (sync.phase === 'ramping' && sync.ramp_n) {
@@ -11637,9 +11705,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
           if (teleopProg) {
             if (teleop.phase === 'teleop' || teleoping) {
               teleopProg.textContent = teleop.message || (
-                teleop.rate_limited
-                  ? ('限速中 · ' + (teleop.hz || '?') + ' Hz')
-                  : ('摇操中 · ' + (teleop.hz || '?') + ' Hz · 已写 ' + (teleop.write_count || 0))
+                '摇操中 · ' + (teleop.hz || '?') + ' Hz · latest-wins · 已写 '
+                + (teleop.write_count || 0)
               );
             } else if (teleop.phase === 'error' && teleop.last_error) {
               teleopProg.textContent = '失败：' + teleop.last_error;
@@ -11766,6 +11833,130 @@ PREVIEW_HTML = """<!DOCTYPE html>
             showAppModal(t('arm.teleop_modal_err'), String(e));
           } finally {
             teleopBtn.disabled = false;
+            box._applyArmUi(!!p.armed);
+          }
+        });
+        if (traceBtn) traceBtn.addEventListener('click', async () => {
+          const want = !gelloTraceRecording;
+          traceBtn.disabled = true;
+          try {
+            if (want) {
+              const r = await fetch('/api/gello/trace', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: true }),
+              }).then((x) => x.json());
+              if (!r || !r.ok) {
+                showAppModal('无法开始记录', (r && r.error) || JSON.stringify(r));
+                runHint.textContent = 'gello 记录失败：' + ((r && r.error) || JSON.stringify(r));
+                return;
+              }
+              gelloTraceRecording = true;
+              paintGelloTraceBtn();
+              runHint.textContent = 'gello 记录中 · 样本将写入内存（标定关节 / 摇操命令）';
+              return;
+            }
+            // Stop then download JSON from the same buffer.
+            const stopR = await fetch('/api/gello/trace', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ enabled: false }),
+            }).then((x) => x.json());
+            gelloTraceRecording = false;
+            paintGelloTraceBtn();
+            if (!stopR || !stopR.ok) {
+              showAppModal('停止记录失败', (stopR && stopR.error) || JSON.stringify(stopR));
+              return;
+            }
+            const n = stopR.sample_count != null ? stopR.sample_count : 0;
+            const resp = await fetch('/api/gello/trace/download', { cache: 'no-store' });
+            if (!resp.ok) {
+              const errTxt = await resp.text();
+              showAppModal('下载失败', errTxt || ('HTTP ' + resp.status));
+              runHint.textContent = 'gello 记录已停，但下载失败';
+              return;
+            }
+            const blob = await resp.blob();
+            let filename = 'gello_trace.json';
+            const cd = resp.headers.get('Content-Disposition') || '';
+            const m = /filename=\"?([^\";]+)\"?/i.exec(cd);
+            if (m && m[1]) filename = m[1];
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            runHint.textContent = 'gello 记录已停止并下载 · ' + n + ' 样本 · ' + filename;
+          } catch (e) {
+            runHint.textContent = 'gello 记录异常：' + e;
+            showAppModal('gello 记录异常', String(e));
+          } finally {
+            traceBtn.disabled = false;
+            paintGelloTraceBtn();
+          }
+        });
+        if (fakeGenBtn) fakeGenBtn.addEventListener('click', async () => {
+          fakeGenBtn.disabled = true;
+          if (fakeProg) fakeProg.textContent = 'Fake 遥操：规划 + IK 中…';
+          try {
+            const r = await fetch('/api/arm/fake-teleop/generate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ arm_write_agent_id: frame.agent_id }),
+            }).then((x) => x.json());
+            window.__fakeTeleop = r;
+            if (!r || !r.ok) {
+              showAppModal('Fake 路径生成失败', (r && r.error) || JSON.stringify(r));
+              runHint.textContent = 'Fake 生成失败：' + ((r && r.error) || JSON.stringify(r));
+            } else {
+              runHint.textContent = r.message || ('Fake 已生成 ' + (r.n || 0) + ' 点');
+            }
+            box._applyArmUi(!!p.armed);
+          } catch (e) {
+            runHint.textContent = 'Fake 生成异常：' + e;
+            showAppModal('Fake 生成异常', String(e));
+          } finally {
+            box._applyArmUi(!!p.armed);
+          }
+        });
+        if (fakeRunBtn) fakeRunBtn.addEventListener('click', async () => {
+          const fake = window.__fakeTeleop || {};
+          if (fake.phase === 'running') {
+            try {
+              const r = await fetch('/api/arm/fake-teleop/stop', { method: 'POST' }).then((x) => x.json());
+              window.__fakeTeleop = r;
+              runHint.textContent = (r && r.message) || '已停止 Fake 遥操';
+            } catch (e) {
+              runHint.textContent = '停止 Fake 异常：' + e;
+            }
+            box._applyArmUi(!!p.armed);
+            return;
+          }
+          if (!fake.ready && !fake.can_execute) {
+            showAppModal('无法执行', '请先成功「Fake遥操点生成」');
+            return;
+          }
+          fakeRunBtn.disabled = true;
+          try {
+            const r = await fetch('/api/arm/fake-teleop/execute', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ arm_write_agent_id: frame.agent_id }),
+            }).then((x) => x.json());
+            window.__fakeTeleop = r;
+            if (!r || !r.ok) {
+              showAppModal('Fake 执行失败', (r && r.error) || JSON.stringify(r));
+              runHint.textContent = 'Fake 执行失败：' + ((r && r.error) || JSON.stringify(r));
+            } else {
+              runHint.textContent = r.message || 'Fake 遥操执行中';
+            }
+          } catch (e) {
+            runHint.textContent = 'Fake 执行异常：' + e;
+            showAppModal('Fake 执行异常', String(e));
+          } finally {
             box._applyArmUi(!!p.armed);
           }
         });
@@ -11985,6 +12176,28 @@ PREVIEW_HTML = """<!DOCTYPE html>
           showAppModal(t('arm.teleop_modal_off'), curT.last_error);
         }
       }
+      if (msg.gello_trace) {
+        window.__gelloTrace = msg.gello_trace;
+        document.querySelectorAll('.arm-cmd').forEach((box) => {
+          if (typeof box._setGelloTraceRecording === 'function') {
+            box._setGelloTraceRecording(!!msg.gello_trace.recording);
+          }
+        });
+      }
+      if (msg.fake_teleop) {
+        const prevF = window.__fakeTeleop || {};
+        window.__fakeTeleop = msg.fake_teleop;
+        if (prevF.phase === 'running' && msg.fake_teleop.phase === 'error' && msg.fake_teleop.last_error) {
+          showAppModal('Fake 遥操中止', msg.fake_teleop.last_error);
+        }
+        document.querySelectorAll('.arm-cmd').forEach((box) => {
+          if (typeof box._applyArmUi === 'function') {
+            const armedTag = box.querySelector('.arm-armed-tag');
+            const armed = armedTag && armedTag.textContent === 'armed';
+            box._applyArmUi(!!armed);
+          }
+        });
+      }
       if (msg.delta_pose_offset) {
         window.__deltaPoseOffset = msg.delta_pose_offset;
         if (typeof applyDeltaPoseOffsetUi === 'function') applyDeltaPoseOffsetUi(msg.delta_pose_offset);
@@ -12182,6 +12395,13 @@ def create_viz_app(
     gello_arm_sync_status: Callable[[], dict[str, Any]] | None = None,
     gello_arm_teleop: Callable[..., dict[str, Any]] | None = None,
     gello_arm_teleop_status: Callable[[], dict[str, Any]] | None = None,
+    gello_trace_set: Callable[..., dict[str, Any]] | None = None,
+    gello_trace_status: Callable[..., dict[str, Any]] | None = None,
+    gello_trace_export: Callable[..., dict[str, Any]] | None = None,
+    fake_teleop_status: Callable[[], dict[str, Any]] | None = None,
+    fake_teleop_generate: Callable[..., dict[str, Any]] | None = None,
+    fake_teleop_execute: Callable[..., dict[str, Any]] | None = None,
+    fake_teleop_stop: Callable[..., dict[str, Any]] | None = None,
     pi05_connect: Callable[..., dict[str, Any]] | None = None,
     pi05_disconnect: Callable[..., dict[str, Any]] | None = None,
     pi05_status: Callable[..., dict[str, Any]] | None = None,
@@ -13056,6 +13276,87 @@ def create_viz_app(
             arm_agent_id=req.arm_agent_id,
             arm_write_agent_id=req.arm_write_agent_id,
         )
+
+    @app.get("/api/gello/trace")
+    async def gello_trace_get(gello_agent_id: str | None = None) -> dict[str, Any]:
+        if gello_trace_status is None:
+            return {"ok": False, "error": "gello trace unavailable", "recording": False}
+        return await asyncio.to_thread(gello_trace_status, gello_agent_id)
+
+    @app.post("/api/gello/trace")
+    async def gello_trace_set_api(req: GelloTraceBody) -> dict[str, Any]:
+        if _station_is_slave():
+            return _deny_slave("gello trace")
+        if gello_trace_set is None:
+            return {"ok": False, "error": "gello trace unavailable", "recording": False}
+        return await asyncio.to_thread(
+            gello_trace_set,
+            enabled=bool(req.enabled),
+            gello_agent_id=req.gello_agent_id,
+        )
+
+    @app.get("/api/gello/trace/download")
+    async def gello_trace_download(gello_agent_id: str | None = None) -> Any:
+        """Download in-memory gello→arm joint trace as JSON attachment."""
+        from fastapi.responses import Response
+
+        if gello_trace_export is None:
+            return {"ok": False, "error": "gello trace unavailable"}
+        payload = await asyncio.to_thread(gello_trace_export, gello_agent_id)
+        if not payload.get("ok"):
+            return payload
+        import json as _json
+
+        body = _json.dumps(payload, ensure_ascii=False, indent=2)
+        aid = str((payload.get("meta") or {}).get("agent_id") or "gello")
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"gello_trace_{aid}_{ts}.json"
+        return Response(
+            content=body.encode("utf-8"),
+            media_type="application/json; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            },
+        )
+
+    @app.get("/api/arm/fake-teleop")
+    async def fake_teleop_get() -> dict[str, Any]:
+        if fake_teleop_status is None:
+            return {"ok": False, "error": "fake teleop unavailable", "ready": False}
+        return {"ok": True, **fake_teleop_status()}
+
+    @app.post("/api/arm/fake-teleop/generate")
+    async def fake_teleop_generate_api(req: FakeTeleopGenerateBody) -> dict[str, Any]:
+        if _station_is_slave():
+            return _deny_slave("fake teleop generate")
+        if fake_teleop_generate is None:
+            return {"ok": False, "error": "fake teleop unavailable"}
+        kwargs: dict[str, Any] = {"arm_write_agent_id": req.arm_write_agent_id}
+        if req.dx_m is not None:
+            kwargs["dx_m"] = float(req.dx_m)
+        if req.step_m is not None:
+            kwargs["step_m"] = float(req.step_m)
+        return await asyncio.to_thread(fake_teleop_generate, **kwargs)
+
+    @app.post("/api/arm/fake-teleop/execute")
+    async def fake_teleop_execute_api(req: FakeTeleopExecuteBody) -> dict[str, Any]:
+        if _station_is_slave():
+            return _deny_slave("fake teleop execute")
+        if fake_teleop_execute is None:
+            return {"ok": False, "error": "fake teleop unavailable"}
+        return await asyncio.to_thread(
+            fake_teleop_execute,
+            arm_write_agent_id=req.arm_write_agent_id,
+            hz=req.hz,
+        )
+
+    @app.post("/api/arm/fake-teleop/stop")
+    async def fake_teleop_stop_api() -> dict[str, Any]:
+        if _station_is_slave():
+            return _deny_slave("fake teleop stop")
+        if fake_teleop_stop is None:
+            return {"ok": False, "error": "fake teleop unavailable"}
+        return await asyncio.to_thread(fake_teleop_stop, message="用户停止 Fake 遥操")
 
     @app.get("/api/pi05/status")
     async def pi05_status_get() -> dict[str, Any]:

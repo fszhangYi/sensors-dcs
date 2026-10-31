@@ -151,8 +151,25 @@ def extend_analysis(
     hiddenimports += list(RUNTIME_OPTIONAL_PACKAGES)
     hiddenimports += list(CS_SDK_PACKAGES)
 
-    # SciPy is not collect_all'd above — only listed in hiddenimports + dynamic libs
-    # loops below (IK needs optimize + spatial; full collect_all OOMs Wine 2GiB cgroup).
+    # SciPy: full collect_all("scipy") OOMs Wine ~2GiB Analysis. Collect only the
+    # IK surface (least_squares pulls fft + _lib.uarray + linalg/sparse/special).
+    _scipy_ik_pkgs = (
+        "scipy.optimize",
+        "scipy.fft",
+        "scipy._lib",
+        "scipy.linalg",
+        "scipy.spatial",
+        "scipy.sparse",
+        "scipy.special",
+    )
+    for _pkg in _scipy_ik_pkgs:
+        try:
+            d, b, h = collect_all(_pkg)
+            datas += _filter_test_artifacts(d)
+            binaries += b
+            hiddenimports += h
+        except Exception as exc:  # noqa: BLE001
+            print(f"[hardware_bundle] scipy IK collect skipped {_pkg}: {exc}")
 
     hiddenimports += [
         "numpy",
@@ -164,6 +181,16 @@ def extend_analysis(
         "scipy.optimize",
         "scipy.optimize._lsq",
         "scipy.optimize._lsq.least_squares",
+        "scipy.fft",
+        "scipy.fft._pocketfft",
+        "scipy.fft._pocketfft.basic",
+        "scipy.fft._pocketfft.pypocketfft",
+        "scipy._lib",
+        "scipy._lib.uarray",
+        "scipy._lib._uarray",
+        "scipy.linalg",
+        "scipy.sparse",
+        "scipy.special",
         "scipy.spatial",
         "scipy.spatial.transform",
         "scipy.spatial.transform._rotation_groups",
