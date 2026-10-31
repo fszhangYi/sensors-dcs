@@ -34,6 +34,27 @@
 
 **验收要点：** 开摇操后 status/`message` 含 `latest-wins`；gello_trace 中不应再出现 `teleop_cmd_rate_limited`；写臂 RTT 大时 `teleop_cmd` 可能仍低于 100 Hz，但命令应为当拍最新 gello（非排队旧点）。
 
+### 2026-10-31 — setpoint 改为数组（仍只保留 1 点）
+
+`_arm_teleop_setpoint: list[list[float]]`：缓冲骨架先落地；策略仍是 latest-wins **整表替换为单元素** `[q_g]`，写线程取 `setpoint[0]`。行为与单点变量等价，为后续「多点池 / Fake 式加密」留接口。status 增加 `setpoint_len`。
+
+### 2026-10-31 — 缓冲追加全部采样；写仍只发最新
+
+设定点线程对每个通过跳变检测的 gello 样本 **append**；写线程经 `_arm_teleop_pick_setpoint()` 取点（当前实现仍是 `[-1]`，下发 = latest-wins）。中间点暂不消费，留给后续池/加密；解除摇操时清空缓冲。
+
+### 2026-10-31 — 取点收口到 `_arm_teleop_pick_setpoint`
+
+写环不再直接下标访问缓冲；选点策略集中在该函数，便于下一步改成池消费 / Fake 式加密而不改写线程骨架。
+
+### 2026-10-31 — `latest` / `eat_stream` 生产抽点 + UI「吃流」
+
+- 队列元素改为 `{t, q}`；写成功才 `_arm_teleop_commit_setpoint`（失败重试同一 pending）。
+- **`latest`**：发 tip，commit 后丢掉 `t <= tip_t` 的前缀（回收内存，语义仍 latest-wins）。
+- **`eat_stream`**：从 `last_sent` 沿 L-inf 折线限步推进；滞后超 `eat_lag_*` 用 `eat_catch_up_rad_s`（方案 A）；`eat_drop_stale` 默认关。
+- 使能前 `POST /api/arm/gello-teleop/pick-mode` 切换；使能中拒绝；解除清队列但 **保留 pick_mode**。
+- CS 写路径仍是 **`servoj_once`**（不是 `_servoj_stream`）；EC 仍 TT 单点。
+- UI：摇操旁「吃流」二态按钮。
+
 ---
 
 ## 0. 最重要的产品边界（必读）
@@ -140,14 +161,14 @@ while enabled and not stop:
   if q_prev is not None:
     δ = max_i |q_g[i] - q_prev[i]|
     if δ > teleop_jump_abort_rad: abort 跳变; break
-  setpoint = q_g          # latest-wins 覆盖
+  setpoint.append(q_g)    # 全量追加
   q_prev = q_g
   sleep(1/poll_hz)
 
 # --- write thread（定频取最新点）---
 while enabled and not stop:
   if not armed: abort; break
-  q = setpoint            # 拷贝最新；无则等下一拍
+  q = pick_setpoint(setpoint)  # 当前 = [-1]；策略只改此函数
   if q is None: sleep(1/teleop_hz); continue
   writer.command(         # CS: servoj_once + relative_to_last
     joints_rad=q, ...
@@ -158,7 +179,7 @@ while enabled and not stop:
 
 要点：
 
-- Gello **只更新目标**；写线程只消费最新值（中间点丢弃 = latest-wins）。
+- Gello **追加进缓冲**；写线程 **只发最新**（下发 = latest-wins；历史点本步不写臂）。
 - **无** `teleop_step_max_rad` 步长裁剪。
 - 写臂 RTT 大时有效写频下降，但不会把 gello 采样锁在同一把「等写完」的锁里。
 
@@ -230,7 +251,11 @@ UI 建议（`arm_write` 卡片，`同步` 按钮旁）：
 | `delta_max` / `worst_joint` | 最近一次 gate 或设定点环内误差 |
 | `write_count` | 本轮已写次数 |
 | `rate_limited` | 恒为 `false`（步长限速已取消；保留字段兼容 UI） |
-| `has_setpoint` | 是否已有最新设定点 |
+| `has_setpoint` | 设定点缓冲是否非空 |
+| `setpoint_len` | gello 队列长度 |
+| `pick_mode` | `latest` \| `eat_stream` |
+| `pick_mode_locked` | 摇操中不可切换 |
+| `lag_path_rad` / `lag_age_s` / `last_step_rad` / `catch_up` / `pending` | 吃流可观测 |
 | `write_path` | `cs_servoj_once` \| `ec_tt` |
 | `last_ok` / `last_error` / `message` | 最近结果与文案 |
 | `last_t_wall` | 最近更新墙钟 |
@@ -246,6 +271,12 @@ UI 建议（`arm_write` 卡片，`同步` 按钮旁）：
 ```yaml
 gello_arm_teleop:
   teleop_hz: 100                # 写线程目标频率；钳位 [1, 100]；对齐 CS servoj_time≈0.01
+  pick_mode: latest             # 或 eat_stream；运行时也可 API/UI 切换（使能前）
+  eat_max_rad_s: 1.5            # 吃流正常跟手速率（L-inf）
+  eat_catch_up_rad_s: 3.0       # 滞后超限时追赶速率硬顶
+  eat_lag_path_max_rad: 0.25
+  eat_lag_age_max_s: 0.15
+  eat_drop_stale: false         # true=丢过期队头（更激进）
   teleop_enter_max_rad: 0.05    # 开环前 |gello−arm| 上限；超则「先同步」
   teleop_jump_abort_rad: 0.35   # 超此视为跳变 → 自动解除（无步长限速）
   teleop_stale_max_ticks: 3     # gello 连续无效拍数上限

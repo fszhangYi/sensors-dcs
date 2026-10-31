@@ -116,6 +116,12 @@
 - **证据**：`postprocess_service.py` 默认；`align_plot.compute_align_quality` 固定权重。
 - **补法**：按 manifest agents 自适应建议；文档标明评分是启发式非标定真值。
 
+### 14. G26562 后处理默认 require 别名 → filtered=0
+
+- **现象**：`DEFAULT_REQUIRE=arm,cam-left,cam-right,cam-middle,gripper-read` 与真实 `arm-cs66` / `cam-g26562-*` / `gripper-hl-read` 不对齐；filter 全行 `missing_data`。叠加摇操写稀、臂读不稳时观感与成品双差。
+- **证据**：G26562 类 episode 上 `filter_meta.rows_out=0` / 全行 `missing_data`（require 别名与 agent id 不一致）。
+- **补法**：按 manifest 自动填 require；别名映射；提高默认 rate-policy；用 latest-wins / 吃流摇操重采。
+
 ---
 
 ## 建议落地顺序
@@ -123,8 +129,9 @@
 1. **#1 + #2**（数据正确性：假成功 / 半集进训练集）  
 2. **#3**（运动安全语义）  
 3. **#4 + #5**（误删 / 关机脏集）  
-4. **#6–#8**（并发 QC、打包、文档）  
-5. **#9–#13** 按是否外网暴露、是否桌面打包再排
+4. **#14**（后处理别名 / 采集写频，直接导致废集）  
+5. **#6–#8**（并发 QC、打包、文档）  
+6. **#9–#13** 按是否外网暴露、是否桌面打包再排
 
 **若只先修 3 项**：provisional 不可被 `allow_invalid` 绕过；flush join 超时不得标 `done`；Pause 真正停臂（或改文案）。
 

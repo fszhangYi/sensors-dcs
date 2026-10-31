@@ -186,6 +186,7 @@ def main(argv: list[str] | None = None) -> None:
         gello_arm_sync_status=orch.gello_arm_sync_status,
         gello_arm_teleop=orch.set_gello_arm_teleop,
         gello_arm_teleop_status=orch.gello_arm_teleop_status,
+        gello_arm_teleop_pick_mode=orch.set_gello_arm_teleop_pick_mode,
         gello_trace_set=orch.set_gello_trace,
         gello_trace_status=orch.gello_trace_status,
         gello_trace_export=orch.export_gello_trace,

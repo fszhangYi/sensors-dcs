@@ -124,8 +124,9 @@ class GripperGelloSyncConfig(BaseModel):
 class GelloArmTeleopConfig(BaseModel):
     """Live gello→arm teleop (see docs/gello-arm-teleop.md). Default off.
 
-    ``teleop_step_max_rad`` was removed (2026-10-31): follow is latest-wins
-    passthrough; only ``teleop_jump_abort_rad`` still gates abnormal jumps.
+    ``teleop_step_max_rad`` was removed (2026-10-31): ``latest`` mode is
+    passthrough; ``eat_stream`` uses ``eat_*`` path-follow budgets instead.
+    Only ``teleop_jump_abort_rad`` still gates abnormal gello jumps on enqueue.
     Extra YAML keys (including legacy ``teleop_step_max_rad``) are ignored.
     """
 
@@ -136,6 +137,22 @@ class GelloArmTeleopConfig(BaseModel):
     teleop_jump_abort_rad: float = 0.35
     teleop_stale_max_ticks: int = 3
     teleop_write_fail_max: int = 5
+    # Pick policy: latest = tip only; eat_stream = path-follow consume (CS soft-TT).
+    pick_mode: str = "latest"
+    # eat_stream budgets (L-inf joint path). Recommended defaults = catch-up A.
+    eat_max_rad_s: float = 1.5
+    eat_catch_up_rad_s: float = 3.0
+    eat_lag_path_max_rad: float = 0.25
+    eat_lag_age_max_s: float = 0.15
+    eat_drop_stale: bool = False
+
+    @field_validator("pick_mode", mode="before")
+    @classmethod
+    def _normalize_pick_mode(cls, v: Any) -> str:
+        s = str(v or "latest").strip().lower().replace("-", "_")
+        if s in ("eat", "eat_stream", "stream", "tt", "tt_eat"):
+            return "eat_stream"
+        return "latest"
 
 
 class ArmAbsRampConfig(BaseModel):

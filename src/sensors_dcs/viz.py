@@ -207,6 +207,10 @@ class GelloArmTeleopBody(BaseModel):
     arm_write_agent_id: str | None = None
 
 
+class GelloArmTeleopPickModeBody(BaseModel):
+    pick_mode: str
+
+
 class GelloTraceBody(BaseModel):
     enabled: bool
     gello_agent_id: str | None = None
@@ -2357,7 +2361,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .arm-cmd .arm-jog-row {
       display: grid;
-      grid-template-columns: 2.2rem 2.2rem 2.2rem minmax(7.5rem, 1fr) minmax(4.5rem, auto);
+      /* Fixed deg column: live joint text must not reflow ± hover targets. */
+      grid-template-columns: 2.2rem 2.2rem 2.2rem minmax(7.5rem, 1fr) 5.5rem;
       gap: 0.35rem 0.45rem;
       align-items: center;
     }
@@ -2429,6 +2434,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .arm-cmd button.arm-teleop-on {
       background: var(--accent-dim); border-color: var(--accent);
+    }
+    .arm-cmd button.arm-teleop-eat-on {
+      background: color-mix(in srgb, var(--spark) 28%, var(--panel));
+      border-color: color-mix(in srgb, var(--spark) 55%, var(--border));
     }
     .modal-backdrop {
       display: none; position: fixed; inset: 0; z-index: 50;
@@ -7618,7 +7627,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const dynSel = [
         '.inf-delta-cell',
         '.arm-arm', '.arm-disarm', '.arm-estop', '.arm-gello-sync', '.arm-gello-teleop',
-        '.arm-gello-trace', '.arm-fake-gen', '.arm-fake-run',
+        '.arm-gello-teleop-eat', '.arm-gello-trace', '.arm-fake-gen', '.arm-fake-run',
         '.arm-minus', '.arm-plus', '.arm-delta', '.arm-abs-send', '.arm-home-go',
         '.arm-abs-input', '.arm-abs-t-min', '.arm-abs-t-max', '.arm-abs-v-norm',
         '.arm-abs-jerk-frac', '.arm-abs-accel-frac',
@@ -11462,6 +11471,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             (inferScope ? '' :
               '<button type="button" class="arm-gello-sync">同步</button>' +
               '<button type="button" class="arm-gello-teleop">摇操</button>' +
+              '<button type="button" class="arm-gello-teleop-eat" title="使能前切换抽点：latest ↔ 吃流（路径限步消化 gello 缓冲）">吃流</button>' +
               '<button type="button" class="arm-gello-trace" title="内存记录 gello 标定关节（将下发给臂的空间）；再点停止并下载 JSON">记录</button>' +
               '<button type="button" class="arm-fake-gen" title="法兰 p0→+X 5cm→整圆→回 p0；稠密 IK 存内存（不写臂）">Fake遥操点生成</button>' +
               '<button type="button" class="arm-fake-run" disabled title="按定点频回放已生成的 Fake 关节点（测臂侧卡顿）">Fake遥操点执行</button>') +
@@ -11512,6 +11522,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const estopBtn = box.querySelector('.arm-estop');
         const syncBtn = box.querySelector('.arm-gello-sync');
         const teleopBtn = box.querySelector('.arm-gello-teleop');
+        const teleopEatBtn = box.querySelector('.arm-gello-teleop-eat');
         const traceBtn = box.querySelector('.arm-gello-trace');
         const fakeGenBtn = box.querySelector('.arm-fake-gen');
         const fakeRunBtn = box.querySelector('.arm-fake-run');
@@ -11594,62 +11605,119 @@ PREVIEW_HTML = """<!DOCTYPE html>
           });
           return r;
         };
+        const setDisabledIfChanged = (el, disabled) => {
+          if (!el) return;
+          const want = !!disabled;
+          if (el.disabled !== want) el.disabled = want;
+        };
+        const setTextIfChanged = (el, text) => {
+          if (!el) return;
+          const want = String(text);
+          if (el.textContent !== want) el.textContent = want;
+        };
         const setJogEnabled = (on) => {
-          box.querySelectorAll('.arm-minus, .arm-plus').forEach((b) => { b.disabled = !on; });
-          if (absInput) absInput.disabled = !on;
+          box.querySelectorAll('.arm-minus, .arm-plus').forEach((b) => {
+            setDisabledIfChanged(b, !on);
+          });
+          setDisabledIfChanged(absInput, !on);
           if (absTiming) {
-            absTiming.querySelectorAll('input').forEach((inp) => { inp.disabled = !on; });
+            absTiming.querySelectorAll('input').forEach((inp) => {
+              setDisabledIfChanged(inp, !on);
+            });
           }
-          if (absSend) absSend.disabled = !on;
-          if (absHome) absHome.disabled = !on || !!(window.__armAbsRamp && window.__armAbsRamp.enabled);
+          setDisabledIfChanged(absSend, !on);
+          setDisabledIfChanged(
+            absHome,
+            !on || !!(window.__armAbsRamp && window.__armAbsRamp.enabled),
+          );
         };
         box._applyArmUi = (armed) => {
+          box._armArmedSticky = !!armed;
           const hasRead = Array.isArray(window.__armReadJoints) && window.__armReadJoints.length > 0;
           const sync = window.__gelloArmSync || {};
           const teleop = window.__gelloArmTeleop || {};
           const absRamp = window.__armAbsRamp || {};
           const fake = window.__fakeTeleop || {};
           const syncing = !!sync.enabled;
-          const teleoping = !!teleop.enabled;
+          // phase also counts: status may briefly disagree on enabled alone.
+          const teleoping = !!teleop.enabled || teleop.phase === 'teleop';
           const absRamping = !!absRamp.enabled;
           const fakeRunning = fake.phase === 'running';
           const fakeReady = !!fake.can_execute || (!!fake.ready && !fakeRunning);
-          armedTag.textContent = !hasRead ? 'need read' : (armed ? 'armed' : 'idle');
+          const tagWant = !hasRead ? 'need read' : (armed ? 'armed' : 'idle');
+          setTextIfChanged(armedTag, tagWant);
           if (armBtn) armBtn.classList.toggle('arm-on', !!armed && hasRead);
           setJogEnabled(!!armed && hasRead && !syncing && !teleoping && !absRamping && !fakeRunning);
           if (absRamping && absSend) {
-            absSend.disabled = false;
-            absSend.textContent = t('arm.abs_cancel');
+            setDisabledIfChanged(absSend, false);
+            setTextIfChanged(absSend, t('arm.abs_cancel'));
           } else if (absSend) {
-            absSend.textContent = t('arm.abs_send');
+            setTextIfChanged(absSend, t('arm.abs_send'));
           }
-          if (absHome) absHome.disabled = !armed || !hasRead || syncing || teleoping || absRamping || fakeRunning;
-          armBtn.disabled = !hasRead || syncing || teleoping || absRamping || fakeRunning;
+          setDisabledIfChanged(
+            absHome,
+            !armed || !hasRead || syncing || teleoping || absRamping || fakeRunning,
+          );
+          setDisabledIfChanged(
+            armBtn,
+            !hasRead || syncing || teleoping || absRamping || fakeRunning,
+          );
           if (syncBtn) {
-            syncBtn.disabled = !hasRead || teleoping || absRamping || fakeRunning;
-            syncBtn.textContent = syncing ? t('arm.unsync') : t('arm.sync');
+            setDisabledIfChanged(
+              syncBtn,
+              !hasRead || teleoping || absRamping || fakeRunning,
+            );
+            setTextIfChanged(syncBtn, syncing ? t('arm.unsync') : t('arm.sync'));
             syncBtn.classList.toggle('arm-sync-on', syncing);
             syncBtn.dataset.enabled = syncing ? '1' : '0';
           }
           if (teleopBtn) {
-            teleopBtn.disabled = !hasRead || syncing || absRamping || fakeRunning;
-            teleopBtn.textContent = teleoping ? t('arm.unteelop') : t('arm.teleop');
+            setDisabledIfChanged(
+              teleopBtn,
+              !hasRead || syncing || absRamping || fakeRunning,
+            );
+            setTextIfChanged(
+              teleopBtn,
+              teleoping ? t('arm.unteelop') : t('arm.teleop'),
+            );
             teleopBtn.classList.toggle('arm-teleop-on', teleoping);
             teleopBtn.dataset.enabled = teleoping ? '1' : '0';
           }
+          if (teleopEatBtn) {
+            const eatOn = String(teleop.pick_mode || 'latest') === 'eat_stream';
+            setDisabledIfChanged(
+              teleopEatBtn,
+              !hasRead || teleoping || !!teleop.pick_mode_locked,
+            );
+            teleopEatBtn.classList.toggle('arm-teleop-eat-on', eatOn);
+            teleopEatBtn.dataset.mode = eatOn ? 'eat_stream' : 'latest';
+            setTextIfChanged(teleopEatBtn, eatOn ? '吃流·开' : '吃流');
+            const eatTitle = teleoping
+              ? '摇操中不可切换抽点模式'
+              : (eatOn
+                ? '当前：吃流（路径限步）。再点切回 latest-wins'
+                : '当前：latest-wins。再点切换为吃流');
+            if (teleopEatBtn.title !== eatTitle) teleopEatBtn.title = eatTitle;
+          }
           if (fakeGenBtn) {
-            fakeGenBtn.disabled = !hasRead || syncing || teleoping || absRamping || fakeRunning;
+            setDisabledIfChanged(
+              fakeGenBtn,
+              !hasRead || syncing || teleoping || absRamping || fakeRunning,
+            );
           }
           if (fakeRunBtn) {
             // Executable only after successful generate; while running, click = stop.
             if (fakeRunning) {
-              fakeRunBtn.disabled = false;
-              fakeRunBtn.textContent = '停止Fake执行';
+              setDisabledIfChanged(fakeRunBtn, false);
+              setTextIfChanged(fakeRunBtn, '停止Fake执行');
             } else {
-              fakeRunBtn.disabled = !(
-                !!armed && hasRead && fakeReady && !syncing && !teleoping && !absRamping
+              setDisabledIfChanged(
+                fakeRunBtn,
+                !(
+                  !!armed && hasRead && fakeReady && !syncing && !teleoping && !absRamping
+                ),
               );
-              fakeRunBtn.textContent = 'Fake遥操点执行';
+              setTextIfChanged(fakeRunBtn, 'Fake遥操点执行');
             }
           }
           if (fakeProg) {
@@ -11703,9 +11771,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
             }
           }
           if (teleopProg) {
+            const mode = teleop.pick_mode || 'latest';
             if (teleop.phase === 'teleop' || teleoping) {
               teleopProg.textContent = teleop.message || (
-                '摇操中 · ' + (teleop.hz || '?') + ' Hz · latest-wins · 已写 '
+                '摇操中 · ' + (teleop.hz || '?') + ' Hz · ' + mode + ' · 已写 '
                 + (teleop.write_count || 0)
               );
             } else if (teleop.phase === 'error' && teleop.last_error) {
@@ -11713,7 +11782,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             } else if (teleop.message) {
               teleopProg.textContent = String(teleop.message);
             } else {
-              teleopProg.textContent = '摇操：空闲（gello 不控臂）';
+              teleopProg.textContent = '摇操：空闲 · pick=' + mode + '（gello 不控臂）';
             }
           }
         };
@@ -11833,6 +11902,31 @@ PREVIEW_HTML = """<!DOCTYPE html>
             showAppModal(t('arm.teleop_modal_err'), String(e));
           } finally {
             teleopBtn.disabled = false;
+            box._applyArmUi(!!p.armed);
+          }
+        });
+        if (teleopEatBtn) teleopEatBtn.addEventListener('click', async () => {
+          const cur = (window.__gelloArmTeleop || {}).pick_mode || 'latest';
+          const want = cur === 'eat_stream' ? 'latest' : 'eat_stream';
+          teleopEatBtn.disabled = true;
+          try {
+            const r = await fetch('/api/arm/gello-teleop/pick-mode', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ pick_mode: want }),
+            }).then((x) => x.json());
+            window.__gelloArmTeleop = r;
+            if (!r.ok) {
+              showAppModal('无法切换抽点模式', r.error || JSON.stringify(r));
+              runHint.textContent = '抽点模式切换失败：' + (r.error || JSON.stringify(r));
+              return;
+            }
+            box._applyArmUi(!!p.armed);
+            runHint.textContent = r.message || ('抽点模式：' + (r.pick_mode || want));
+          } catch (e) {
+            runHint.textContent = '抽点模式异常：' + e;
+            showAppModal('抽点模式异常', String(e));
+          } finally {
             box._applyArmUi(!!p.armed);
           }
         });
@@ -12057,7 +12151,63 @@ PREVIEW_HTML = """<!DOCTYPE html>
         box._applyArmUi(false);
       }
       if (box && box._applyArmUi) {
-        box._applyArmUi(!!p.armed);
+        // Write-fail used to publish armed=false (ok∧armed) → ± enable flickered.
+        const liveArmed = !!p.armed;
+        if (liveArmed) {
+          box._armArmedSticky = true;
+        } else if (p.last_ok !== false) {
+          // Real idle/disarm sample (not a failed command).
+          box._armArmedSticky = false;
+        }
+        const armedForUi = liveArmed || !!box._armArmedSticky;
+        const teleop = window.__gelloArmTeleop || {};
+        const sync = window.__gelloArmSync || {};
+        const absRamp = window.__armAbsRamp || {};
+        const fake = window.__fakeTeleop || {};
+        const gateSig = [
+          armedForUi ? 1 : 0,
+          Array.isArray(window.__armReadJoints) && window.__armReadJoints.length ? 1 : 0,
+          sync.enabled ? 1 : 0,
+          (teleop.enabled || teleop.phase === 'teleop') ? 1 : 0,
+          absRamp.enabled ? 1 : 0,
+          fake.phase || '',
+          String(teleop.pick_mode || 'latest'),
+        ].join('|');
+        if (box._armGateSig !== gateSig) {
+          box._armGateSig = gateSig;
+          box._applyArmUi(armedForUi);
+        } else {
+          // Progress lines only — do not touch ± disabled.
+          const teleopProg = box.querySelector('.arm-teleop-prog');
+          const syncProg = box.querySelector('.arm-sync-prog');
+          const fakeProg = box.querySelector('.arm-fake-prog');
+          const teleoping = !!teleop.enabled || teleop.phase === 'teleop';
+          if (teleopProg) {
+            const mode = teleop.pick_mode || 'latest';
+            let want;
+            if (teleop.phase === 'teleop' || teleoping) {
+              want = teleop.message || (
+                '摇操中 · ' + (teleop.hz || '?') + ' Hz · ' + mode + ' · 已写 '
+                + (teleop.write_count || 0)
+              );
+            } else if (teleop.phase === 'error' && teleop.last_error) {
+              want = '失败：' + teleop.last_error;
+            } else if (teleop.message) {
+              want = String(teleop.message);
+            } else {
+              want = '摇操：空闲 · pick=' + mode + '（gello 不控臂）';
+            }
+            if (teleopProg.textContent !== want) teleopProg.textContent = want;
+          }
+          if (syncProg && sync.message && syncProg.textContent !== String(sync.message)
+              && sync.phase !== 'ramping' && sync.phase !== 'verifying') {
+            // ramping text is owned by full _applyArmUi; keep simple message sync here
+          }
+          if (fakeProg && fake.message) {
+            const fm = String(fake.message);
+            if (fakeProg.textContent !== fm) fakeProg.textContent = fm;
+          }
+        }
         const rows = box.querySelectorAll('.arm-jog-row');
         rows.forEach((row) => {
           const i = Number(row.dataset.j);
@@ -12065,13 +12215,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
           const degSpan = row.querySelector('.arm-jval-deg');
           const v = fb[i];
           if (v == null || !Number.isFinite(Number(v))) {
-            if (span) span.textContent = '—';
-            if (degSpan) degSpan.textContent = '—';
+            if (span && span.textContent !== '—') span.textContent = '—';
+            if (degSpan && degSpan.textContent !== '—') degSpan.textContent = '—';
             return;
           }
           const rad = Number(v);
-          if (span) span.textContent = rad.toFixed(3) + ' rad';
-          if (degSpan) degSpan.textContent = (rad * 180 / Math.PI).toFixed(1) + '°';
+          const radTxt = rad.toFixed(3) + ' rad';
+          const degTxt = (rad * 180 / Math.PI).toFixed(1) + '°';
+          if (span && span.textContent !== radTxt) span.textContent = radTxt;
+          if (degSpan && degSpan.textContent !== degTxt) degSpan.textContent = degTxt;
         });
       }
     }
@@ -12190,13 +12342,23 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (prevF.phase === 'running' && msg.fake_teleop.phase === 'error' && msg.fake_teleop.last_error) {
           showAppModal('Fake 遥操中止', msg.fake_teleop.last_error);
         }
-        document.querySelectorAll('.arm-cmd').forEach((box) => {
-          if (typeof box._applyArmUi === 'function') {
-            const armedTag = box.querySelector('.arm-armed-tag');
-            const armed = armedTag && armedTag.textContent === 'armed';
-            box._applyArmUi(!!armed);
-          }
-        });
+        // Only refresh arm chrome when Fake gate-relevant fields change.
+        // Re-applying every viz tick was toggling jog disabled and causing flicker.
+        const fakeGateChanged = (
+          prevF.phase !== msg.fake_teleop.phase
+          || !!prevF.ready !== !!msg.fake_teleop.ready
+          || !!prevF.can_execute !== !!msg.fake_teleop.can_execute
+          || String(prevF.message || '') !== String(msg.fake_teleop.message || '')
+        );
+        if (fakeGateChanged) {
+          document.querySelectorAll('.arm-cmd').forEach((box) => {
+            if (typeof box._applyArmUi === 'function') {
+              const tag = box.querySelector('.arm-armed-tag');
+              const armed = tag && tag.textContent === 'armed';
+              box._applyArmUi(!!armed);
+            }
+          });
+        }
       }
       if (msg.delta_pose_offset) {
         window.__deltaPoseOffset = msg.delta_pose_offset;
@@ -12395,6 +12557,7 @@ def create_viz_app(
     gello_arm_sync_status: Callable[[], dict[str, Any]] | None = None,
     gello_arm_teleop: Callable[..., dict[str, Any]] | None = None,
     gello_arm_teleop_status: Callable[[], dict[str, Any]] | None = None,
+    gello_arm_teleop_pick_mode: Callable[..., dict[str, Any]] | None = None,
     gello_trace_set: Callable[..., dict[str, Any]] | None = None,
     gello_trace_status: Callable[..., dict[str, Any]] | None = None,
     gello_trace_export: Callable[..., dict[str, Any]] | None = None,
@@ -13275,6 +13438,21 @@ def create_viz_app(
             gello_agent_id=req.gello_agent_id,
             arm_agent_id=req.arm_agent_id,
             arm_write_agent_id=req.arm_write_agent_id,
+        )
+
+    @app.post("/api/arm/gello-teleop/pick-mode")
+    async def arm_gello_teleop_pick_mode_set(
+        req: GelloArmTeleopPickModeBody,
+    ) -> dict[str, Any]:
+        if _station_is_slave():
+            return _deny_slave("gello arm teleop pick mode")
+        if gello_arm_teleop_pick_mode is None:
+            return {
+                "ok": False,
+                "error": "gello arm teleop pick mode unavailable",
+            }
+        return await asyncio.to_thread(
+            gello_arm_teleop_pick_mode, pick_mode=str(req.pick_mode)
         )
 
     @app.get("/api/gello/trace")

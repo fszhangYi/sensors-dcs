@@ -125,12 +125,16 @@ class ArmWriteAgent(BaseAgent):
         except Exception as e:  # noqa: BLE001
             result = {"ok": False, "error": str(e)}
 
+        # Prefer sensor latch over result["armed"] (legacy CS conflated ok∧armed).
+        sensor_armed = bool(getattr(self.sensor, "armed", False))
+        if "armed" in result:
+            sensor_armed = bool(result.get("armed"))
         with self._cmd_lock:
             self._last_cmd = {
                 "joints_rad": result.get("joints_rad", body.get("joints_rad")),
                 "jog_joint": result.get("jog_joint", body.get("jog_joint")),
                 "delta_rad": result.get("delta_rad", body.get("delta_rad")),
-                "armed": bool(result.get("armed", getattr(self.sensor, "armed", False))),
+                "armed": sensor_armed,
                 "ok": bool(result.get("ok")),
                 "error": result.get("error"),
                 "t_wall": time.time(),

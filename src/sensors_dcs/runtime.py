@@ -180,7 +180,17 @@ class Orchestrator:
         self._arm_teleop_stop = threading.Event()
         self._arm_teleop_thread: threading.Thread | None = None  # write thread
         self._arm_teleop_setpoint_thread: threading.Thread | None = None
-        self._arm_teleop_setpoint: list[float] | None = None
+        # Teleop gello queue: list[{"t": float, "q": list[float]}]; pick/commit consume it.
+        self._arm_teleop_setpoint: list[dict[str, Any]] = []
+        self._arm_teleop_last_sent: list[float] | None = None
+        self._arm_teleop_pending: dict[str, Any] | None = None
+        self._arm_teleop_pick_mode = str(
+            getattr(self.cfg.gello_arm_teleop, "pick_mode", "latest") or "latest"
+        )
+        self._arm_teleop_lag_path_rad: float | None = None
+        self._arm_teleop_lag_age_s: float | None = None
+        self._arm_teleop_last_step_rad: float | None = None
+        self._arm_teleop_catch_up = False
         self._arm_teleop_enabled = False
         self._arm_teleop_gello_id: str | None = None
         self._arm_teleop_arm_id: str | None = None
@@ -2242,11 +2252,106 @@ class Orchestrator:
                 "write_count": self._arm_teleop_write_count,
                 "last_t_wall": self._arm_teleop_last_t_wall,
                 "rate_limited": False,  # step rate-limit removed; kept for UI compat
-                "has_setpoint": self._arm_teleop_setpoint is not None,
+                "has_setpoint": bool(self._arm_teleop_setpoint),
+                "setpoint_len": len(self._arm_teleop_setpoint),
+                "pick_mode": self._arm_teleop_pick_mode,
+                "pick_mode_locked": bool(
+                    self._arm_teleop_enabled or self._arm_teleop_phase == "teleop"
+                ),
+                "lag_path_rad": self._arm_teleop_lag_path_rad,
+                "lag_age_s": self._arm_teleop_lag_age_s,
+                "last_step_rad": self._arm_teleop_last_step_rad,
+                "catch_up": self._arm_teleop_catch_up,
+                "pending": self._arm_teleop_pending is not None,
                 "hz": self._arm_teleop_hz,
                 "write_path": self._arm_teleop_write_path,
                 "params": self.cfg.gello_arm_teleop.model_dump(),
             }
+
+    def set_gello_arm_teleop_pick_mode(self, pick_mode: str) -> dict[str, Any]:
+        """Switch pick policy. Allowed only while teleop is not running."""
+        from sensors_dcs.config import GelloArmTeleopConfig
+
+        mode = GelloArmTeleopConfig.model_validate({"pick_mode": pick_mode}).pick_mode
+        with self._arm_teleop_lock:
+            busy = self._arm_teleop_enabled or self._arm_teleop_phase == "teleop"
+            if not busy:
+                self._arm_teleop_pick_mode = mode
+                self._arm_teleop_last_message = (
+                    f"抽点模式：{mode}（使能前可切换；解除摇操后仍保留）"
+                )
+                self._arm_teleop_last_t_wall = time.time()
+        if busy:
+            return {
+                "ok": False,
+                "error": "摇操进行中，不能切换抽点模式；请先解除摇操",
+                **self.gello_arm_teleop_status(),
+            }
+        return {"ok": True, **self.gello_arm_teleop_status()}
+
+    def _arm_teleop_reset_session_locked(self) -> None:
+        """Clear queue / pending / last_sent. Caller holds ``_arm_teleop_lock``."""
+        self._arm_teleop_setpoint = []
+        self._arm_teleop_last_sent = None
+        self._arm_teleop_pending = None
+        self._arm_teleop_lag_path_rad = None
+        self._arm_teleop_lag_age_s = None
+        self._arm_teleop_last_step_rad = None
+        self._arm_teleop_catch_up = False
+
+    @staticmethod
+    def _arm_teleop_path_lag_linf(
+        q0: list[float], samples: list[dict[str, Any]]
+    ) -> float:
+        """L-inf polyline length from ``q0`` through sample joints."""
+        lag = 0.0
+        prev = q0
+        for sample in samples:
+            q = sample.get("q")
+            if not isinstance(q, list) or len(q) < 6:
+                continue
+            dmax, _ = Orchestrator._delta_max_joint(prev, q)
+            lag += float(dmax)
+            prev = q
+        return lag
+
+    @staticmethod
+    def _arm_teleop_advance_path(
+        q0: list[float],
+        samples: list[dict[str, Any]],
+        *,
+        budget: float,
+    ) -> tuple[list[float], list[dict[str, Any]], float]:
+        """Walk L-inf polyline up to ``budget``; return (q_cmd, remaining_buf, step)."""
+        if budget <= 1e-15:
+            return list(q0), list(samples), 0.0
+        remaining = list(samples)
+        cur = list(q0)
+        used = 0.0
+        while remaining and used < budget - 1e-15:
+            nxt = remaining[0].get("q")
+            if not isinstance(nxt, list) or len(nxt) < 6:
+                remaining.pop(0)
+                continue
+            dmax, _ = Orchestrator._delta_max_joint(cur, nxt)
+            room = budget - used
+            if dmax <= room + 1e-15:
+                cur = list(nxt)
+                used += float(dmax)
+                remaining.pop(0)
+                continue
+            if dmax <= 1e-15:
+                remaining.pop(0)
+                continue
+            frac = room / dmax
+            cur = [
+                float(cur[i]) + frac * (float(nxt[i]) - float(cur[i])) for i in range(6)
+            ]
+            used += room
+            head_t = float(remaining[0].get("t") or time.time())
+            remaining[0] = {"t": head_t, "q": list(cur)}
+            break
+        return cur, remaining, used
 
     def _resolve_gello_agent(self, gello_agent_id: str | None = None) -> Any | dict[str, Any]:
         from sensors_dcs.agents.gello_agent import GelloAgent
@@ -2740,8 +2845,9 @@ class Orchestrator:
         """Start/stop live gello→arm teleop. Jump/stale auto-disables; keeps armed.
 
         Architecture (aligned with sensors-arm B.1):
-        - setpoint poller: latest-wins from gello ring (no write wait)
-        - write thread: fixed ``teleop_hz`` takes latest setpoint → servoj_once
+        - setpoint poller: append each gello sample into ``_arm_teleop_setpoint``
+        - write thread: fixed ``teleop_hz`` → pick → CS ``servoj_once`` (not stream)
+          / EC TT; commit queue only on write success
         """
         if not enabled:
             self._arm_teleop_stop.set()
@@ -2749,11 +2855,13 @@ class Orchestrator:
             with self._arm_teleop_lock:
                 was = self._arm_teleop_enabled or self._arm_teleop_phase == "teleop"
                 self._arm_teleop_enabled = False
-                self._arm_teleop_setpoint = None
+                self._arm_teleop_reset_session_locked()
                 self._arm_teleop_rate_limited = False
                 if was and self._arm_teleop_phase == "teleop":
                     self._arm_teleop_phase = "idle"
-                    self._arm_teleop_last_message = "已解除摇操；gello 未控制机械臂"
+                    self._arm_teleop_last_message = (
+                        f"已解除摇操；gello 未控制机械臂 · pick={self._arm_teleop_pick_mode}"
+                    )
                     self._arm_teleop_last_ok = True
                     self._arm_teleop_last_error = None
                 self._arm_teleop_last_t_wall = time.time()
@@ -2793,6 +2901,7 @@ class Orchestrator:
             "cs_servoj_once" if self._is_cs_arm_write(writer.sensor) else "ec_tt"
         )
         q0 = self._joints6_from_ring(gello)
+        t0 = time.time()
         with self._arm_teleop_lock:
             self._arm_teleop_enabled = True
             self._arm_teleop_gello_id = gello.agent_id
@@ -2803,15 +2912,19 @@ class Orchestrator:
             self._arm_teleop_worst_joint = gate.get("worst_joint")
             self._arm_teleop_last_ok = None
             self._arm_teleop_last_error = None
+            mode = self._arm_teleop_pick_mode
             self._arm_teleop_last_message = (
-                f"摇操中 · {hz:g} Hz · latest-wins · {write_path}"
+                f"摇操中 · {hz:g} Hz · {mode} · {write_path}"
             )
             self._arm_teleop_write_count = 0
             self._arm_teleop_rate_limited = False
             self._arm_teleop_hz = hz
             self._arm_teleop_write_path = write_path
-            self._arm_teleop_setpoint = list(q0) if q0 is not None else None
-            self._arm_teleop_last_t_wall = time.time()
+            self._arm_teleop_reset_session_locked()
+            if q0 is not None:
+                self._arm_teleop_setpoint = [{"t": t0, "q": list(q0)}]
+                self._arm_teleop_last_sent = list(q0)
+            self._arm_teleop_last_t_wall = t0
 
         self._arm_teleop_stop.clear()
         self._arm_teleop_setpoint_thread = threading.Thread(
@@ -2830,8 +2943,126 @@ class Orchestrator:
         self._arm_teleop_thread.start()
         return {"ok": True, **self.gello_arm_teleop_status()}
 
+    def _arm_teleop_pick_setpoint(self) -> list[float] | None:
+        """Plan next joint command from the gello queue (two-phase: commit later).
+
+        Caller must hold ``_arm_teleop_lock``. On write failure the same pending
+        command is retried; queue mutation happens only in ``_arm_teleop_commit_setpoint``.
+        """
+        if self._arm_teleop_pending is not None:
+            q = self._arm_teleop_pending.get("q")
+            return list(q) if isinstance(q, list) else None
+
+        buf = self._arm_teleop_setpoint
+        if not buf:
+            return None
+
+        mode = self._arm_teleop_pick_mode
+        now = time.time()
+        params = self.cfg.gello_arm_teleop
+        hz = max(1.0, float(self._arm_teleop_hz or params.teleop_hz or 100.0))
+
+        if mode != "eat_stream":
+            tip = buf[-1]
+            q_tip = tip.get("q")
+            if not isinstance(q_tip, list) or len(q_tip) < 6:
+                return None
+            tip_t = float(tip.get("t") or now)
+            lag_path = 0.0
+            if self._arm_teleop_last_sent is not None:
+                lag_path = self._arm_teleop_path_lag_linf(
+                    self._arm_teleop_last_sent, buf
+                )
+            lag_age = max(0.0, now - float(buf[0].get("t") or now))
+            self._arm_teleop_pending = {
+                "mode": "latest",
+                "q": list(q_tip),
+                "tip_t": tip_t,
+                "lag_path_rad": lag_path,
+                "lag_age_s": lag_age,
+                "step_rad": (
+                    self._delta_max_joint(self._arm_teleop_last_sent, q_tip)[0]
+                    if self._arm_teleop_last_sent is not None
+                    else 0.0
+                ),
+                "catch_up": False,
+            }
+            self._arm_teleop_lag_path_rad = lag_path
+            self._arm_teleop_lag_age_s = lag_age
+            self._arm_teleop_last_step_rad = self._arm_teleop_pending["step_rad"]
+            self._arm_teleop_catch_up = False
+            return list(q_tip)
+
+        # eat_stream: optional drop stale heads, then path-follow with catch-up A.
+        if bool(params.eat_drop_stale):
+            age_max = max(0.0, float(params.eat_lag_age_max_s))
+            while len(buf) > 1:
+                age = now - float(buf[0].get("t") or now)
+                if age <= age_max + 1e-15:
+                    break
+                buf.pop(0)
+
+        q_ref = self._arm_teleop_last_sent
+        if q_ref is None:
+            q0 = buf[0].get("q")
+            if not isinstance(q0, list) or len(q0) < 6:
+                return None
+            q_ref = list(q0)
+
+        lag_path = self._arm_teleop_path_lag_linf(q_ref, buf)
+        lag_age = max(0.0, now - float(buf[0].get("t") or now))
+        catch_up = lag_path > float(params.eat_lag_path_max_rad) + 1e-15 or (
+            lag_age > float(params.eat_lag_age_max_s) + 1e-15
+        )
+        rate = float(
+            params.eat_catch_up_rad_s if catch_up else params.eat_max_rad_s
+        )
+        budget = max(0.0, rate) / hz
+        q_cmd, remaining, step = self._arm_teleop_advance_path(
+            q_ref, buf, budget=budget
+        )
+        self._arm_teleop_pending = {
+            "mode": "eat_stream",
+            "q": list(q_cmd),
+            "remaining": remaining,
+            "lag_path_rad": lag_path,
+            "lag_age_s": lag_age,
+            "step_rad": step,
+            "catch_up": catch_up,
+        }
+        self._arm_teleop_lag_path_rad = lag_path
+        self._arm_teleop_lag_age_s = lag_age
+        self._arm_teleop_last_step_rad = step
+        self._arm_teleop_catch_up = catch_up
+        return list(q_cmd)
+
+    def _arm_teleop_commit_setpoint(self, *, ok: bool) -> None:
+        """Apply queue mutation after a write attempt. Caller holds the lock."""
+        pending = self._arm_teleop_pending
+        if pending is None:
+            return
+        if not ok:
+            # Keep pending so the next tick retries the same command.
+            return
+        mode = pending.get("mode")
+        q_cmd = pending.get("q")
+        if isinstance(q_cmd, list) and len(q_cmd) >= 6:
+            self._arm_teleop_last_sent = list(q_cmd)
+        if mode == "latest":
+            tip_t = float(pending.get("tip_t") or 0.0)
+            self._arm_teleop_setpoint = [
+                s
+                for s in self._arm_teleop_setpoint
+                if float(s.get("t") or 0.0) > tip_t + 1e-15
+            ]
+        elif mode == "eat_stream":
+            remaining = pending.get("remaining")
+            if isinstance(remaining, list):
+                self._arm_teleop_setpoint = list(remaining)
+        self._arm_teleop_pending = None
+
     def _gello_arm_teleop_setpoint_loop(self, gello_id: str) -> None:
-        """Poll gello ring → latest-wins setpoint (never blocks on arm write)."""
+        """Poll gello ring → append samples; write loop picks via ``_arm_teleop_pick_setpoint``."""
         from sensors_dcs.agents.gello_agent import GelloAgent
 
         params = self.cfg.gello_arm_teleop
@@ -2844,8 +3075,10 @@ class Orchestrator:
 
         q_prev: list[float] | None = None
         with self._arm_teleop_lock:
-            if self._arm_teleop_setpoint is not None:
-                q_prev = list(self._arm_teleop_setpoint)
+            if self._arm_teleop_setpoint:
+                q_prev = list(self._arm_teleop_setpoint[-1]["q"])
+            elif self._arm_teleop_last_sent is not None:
+                q_prev = list(self._arm_teleop_last_sent)
         stale_ticks = 0
         final_error: str | None = None
 
@@ -2889,7 +3122,9 @@ class Orchestrator:
                         self._arm_teleop_worst_joint = ji
 
                 with self._arm_teleop_lock:
-                    self._arm_teleop_setpoint = list(q_g)
+                    self._arm_teleop_setpoint.append(
+                        {"t": time.time(), "q": list(q_g)}
+                    )
                     self._arm_teleop_last_t_wall = time.time()
                 q_prev = list(q_g)
                 self._arm_teleop_stop.wait(period)
@@ -2943,18 +3178,16 @@ class Orchestrator:
                     break
 
                 with self._arm_teleop_lock:
-                    q_cmd = (
-                        list(self._arm_teleop_setpoint)
-                        if self._arm_teleop_setpoint is not None
-                        else None
-                    )
+                    q_cmd = self._arm_teleop_pick_setpoint()
                     write_path = self._arm_teleop_write_path
+                    mode = self._arm_teleop_pick_mode
+                    catch_up = self._arm_teleop_catch_up
 
                 if q_cmd is None:
                     self._arm_teleop_stop.wait(period)
                     continue
 
-                # CS66: dense servoj_once from last_cmd (not lagged RTSI).
+                # CS66: dense servoj_once (not _servoj_stream). EC: TT single add.
                 if write_path == "cs_servoj_once" or self._is_cs_arm_write(writer.sensor):
                     result = writer.command(
                         joints_rad=list(q_cmd),
@@ -2983,12 +3216,14 @@ class Orchestrator:
                         break
 
                 with self._arm_teleop_lock:
+                    self._arm_teleop_commit_setpoint(ok=ok)
                     self._arm_teleop_last_ok = ok
                     self._arm_teleop_last_error = result.get("error")
                     self._arm_teleop_write_count += 1 if ok else 0
                     self._arm_teleop_last_t_wall = time.time()
+                    cu = " · catch-up" if catch_up and mode == "eat_stream" else ""
                     self._arm_teleop_last_message = (
-                        f"摇操中 · {hz:g} Hz · latest-wins · 已写 "
+                        f"摇操中 · {hz:g} Hz · {mode}{cu} · 已写 "
                         f"{self._arm_teleop_write_count}"
                     )
 
@@ -3030,7 +3265,7 @@ class Orchestrator:
                         self._arm_teleop_last_message = (
                             final_message or "已解除摇操；gello 未控制机械臂"
                         )
-                self._arm_teleop_setpoint = None
+                self._arm_teleop_reset_session_locked()
                 self._arm_teleop_last_t_wall = time.time()
 
     def gripper_command(
@@ -3829,6 +4064,7 @@ class Orchestrator:
             gello_arm_sync_status=self.gello_arm_sync_status,
             gello_arm_teleop=self.set_gello_arm_teleop,
             gello_arm_teleop_status=self.gello_arm_teleop_status,
+            gello_arm_teleop_pick_mode=self.set_gello_arm_teleop_pick_mode,
             gello_trace_set=self.set_gello_trace,
             gello_trace_status=self.gello_trace_status,
             gello_trace_export=self.export_gello_trace,
