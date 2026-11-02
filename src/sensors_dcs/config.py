@@ -21,6 +21,7 @@ class AgentConfig(BaseModel):
         "realsense",
         "pi05",
         "gello_reinforce",
+        "webrtc_preview",
     ] = "gello"
     sensor_id: str | None = None
     hz: float = 50.0
@@ -36,6 +37,16 @@ class AgentConfig(BaseModel):
     gripper_agent_id: str | None = None
     # gello_reinforce: peer gello agent id (optional; default = sole gello)
     gello_agent_id: str | None = None
+    # webrtc_preview: optional camera list (empty = all realsense); media plane only
+    camera_agent_ids: list[str] | None = None
+    suppress_jpeg_ws: bool = True
+    max_bitrate_kbps: int = 2500
+    preferred_codec: str = "H264"
+    backend: Literal["auto", "stub", "aiortc"] = "auto"
+    # webrtc_preview Phase E: best-effort DataChannel telemetry (not recorded)
+    telemetry_enabled: bool = True
+    telemetry_hz: float = 15.0
+    telemetry_agent_ids: list[str] | None = None
 
     @field_validator("hz")
     @classmethod
@@ -51,10 +62,21 @@ class AgentConfig(BaseModel):
             raise ValueError("term_threshold must be finite")
         return float(v)
 
+    @field_validator("max_bitrate_kbps")
+    @classmethod
+    def _bitrate_positive(cls, v: int) -> int:
+        if int(v) < 100:
+            raise ValueError("max_bitrate_kbps must be >= 100")
+        return int(v)
+
     @model_validator(mode="after")
     def _sensor_id_unless_pi05(self) -> AgentConfig:
-        if self.type not in ("pi05", "gello_reinforce") and not (self.sensor_id or "").strip():
-            raise ValueError("sensor_id is required unless type is pi05 or gello_reinforce")
+        if self.type not in ("pi05", "gello_reinforce", "webrtc_preview") and not (
+            self.sensor_id or ""
+        ).strip():
+            raise ValueError(
+                "sensor_id is required unless type is pi05, gello_reinforce, or webrtc_preview"
+            )
         return self
 
 
@@ -499,11 +521,19 @@ def station_summary(cfg: DcsConfig) -> dict[str, Any]:
     """Read-only station identity for /api/status and UI (no peer session state)."""
     st = cfg.station
     sid = (st.id or "").strip() or str(cfg.site or "default")
+    viz_port = int(cfg.runtime.viz_port)
+    advertise = (st.advertise_ip or "").strip()
+    catalog_url = None
+    if advertise and advertise not in ("0.0.0.0", "::"):
+        # 127.0.0.1 allowed for single-machine preview / open-url
+        catalog_url = f"http://{advertise}:{viz_port}/api/preview/catalog"
     return {
         "role": st.role,
         "id": sid,
-        "advertise_ip": (st.advertise_ip or "").strip(),
+        "advertise_ip": advertise,
         "peer_port": resolve_peer_port(cfg),
+        "viz_port": viz_port,
+        "catalog_url": catalog_url,
         "master_ip": (st.master_ip or "").strip(),
         "master_port": resolve_master_port(cfg) if st.role == "slave" else None,
         "is_master": st.role == "master",

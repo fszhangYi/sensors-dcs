@@ -1,0 +1,30 @@
+# hik-sensors bundle — 从站 dry-run 仅相机（配对 slave_cam_dryrun.yaml）
+# 无真串口/臂；RealSense 在 dry_run 下由驱动合成假图。
+version: 1
+site: dcs-slave-cam
+
+dry_run: true
+
+defaults: {}
+
+devices:
+  - id: rs-left
+    kind: realsense
+    name: "RealSense · Left (dry-run)"
+    params:
+      role: left
+      serial: "dryrun-rs-left"
+
+  - id: rs-right
+    kind: realsense
+    name: "RealSense · Right (dry-run)"
+    params:
+      role: right
+      serial: "dryrun-rs-right"
+
+  - id: rs-middle
+    kind: realsense
+    name: "RealSense · Middle (dry-run)"
+    params:
+      role: middle
+      serial: "dryrun-rs-middle"

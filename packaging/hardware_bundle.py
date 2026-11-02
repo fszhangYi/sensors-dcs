@@ -21,6 +21,12 @@ HARDWARE_PACKAGES = (
     "loguru",
     "pyrealsense2",
 )
+# WebRTC preview media plane (pyproject [webrtc] / requirements-desktop.txt)
+# ``av`` = PyAV (aiortc dependency; native libs must be collected).
+WEBRTC_PACKAGES = (
+    "aiortc",
+    "av",
+)
 # CS66 / arm_cs_write — not on PyPI; install wheel into build env (see build_desktop._install_elite_cs_sdk).
 # Soft-collected: Wine/EC-only builds may omit it; native-win verifies presence separately.
 CS_SDK_PACKAGES = ("elite_cs_sdk",)
@@ -130,6 +136,7 @@ def extend_analysis(
     for pkg in (
         *CORE_PACKAGES,
         *HARDWARE_PACKAGES,
+        *WEBRTC_PACKAGES,
         # scipy: selective below (full collect_all blows Wine ~2GiB cgroup)
         *EXPORT_PACKAGES,
         *UI_PACKAGES,
@@ -216,12 +223,22 @@ def extend_analysis(
         "loguru",
         "pyrealsense2",
         "pyrealsense2.pyrealsense2",
+        "aiortc",
+        "aiortc.rtcrtpsender",
+        "aiortc.contrib",
+        "av",
+        "av.video",
+        "av.video.frame",
+        "av.audio",
         "webview",
         "pydantic_core",
         "httptools",
         "websockets",
         "sensors_dcs.ui_serve",
         "sensors_dcs.arm_pose",
+        "sensors_dcs.webrtc_preview_media",
+        "sensors_dcs.agents.webrtc_preview_agent",
+        "sensors_dcs.preview_catalog",
         "sensors_dcs.export",
         "sensors_dcs.export.timeline",
         "sensors_dcs.export.filter",
@@ -236,12 +253,12 @@ def extend_analysis(
     for pkg in (*EXPORT_PACKAGES, *KINEMATICS_PACKAGES):
         _collect_libs_folder(pkg, datas=datas)
 
-    for pkg in (*HARDWARE_PACKAGES, *KINEMATICS_PACKAGES, *EXPORT_PACKAGES):
+    for pkg in (*HARDWARE_PACKAGES, *WEBRTC_PACKAGES, *KINEMATICS_PACKAGES, *EXPORT_PACKAGES):
         try:
             datas += copy_metadata(pkg)
         except Exception:  # noqa: BLE001
             pass
-        if pkg in ("pyrealsense2", "cv2", "pyarrow", "pandas", "scipy", "elite_cs_sdk"):
+        if pkg in ("pyrealsense2", "cv2", "pyarrow", "pandas", "scipy", "elite_cs_sdk", "av"):
             try:
                 binaries += collect_dynamic_libs(pkg)
             except Exception:  # noqa: BLE001
@@ -280,7 +297,8 @@ def extend_analysis(
     if missing:
         raise RuntimeError(
             "desktop bundle packages missing in build env "
-            "(pip install -r requirements.txt -r requirements-desktop.txt -r requirements-hardware.txt): "
+            "(pip install -r requirements.txt -r requirements-desktop.txt "
+            "-r requirements-hardware.txt  and aiortc/av for WebRTC): "
             + "; ".join(missing)
         )
     return datas, binaries, hiddenimports

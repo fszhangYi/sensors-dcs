@@ -140,6 +140,8 @@ class _PeerConn:
         self.role = ""
         self.agents: list[dict[str, Any]] = []
         self.sensors_summary: dict[str, Any] = {}
+        self.preview_catalog: dict[str, Any] = {}
+        self.viz_port: int | None = None
         self.state = "connecting"
         self.last_rx = _now()
         self.last_error = ""
@@ -196,6 +198,8 @@ class _PeerConn:
             "last_probe": dict(self.last_probe) if self.last_probe else None,
             "agents": list(self.agents),
             "sensors_summary": dict(self.sensors_summary),
+            "preview_catalog": dict(self.preview_catalog) if self.preview_catalog else None,
+            "viz_port": self.viz_port,
         }
 
 
@@ -208,10 +212,12 @@ class StationPeer:
         *,
         agents_summary_fn: Callable[[], list[dict[str, Any]]] | None = None,
         sensors_summary_fn: Callable[[], dict[str, Any]] | None = None,
+        preview_catalog_fn: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self.cfg = cfg
         self._agents_summary_fn = agents_summary_fn or (lambda: [])
         self._sensors_summary_fn = sensors_summary_fn or (lambda: {})
+        self._preview_catalog_fn = preview_catalog_fn
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._listen_sock: socket.socket | None = None
@@ -652,6 +658,21 @@ class StationPeer:
                     conn.station_id = str(msg.get("station_id") or "master")
                     conn.advertise_ip = str(msg.get("advertise_ip") or "")
                     conn.role = "master"
+                    try:
+                        vp = msg.get("viz_port")
+                        conn.viz_port = int(vp) if vp is not None else None
+                    except (TypeError, ValueError):
+                        conn.viz_port = None
+                    # Cache master's catalog pointer for「打开预览」button.
+                    cat_url = msg.get("catalog_url")
+                    if isinstance(cat_url, str) and cat_url.strip():
+                        conn.preview_catalog = {
+                            "catalog_url": cat_url.strip(),
+                            "station_id": conn.station_id,
+                            "role": "master",
+                            "viz_port": conn.viz_port,
+                            "advertise_ip": conn.advertise_ip,
+                        }
                     conn.state = "connected"
                     accepted = True
                     break
@@ -719,7 +740,9 @@ class StationPeer:
                 self._link_state = "listening"
         if conn is None:
             return {"ok": False, "error": f"slave not found: {sid}", **self.status()}
+        # Send then brief grace so slave can parse disconnect before TCP close.
         conn.send({"type": "disconnect", "protocol": PROTOCOL, "reason": "kicked"})
+        time.sleep(0.05)
         conn.close()
         return {"ok": True, **self.status()}
 
@@ -1150,6 +1173,21 @@ class StationPeer:
         conn.agents = list(hello.get("agents") or [])
         sens = hello.get("sensors_summary")
         conn.sensors_summary = dict(sens) if isinstance(sens, dict) else {}
+        try:
+            vp = hello.get("viz_port")
+            conn.viz_port = int(vp) if vp is not None else None
+        except (TypeError, ValueError):
+            conn.viz_port = None
+        from sensors_dcs.preview_catalog import normalize_hello_preview_catalog
+
+        conn.preview_catalog = normalize_hello_preview_catalog(
+            hello.get("preview_catalog"),
+            station_id=sid,
+            role="slave",
+            advertise_ip=conn.advertise_ip,
+            viz_port=conn.viz_port if conn.viz_port is not None else 7011,
+            agents=conn.agents,
+        )
         conn.state = "connected"
 
         local = station_summary(self.cfg)
@@ -1160,6 +1198,8 @@ class StationPeer:
                 "station_id": local["id"],
                 "advertise_ip": local.get("advertise_ip") or "",
                 "role": "master",
+                "viz_port": local.get("viz_port"),
+                "catalog_url": local.get("catalog_url"),
             }
         )
 
@@ -1256,7 +1296,18 @@ class StationPeer:
             for msg in conn.feed(data):
                 mtype = str(msg.get("type") or "")
                 if mtype == "disconnect":
-                    break
+                    # Master kick / master-side disconnect: clear UI state immediately.
+                    reason = str(msg.get("reason") or "disconnected").strip()
+                    with self._lock:
+                        if self._master_conn is conn:
+                            self._master_conn = None
+                            self._link_state = "idle"
+                            self._last_error = reason if reason != "disconnected" else ""
+                    try:
+                        conn.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return
                 if mtype == "heartbeat_ack":
                     continue
                 if mtype == "ping":
@@ -1439,15 +1490,65 @@ class StationPeer:
 
     def _hello_payload(self) -> dict[str, Any]:
         st = station_summary(self.cfg)
-        return {
+        payload: dict[str, Any] = {
             "type": "hello",
             "protocol": PROTOCOL,
             "role": st["role"],
             "station_id": st["id"],
             "advertise_ip": st.get("advertise_ip") or "",
             "peer_port": st.get("peer_port"),
+            "viz_port": st.get("viz_port"),
             "agents": self._agents_summary_fn(),
             "sensors_summary": self._sensors_summary_fn(),
             "t_wall": _now(),
             "t_mono": time.monotonic(),
         }
+        cat: dict[str, Any] | None = None
+        if self._preview_catalog_fn is not None:
+            try:
+                cat = self._preview_catalog_fn()
+            except Exception as e:  # noqa: BLE001
+                self._last_error = f"preview_catalog: {e}"
+                cat = None
+        if isinstance(cat, dict) and cat:
+            payload["preview_catalog"] = cat
+        return payload
+
+    def local_preview_catalog(self) -> dict[str, Any]:
+        """Build or fetch this station's preview catalog (never mutates DcsConfig)."""
+        from sensors_dcs.preview_catalog import build_local_preview_catalog
+
+        if self._preview_catalog_fn is not None:
+            try:
+                cat = self._preview_catalog_fn()
+                if isinstance(cat, dict) and cat:
+                    return cat
+            except Exception:  # noqa: BLE001
+                pass
+        st = station_summary(self.cfg)
+        return build_local_preview_catalog(
+            station_id=str(st["id"]),
+            role=str(st["role"]),
+            advertise_ip=str(st.get("advertise_ip") or ""),
+            viz_port=int(st.get("viz_port") or self.cfg.runtime.viz_port),
+            agent_summaries=self._agents_summary_fn(),
+        )
+
+    def merged_preview_catalog(self) -> dict[str, Any]:
+        """Master: local + connected slaves. Slave/single: local only."""
+        from sensors_dcs.preview_catalog import merge_preview_catalogs
+
+        local = self.local_preview_catalog()
+        st = station_summary(self.cfg)
+        slaves: list[dict[str, Any]] = []
+        with self._lock:
+            for c in self._slaves.values():
+                if c.state != "connected":
+                    continue
+                if c.preview_catalog:
+                    slaves.append(dict(c.preview_catalog))
+        return merge_preview_catalogs(
+            local,
+            slaves,
+            master_station_id=str(st["id"]),
+        )

@@ -25,6 +25,8 @@ realsense = ["pyrealsense2"]
 export = ["pandas>=2.0", "pyarrow>=14.0"]
 # Infer pose→joints (same as hik-sensors[kinematics]); desktop pins <1.12 with numpy 1.23.5
 kinematics = ["scipy>=1.10"]
+# Optional WebRTC preview agent (Phase B media); hooks work without this.
+webrtc = ["aiortc>=1.6"]
 dev = ["pytest>=7.0", "pandas>=2.0", "pyarrow>=14.0", "scipy>=1.10"]
 
 [project.scripts]

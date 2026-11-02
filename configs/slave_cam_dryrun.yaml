@@ -1,0 +1,66 @@
+# sensors-dcs 从站测试配置 — 仅相机 + WebRTC 预览（dry-run）
+# 配对设备清单：./sensors_slave_cam_dryrun.yaml
+# 主站用 configs/default.yaml（需带 station.role=master，见该文件 station 段）
+# 联调：主从同网；本机双进程可用 127.0.0.1（本文件 advertise/master 为示意局域网 IP）
+#
+# 启动示例（从站进程）：
+#   sensors-dcs run -c configs/slave_cam_dryrun.yaml
+# 或 desktop：SENSORS_DCS_CONFIG=... 指向本文件
+version: 1
+site: dcs-slave-cam
+
+station:
+  role: slave
+  id: cell-b-cam
+  # 本从站「对外宣告」地址（预览 catalog / 主站面板用；非 bind 地址）
+  advertise_ip: 192.168.10.20  # 从站本机 IP（示意；实机改成从站网卡地址）
+  peer_port: 7010
+  # 主站 Peer 地址（须与主站 station.advertise_ip + peer_port 一致）
+  master_ip: 192.168.10.10
+  master_port: 7010
+
+sensors_config: ./sensors_slave_cam_dryrun.yaml
+dry_run: true
+
+runtime:
+  control_host: "0.0.0.0"
+  control_port: 7010
+  viz_host: "0.0.0.0"
+  # 与主站同机双开时请改成 7013，避免和主站 7011 冲突
+  viz_port: 7011
+  viz_hz: 5
+  console_hz: 5
+
+record:
+  save_dir: C:\Users\user\Desktop\autodl-tmp\_dcs_data_slave
+  episode_index: 0
+
+# 故意不配 gello / arm / gripper / pi05：只测站间连接 + 相机预览目录
+agents:
+  - id: cam-left
+    type: realsense
+    sensor_id: rs-left
+    hz: 30
+    buffer_frames: 2
+  - id: cam-right
+    type: realsense
+    sensor_id: rs-right
+    hz: 30
+    buffer_frames: 2
+  - id: cam-middle
+    type: realsense
+    sensor_id: rs-middle
+    hz: 30
+    buffer_frames: 2
+
+  - id: webrtc-preview
+    type: webrtc_preview
+    hz: 2
+    buffer_frames: 8
+    camera_agent_ids: [cam-left, cam-right, cam-middle]
+    suppress_jpeg_ws: true
+    max_bitrate_kbps: 2500
+    preferred_codec: H264
+    backend: auto
+    telemetry_enabled: true
+    telemetry_hz: 15

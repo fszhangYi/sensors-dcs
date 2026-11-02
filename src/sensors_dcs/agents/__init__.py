@@ -11,6 +11,7 @@ from sensors_dcs.agents.gripper_read_agent import GripperReadAgent
 from sensors_dcs.agents.gripper_write_agent import GripperWriteAgent
 from sensors_dcs.agents.pi05_agent import Pi05ClientAgent
 from sensors_dcs.agents.realsense_agent import RealSenseAgent
+from sensors_dcs.agents.webrtc_preview_agent import WebrtcPreviewAgent
 from sensors_dcs.config import AgentConfig
 
 if TYPE_CHECKING:
@@ -46,6 +47,22 @@ def build_agent(
             hz=cfg.hz,
             buffer_frames=cfg.buffer_frames,
             gello_agent_id=cfg.gello_agent_id,
+        )
+    if cfg.type == "webrtc_preview":
+        return WebrtcPreviewAgent(
+            agent_id=cfg.id,
+            hz=cfg.hz,
+            buffer_frames=cfg.buffer_frames,
+            camera_agent_ids=list(cfg.camera_agent_ids or []),
+            suppress_jpeg_ws=bool(cfg.suppress_jpeg_ws),
+            max_bitrate_kbps=int(cfg.max_bitrate_kbps),
+            preferred_codec=str(cfg.preferred_codec or "H264"),
+            backend=str(cfg.backend or "auto"),
+            telemetry_enabled=bool(getattr(cfg, "telemetry_enabled", True)),
+            telemetry_hz=float(getattr(cfg, "telemetry_hz", 15.0) or 15.0),
+            telemetry_agent_ids=list(cfg.telemetry_agent_ids or [])
+            if getattr(cfg, "telemetry_agent_ids", None)
+            else [],
         )
     if sensor is None:
         raise ValueError(f"agent {cfg.id!r} type={cfg.type!r} requires a sensor")

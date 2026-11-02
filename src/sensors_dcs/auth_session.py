@@ -41,6 +41,9 @@ PUBLIC_API_PATHS = {
 PUBLIC_PATH_PREFIXES = (
     "/login",
     "/assets/",
+    # Cross-origin webrtc-preview app (see docs/preview-catalog-webrtc.md).
+    "/api/preview/",
+    "/api/webrtc/preview/",
 )
 
 PUBLIC_EXACT = {

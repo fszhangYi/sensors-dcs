@@ -35,6 +35,28 @@ class GripperGelloSyncBody(BaseModel):
     hz: float | None = None
 
 
+class WebrtcPreviewClientMetricsBody(BaseModel):
+    agent_id: str | None = None
+    preview_fps: float | None = None
+    glass_ms: float | None = None
+    control_rtt_ms: float | None = None
+    mode_label: str | None = None
+
+
+class WebrtcPreviewBenchmarkBody(BaseModel):
+    agent_id: str | None = None
+    duration_s: float = 30.0
+    mode_label: str | None = None
+
+
+class WebrtcPreviewOfferBody(BaseModel):
+    sdp: str
+    camera_agent_id: str | None = None
+    agent_id: str | None = None
+    telemetry_only: bool = False
+    telemetry_agent_id: str | None = None
+
+
 class DeltaPoseOffsetBody(BaseModel):
     enabled: bool | None = None
     offset: list[float] | None = None
@@ -555,6 +577,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       50% { opacity: 0.35; }
     }
     html[data-embed='1'] #btnSettings,
+    html[data-embed='1'] #btnOpenPreviewApp,
     html[data-embed='1'] #btnExit {
       display: none !important;
     }
@@ -1705,6 +1728,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .pp-row input.wide { flex: 1 1 16rem; min-width: 12rem; font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem; }
     .pp-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+    /* Author display:flex otherwise overrides HTML hidden on station actions. */
+    #homeStationActions[hidden] { display: none !important; }
     .pp-align-fig {
       margin: 0.35rem 0 0;
       padding: 0.55rem 0.65rem;
@@ -2622,7 +2647,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       min-height: 0;
       display: flex;
       flex-direction: column;
-      overflow: hidden;
+      /* WebRTC 条 + 2×2 相机：高度不够时本栏纵向滚动，避免挤扁格子 */
+      overflow-x: hidden;
+      overflow-y: auto;
     }
     .cam-section-head {
       display: flex;
@@ -2646,9 +2673,71 @@ PREVIEW_HTML = """<!DOCTYPE html>
       flex: 0 0 auto;
       margin-left: auto;
     }
+    .webrtc-bar {
+      flex: 0 0 auto;
+      margin: 0 0 0.45rem;
+      padding: 0.4rem 0.55rem;
+      border: 1px solid var(--border, #333);
+      border-radius: 6px;
+      background: var(--panel, transparent);
+    }
+    .webrtc-bar[hidden] { display: none !important; }
+    .webrtc-bar-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      align-items: center;
+    }
+    .webrtc-bar #webrtcCamSelect { min-width: 9rem; }
+    .webrtc-bar .webrtc-video-wrap {
+      margin-top: 0.4rem;
+      display: none;
+    }
+    .webrtc-bar.webrtc-live .webrtc-video-wrap { display: block; }
+    .webrtc-bar video {
+      width: 100%;
+      max-height: min(28vh, 200px);
+      background: #111;
+      object-fit: contain;
+      border-radius: 4px;
+    }
+    .webrtc-bar .webrtc-hooks-details {
+      margin-top: 0.3rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    .webrtc-bar .webrtc-hooks-details summary {
+      cursor: pointer;
+      user-select: none;
+      color: var(--accent, #7ec8e3);
+    }
+    .webrtc-bar .webrtc-hooks {
+      margin: 0.25rem 0 0;
+      max-height: 5.5rem;
+      overflow: auto;
+      font-size: 0.7rem;
+      color: var(--muted);
+      white-space: pre-wrap;
+    }
+    .cam-cell .cam-webrtc-hint {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 0.6rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      background: var(--input-bg, #111);
+      border-radius: 4px;
+      min-height: 4rem;
+    }
+    .cam-cell.cam-jpeg-suppressed img { display: none; }
+    .cam-cell.cam-jpeg-suppressed .cam-webrtc-hint { display: flex; }
     #cam-grid, #infCamGrid {
-      flex: 1;
-      min-height: 0;
+      /* 不随 WebRTC 条压缩到看不见；不够高时由 .cam-section 出滚动条 */
+      flex: 0 0 auto;
+      min-height: 28rem;
+      height: max(28rem, 42vh);
       display: grid;
       grid-template-columns: 1fr 1fr;
       grid-template-rows: 1fr 1fr;
@@ -2661,7 +2750,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       grid-template-rows: auto 1fr auto;
       gap: 0.3rem;
       min-width: 0;
-      min-height: 0;
+      min-height: 11rem;
       overflow: hidden;
     }
     .cam-cell .cam-title {
@@ -2715,6 +2804,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         </svg>
         <span class="settings-gear-label" data-i18n="common.settings">设置</span>
       </button>
+      <button type="button" class="ghost" id="btnOpenPreviewApp" data-i18n="header.open_preview">打开预览软件</button>
       <button type="button" class="danger" id="btnExit" data-i18n="header.exit">安全退出</button>
     </div>
   </header>
@@ -2864,6 +2954,25 @@ PREVIEW_HTML = """<!DOCTYPE html>
         <div class="cam-section-head">
           <h2 data-i18n="cam.title">Camera preview · 2×2</h2>
           <button type="button" class="ghost" id="rawBtn" data-i18n="collect.ws_raw_btn">WS 原始数据</button>
+        </div>
+        <div class="webrtc-bar" id="webrtcBar" hidden>
+          <div class="webrtc-bar-row">
+            <strong id="webrtcStatusLab">WebRTC</strong>
+            <span id="webrtcStatusTxt">—</span>
+            <select id="webrtcCamSelect" title="camera agent"></select>
+            <button type="button" class="ghost" id="webrtcConnect">连接预览</button>
+            <button type="button" class="ghost" id="webrtcDisconnect" disabled>断开</button>
+            <button type="button" class="ghost" id="webrtcOpenApp" data-i18n="header.open_preview">打开预览软件</button>
+            <button type="button" class="ghost" id="webrtcBenchStart">测分 30s</button>
+            <button type="button" class="ghost" id="webrtcBenchStop" disabled>结束测分</button>
+          </div>
+          <div class="webrtc-video-wrap" id="webrtcVideoWrap">
+            <video id="webrtcVideo" autoplay playsinline muted></video>
+          </div>
+          <details class="webrtc-hooks-details" id="webrtcHooksDetails">
+            <summary>钩子 / benchmark JSON</summary>
+            <pre class="webrtc-hooks" id="webrtcHooks">{}</pre>
+          </details>
         </div>
         <div id="cam-grid"></div>
       </section>
@@ -3821,7 +3930,205 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const infCamGridEl = document.getElementById('infCamGrid');
     const statusEl = document.getElementById('status');
     const infStatusEl = document.getElementById('infStatus');
+    const webrtcBar = document.getElementById('webrtcBar');
+    const webrtcStatusTxt = document.getElementById('webrtcStatusTxt');
+    const webrtcCamSelect = document.getElementById('webrtcCamSelect');
+    const webrtcVideo = document.getElementById('webrtcVideo');
+    const webrtcHooks = document.getElementById('webrtcHooks');
+    const webrtcConnectBtn = document.getElementById('webrtcConnect');
+    const webrtcDisconnectBtn = document.getElementById('webrtcDisconnect');
+    const webrtcBenchStartBtn = document.getElementById('webrtcBenchStart');
+    const webrtcBenchStopBtn = document.getElementById('webrtcBenchStop');
+    let webrtcPc = null;
+    let webrtcMetricsTimer = null;
+    let webrtcFrameCount = 0;
+    let webrtcFrameWindowT = 0;
+    let webrtcPreviewFps = null;
+    let webrtcControlRttMs = null;
     let exitRequested = false;
+
+    function setWebrtcStatus(text) {
+      if (webrtcStatusTxt) webrtcStatusTxt.textContent = text || '—';
+    }
+    function fillWebrtcCamSelect(ids) {
+      if (!webrtcCamSelect) return;
+      const list = Array.isArray(ids) ? ids.filter(Boolean) : [];
+      const cur = webrtcCamSelect.value;
+      webrtcCamSelect.innerHTML = '';
+      list.forEach((id) => {
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = id;
+        webrtcCamSelect.appendChild(opt);
+      });
+      if (cur && list.indexOf(cur) >= 0) webrtcCamSelect.value = cur;
+    }
+    function applyWebrtcUi(wp) {
+      if (!webrtcBar) return;
+      const on = !!(wp && wp.configured);
+      webrtcBar.hidden = !on;
+      if (!on) return;
+      fillWebrtcCamSelect(wp.camera_agent_ids || []);
+      const peers = Number(wp.peer_count) || 0;
+      const jpegLiveOff = !!(wp.suppress_jpeg_ws && peers > 0);
+      const bits = [
+        'backend=' + (wp.backend || '?'),
+        'peers=' + peers,
+        jpegLiveOff
+          ? 'jpeg@WS off(连上后)'
+          : (wp.suppress_jpeg_ws ? 'jpeg@WS 待命' : 'jpeg@WS on'),
+      ];
+      if (wp.source_fps != null) bits.push('src ' + Number(wp.source_fps).toFixed(1) + 'Hz');
+      if (wp.encode_fps != null) bits.push('enc ' + Number(wp.encode_fps).toFixed(1) + 'Hz');
+      if (wp.client_preview_fps != null) bits.push('cli ' + Number(wp.client_preview_fps).toFixed(1) + 'fps');
+      if (!webrtcPc) {
+        bits.push('点「连接预览」看画面');
+      }
+      setWebrtcStatus(bits.join(' · '));
+      if (webrtcHooks) {
+        try { webrtcHooks.textContent = JSON.stringify(wp, null, 2); } catch (e) {}
+      }
+    }
+    async function postWebrtc(path, body) {
+      const r = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(body || {}),
+      });
+      return r.json().catch(() => ({ ok: false, error: 'bad json HTTP ' + r.status }));
+    }
+    async function reportWebrtcClientMetrics() {
+      const t0 = performance.now();
+      try {
+        await fetch('/api/webrtc/preview/status', { credentials: 'same-origin' });
+        webrtcControlRttMs = performance.now() - t0;
+      } catch (e) {
+        webrtcControlRttMs = null;
+      }
+      await postWebrtc('/api/webrtc/preview/client-metrics', {
+        preview_fps: webrtcPreviewFps,
+        control_rtt_ms: webrtcControlRttMs,
+        mode_label: webrtcPc ? 'webrtc' : 'jpeg',
+      });
+    }
+    function startWebrtcMetricsLoop() {
+      stopWebrtcMetricsLoop();
+      webrtcFrameCount = 0;
+      webrtcFrameWindowT = performance.now();
+      webrtcMetricsTimer = setInterval(() => { reportWebrtcClientMetrics(); }, 2000);
+      if (webrtcVideo && typeof webrtcVideo.requestVideoFrameCallback === 'function') {
+        const onFrame = () => {
+          webrtcFrameCount += 1;
+          const now = performance.now();
+          const dt = (now - webrtcFrameWindowT) / 1000;
+          if (dt >= 1) {
+            webrtcPreviewFps = webrtcFrameCount / dt;
+            webrtcFrameCount = 0;
+            webrtcFrameWindowT = now;
+          }
+          if (webrtcPc) webrtcVideo.requestVideoFrameCallback(onFrame);
+        };
+        webrtcVideo.requestVideoFrameCallback(onFrame);
+      }
+    }
+    function stopWebrtcMetricsLoop() {
+      if (webrtcMetricsTimer) {
+        clearInterval(webrtcMetricsTimer);
+        webrtcMetricsTimer = null;
+      }
+    }
+    async function webrtcDisconnect() {
+      stopWebrtcMetricsLoop();
+      if (webrtcPc) {
+        try { webrtcPc.close(); } catch (e) {}
+        webrtcPc = null;
+      }
+      if (webrtcVideo) webrtcVideo.srcObject = null;
+      if (webrtcBar) webrtcBar.classList.remove('webrtc-live');
+      if (webrtcConnectBtn) webrtcConnectBtn.disabled = false;
+      if (webrtcDisconnectBtn) webrtcDisconnectBtn.disabled = true;
+      setWebrtcStatus('disconnected · 点「连接预览」');
+    }
+    async function webrtcConnect() {
+      if (!window.RTCPeerConnection) {
+        setWebrtcStatus('browser has no RTCPeerConnection');
+        return;
+      }
+      await webrtcDisconnect();
+      const cam = webrtcCamSelect ? webrtcCamSelect.value : '';
+      const pc = new RTCPeerConnection({ iceServers: [] });
+      webrtcPc = pc;
+      pc.addTransceiver('video', { direction: 'recvonly' });
+      pc.ontrack = (ev) => {
+        if (webrtcVideo && ev.streams && ev.streams[0]) {
+          webrtcVideo.srcObject = ev.streams[0];
+        }
+      };
+      pc.onconnectionstatechange = () => {
+        setWebrtcStatus('pc=' + pc.connectionState);
+        if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+          webrtcDisconnect();
+        }
+      };
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        const ans = await postWebrtc('/api/webrtc/preview/offer', {
+          sdp: offer.sdp,
+          camera_agent_id: cam || null,
+        });
+        if (!ans.ok) {
+          setWebrtcStatus('offer fail: ' + (ans.error || JSON.stringify(ans)));
+          await webrtcDisconnect();
+          return;
+        }
+        await pc.setRemoteDescription({ type: ans.type || 'answer', sdp: ans.sdp });
+        if (webrtcBar) webrtcBar.classList.add('webrtc-live');
+        if (webrtcConnectBtn) webrtcConnectBtn.disabled = true;
+        if (webrtcDisconnectBtn) webrtcDisconnectBtn.disabled = false;
+        startWebrtcMetricsLoop();
+        setWebrtcStatus('connected · ' + (ans.camera_agent_id || cam) + ' · 画面在上方视频区');
+      } catch (e) {
+        setWebrtcStatus('connect error: ' + e);
+        await webrtcDisconnect();
+      }
+    }
+    if (webrtcConnectBtn) webrtcConnectBtn.addEventListener('click', () => { webrtcConnect(); });
+    if (webrtcDisconnectBtn) webrtcDisconnectBtn.addEventListener('click', () => { webrtcDisconnect(); });
+    async function openPreviewApp() {
+      try {
+        const r = await fetch('/api/preview/open-url', { credentials: 'same-origin', cache: 'no-store' });
+        const j = await r.json();
+        if (!j || !j.ok || !j.open_url) {
+          alert(t('header.open_preview_fail', { error: (j && j.error) || ('HTTP ' + r.status) }));
+          return;
+        }
+        window.open(String(j.open_url), '_blank', 'noopener,noreferrer');
+      } catch (e) {
+        alert(t('header.open_preview_fail', { error: String(e) }));
+      }
+    }
+    const btnOpenPreviewApp = document.getElementById('btnOpenPreviewApp');
+    const webrtcOpenAppBtn = document.getElementById('webrtcOpenApp');
+    if (btnOpenPreviewApp) btnOpenPreviewApp.addEventListener('click', () => { openPreviewApp(); });
+    if (webrtcOpenAppBtn) webrtcOpenAppBtn.addEventListener('click', () => { openPreviewApp(); });
+    if (webrtcBenchStartBtn) webrtcBenchStartBtn.addEventListener('click', async () => {
+      const j = await postWebrtc('/api/webrtc/preview/benchmark/start', {
+        duration_s: 30,
+        mode_label: webrtcPc ? 'webrtc' : 'jpeg',
+      });
+      if (webrtcBenchStopBtn) webrtcBenchStopBtn.disabled = !j.ok;
+      setWebrtcStatus(j.ok ? 'benchmark running' : ('bench: ' + (j.error || 'fail')));
+    });
+    if (webrtcBenchStopBtn) webrtcBenchStopBtn.addEventListener('click', async () => {
+      const j = await postWebrtc('/api/webrtc/preview/benchmark/stop', {});
+      if (webrtcBenchStopBtn) webrtcBenchStopBtn.disabled = true;
+      if (webrtcHooks && j.benchmark) {
+        try { webrtcHooks.textContent = JSON.stringify(j.benchmark, null, 2); } catch (e) {}
+      }
+      setWebrtcStatus(j.ok ? 'benchmark saved (see JSON)' : ('bench stop: ' + (j.error || 'fail')));
+    });
     function setConnStatus(text, cls) {
       [statusEl, infStatusEl].forEach((el) => {
         if (!el) return;
@@ -4071,6 +4378,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
             '<strong class="k-hz">— Hz</strong>' +
           '</div>' +
           '<img alt="' + slot.label + '" />' +
+          '<div class="cam-webrtc-hint">WebRTC 已接管预览<br/>点上方「连接预览」看画面</div>' +
           '<div class="cam-sub k-sub">empty</div>';
         gridEl.appendChild(cell);
         cells[slot.key] = cell;
@@ -8919,6 +9227,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (portEl) portEl.textContent = '—';
         if (peerStateEl) peerStateEl.textContent = '—';
         if (actions) actions.hidden = true;
+        const btnConn0 = document.getElementById('btnStationConnect');
+        const btnDisc0 = document.getElementById('btnStationDisconnect');
+        if (btnConn0) btnConn0.hidden = true;
+        if (btnDisc0) btnDisc0.hidden = true;
         if (slavesEl) slavesEl.hidden = true;
         if (masterRow) masterRow.hidden = true;
         return;
@@ -8956,10 +9268,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
         // Keep connect failure detail visible (was wiped by 2s refresh showing only「错误」).
         peerStateEl.textContent = (link === 'error' && peerErr) ? (base + ' — ' + peerErr) : base;
       }
-      if (actions) actions.hidden = role !== 'slave';
+      // Connect/disconnect are slave-only; master must not show「连接主站」.
+      const isSlave = role === 'slave' || !!(st && st.is_slave);
+      if (actions) {
+        actions.hidden = !isSlave;
+      }
+      const btnConn = document.getElementById('btnStationConnect');
+      const btnDisc = document.getElementById('btnStationDisconnect');
+      if (btnConn) btnConn.hidden = !isSlave;
+      if (btnDisc) btnDisc.hidden = !isSlave;
       if (slavesEl) {
         const list = Array.isArray(peer.slaves) ? peer.slaves : [];
-        if (role === 'master') {
+        if (!isSlave) {
           slavesEl.hidden = false;
           renderStationSlaves(slavesEl, list);
         } else {
@@ -12283,13 +12603,21 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const hzEl = cell.querySelector('.k-hz');
         if (hzEl) hzEl.textContent = hzText;
         const img = cell.querySelector('img');
-        if (p.jpeg_b64_preview) img.src = 'data:image/jpeg;base64,' + p.jpeg_b64_preview;
-        else if (p.jpeg_b64) img.src = 'data:image/jpeg;base64,' + p.jpeg_b64;
+        const suppressed = !!p.jpeg_suppressed_for_webrtc;
+        cell.classList.toggle('cam-jpeg-suppressed', suppressed);
+        if (suppressed) {
+          if (img) img.removeAttribute('src');
+        } else if (p.jpeg_b64_preview) {
+          img.src = 'data:image/jpeg;base64,' + p.jpeg_b64_preview;
+        } else if (p.jpeg_b64) {
+          img.src = 'data:image/jpeg;base64,' + p.jpeg_b64;
+        }
         const sn = p.serial || '—';
         const dry = p.dry_run ? ' dry' : '';
         const fps = p.fps != null ? (' · cfg ' + Number(p.fps).toFixed(0) + 'fps') : '';
+        const modeHint = suppressed ? ' · webrtc' : '';
         cell.querySelector('.k-sub').textContent =
-          'seq ' + frame.seq + ' · sn ' + sn + fps + dry;
+          'seq ' + frame.seq + ' · sn ' + sn + fps + dry + modeHint;
       });
     }
 
@@ -12338,6 +12666,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
       const frames = msg.frames || [];
       const usedSlots = new Set();
+      if (msg.webrtc_preview) {
+        window.__webrtcPreview = msg.webrtc_preview;
+        applyWebrtcUi(msg.webrtc_preview);
+      }
       if (msg.gripper_gello_sync) {
         window.__gripGelloSync = msg.gripper_gello_sync;
       }
@@ -12620,6 +12952,14 @@ def create_viz_app(
     station_peer_probe: Callable[..., dict[str, Any]] | None = None,
     record_start_fn: Callable[..., dict[str, Any]] | None = None,
     record_stop_fn: Callable[..., dict[str, Any]] | None = None,
+    webrtc_preview_status: Callable[[], dict[str, Any]] | None = None,
+    webrtc_preview_client_metrics: Callable[..., dict[str, Any]] | None = None,
+    webrtc_preview_benchmark_start: Callable[..., dict[str, Any]] | None = None,
+    webrtc_preview_benchmark_stop: Callable[..., dict[str, Any]] | None = None,
+    webrtc_preview_offer: Callable[..., dict[str, Any]] | None = None,
+    preview_catalog_fn: Callable[[], dict[str, Any]] | None = None,
+    preview_catalog_local_fn: Callable[[], dict[str, Any]] | None = None,
+    preview_open_url_fn: Callable[[], dict[str, Any]] | None = None,
 ) -> FastAPI:
     from sensors_dcs.auth_session import (
         auth_enabled,
@@ -12640,6 +12980,19 @@ def create_viz_app(
 
     init_auth()
     app = FastAPI(title="sensors-dcs viz", version="0.1.0")
+    try:
+        from fastapi.middleware.cors import CORSMiddleware
+
+        # webrtc-preview app (other origin) fetches catalog + posts SDP offers.
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["*"],
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
     def _current_boot_error() -> str | None:
         """Static boot_error or mutable boot_box['error'] (agent open may fail after UI is up)."""
@@ -13397,6 +13750,137 @@ def create_viz_app(
             joint_index=int(req.joint_index),
             hz=req.hz,
         )
+
+    @app.get("/api/webrtc/preview/status")
+    async def webrtc_preview_status_get() -> dict[str, Any]:
+        if webrtc_preview_status is None:
+            return {
+                "ok": False,
+                "configured": False,
+                "error": "webrtc_preview unavailable",
+            }
+        return await asyncio.to_thread(webrtc_preview_status)
+
+    @app.post("/api/webrtc/preview/client-metrics")
+    async def webrtc_preview_client_metrics_post(
+        req: WebrtcPreviewClientMetricsBody,
+    ) -> dict[str, Any]:
+        if webrtc_preview_client_metrics is None:
+            return {"ok": False, "error": "webrtc_preview unavailable"}
+        return await asyncio.to_thread(
+            webrtc_preview_client_metrics,
+            preview_fps=req.preview_fps,
+            glass_ms=req.glass_ms,
+            control_rtt_ms=req.control_rtt_ms,
+            mode_label=req.mode_label,
+            agent_id=req.agent_id,
+        )
+
+    @app.post("/api/webrtc/preview/benchmark/start")
+    async def webrtc_preview_benchmark_start_post(
+        req: WebrtcPreviewBenchmarkBody,
+    ) -> dict[str, Any]:
+        if webrtc_preview_benchmark_start is None:
+            return {"ok": False, "error": "webrtc_preview unavailable"}
+        return await asyncio.to_thread(
+            webrtc_preview_benchmark_start,
+            duration_s=float(req.duration_s),
+            mode_label=req.mode_label,
+            agent_id=req.agent_id,
+        )
+
+    @app.post("/api/webrtc/preview/benchmark/stop")
+    async def webrtc_preview_benchmark_stop_post(
+        req: WebrtcPreviewBenchmarkBody | None = None,
+    ) -> dict[str, Any]:
+        if webrtc_preview_benchmark_stop is None:
+            return {"ok": False, "error": "webrtc_preview unavailable"}
+        aid = req.agent_id if req is not None else None
+        return await asyncio.to_thread(webrtc_preview_benchmark_stop, agent_id=aid)
+
+    @app.post("/api/webrtc/preview/offer")
+    async def webrtc_preview_offer_post(req: WebrtcPreviewOfferBody) -> dict[str, Any]:
+        if webrtc_preview_offer is None:
+            return {"ok": False, "error": "webrtc_preview unavailable"}
+        out = webrtc_preview_offer(
+            sdp=str(req.sdp or ""),
+            camera_agent_id=req.camera_agent_id,
+            agent_id=req.agent_id,
+            telemetry_only=bool(getattr(req, "telemetry_only", False)),
+            telemetry_agent_id=getattr(req, "telemetry_agent_id", None),
+        )
+        if asyncio.iscoroutine(out) or asyncio.isfuture(out):
+            return await out  # type: ignore[misc]
+        return out  # type: ignore[return-value]
+
+    def _preview_request_origin(request: Request) -> str:
+        # Prefer proxy headers if present; else the URL the client actually hit.
+        proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "http").split(",")[0].strip()
+        host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
+        if host:
+            return f"{proto}://{host}"
+        return str(request.base_url).rstrip("/")
+
+    def _local_station_id() -> str:
+        try:
+            st = (status_fn() or {}).get("station") or {}
+            return str(st.get("id") or "").strip()
+        except Exception:  # noqa: BLE001
+            return ""
+
+    @app.get("/api/preview/catalog")
+    async def preview_catalog_get(request: Request) -> dict[str, Any]:
+        """Merged preview catalog on master; local-only on slave (see plan)."""
+        from sensors_dcs.preview_catalog import merge_preview_catalogs, rewrite_local_station_origin
+
+        if preview_catalog_fn is None and preview_catalog_local_fn is None:
+            return {
+                "ok": False,
+                "error": "preview catalog unavailable",
+                "schema": "sensors-dcs.preview_catalog.merged.v1",
+                "stations": [],
+                "streams": [],
+            }
+        origin = _preview_request_origin(request)
+        local_id = _local_station_id()
+        if _station_is_slave():
+            # Slave returns local catalog wrapped as merged for uniform clients.
+            local_fn = preview_catalog_local_fn or preview_catalog_fn
+            local = await asyncio.to_thread(local_fn)
+            out = merge_preview_catalogs(local, [], master_station_id=str(local.get("station_id") or ""))
+            out = rewrite_local_station_origin(out, local_station_id=local_id or str(local.get("station_id") or ""), origin=origin)
+            out["ok"] = True
+            out["scope"] = "local_slave"
+            out["hint"] = "Use master's /api/preview/catalog for multi-station streams"
+            return out
+        merged = await asyncio.to_thread(preview_catalog_fn or preview_catalog_local_fn)
+        if isinstance(merged, dict):
+            merged = rewrite_local_station_origin(
+                dict(merged),
+                local_station_id=local_id or str(merged.get("master_station_id") or ""),
+                origin=origin,
+            )
+            merged["ok"] = True
+            merged["scope"] = "merged"
+            return merged
+        return {"ok": False, "error": "invalid catalog", "stations": [], "streams": []}
+
+    @app.get("/api/preview/streams")
+    async def preview_streams_get(request: Request) -> dict[str, Any]:
+        cat = await preview_catalog_get(request)
+        return {
+            "ok": bool(cat.get("ok", True)),
+            "rev": cat.get("rev"),
+            "streams": list(cat.get("streams") or []),
+            "scope": cat.get("scope"),
+            "error": cat.get("error"),
+        }
+
+    @app.get("/api/preview/open-url")
+    async def preview_open_url_get() -> dict[str, Any]:
+        if preview_open_url_fn is None:
+            return {"ok": False, "error": "preview open-url unavailable"}
+        return await asyncio.to_thread(preview_open_url_fn)
 
     @app.post("/api/arm/command")
     async def arm_cmd(req: ArmCommandBody) -> dict[str, Any]:

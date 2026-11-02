@@ -16,6 +16,7 @@ from sensors_dcs.agents import build_agent
 from sensors_dcs.agents.base import BaseAgent
 from sensors_dcs.agents.gello_reinforce_agent import GelloReinforceAgent
 from sensors_dcs.agents.pi05_agent import Pi05ClientAgent
+from sensors_dcs.agents.webrtc_preview_agent import WebrtcPreviewAgent
 from sensors_dcs.config import (
     DcsConfig,
     config_summary,
@@ -88,7 +89,7 @@ class Orchestrator:
         self.agents: dict[str, BaseAgent] = {}
         known = self.manager.ids()
         for acfg in cfg.agents:
-            if acfg.type in ("pi05", "gello_reinforce"):
+            if acfg.type in ("pi05", "gello_reinforce", "webrtc_preview"):
                 self.agents[acfg.id] = build_agent(acfg)
                 continue
             try:
@@ -108,6 +109,8 @@ class Orchestrator:
             if isinstance(agent, GelloReinforceAgent):
                 agent.bind_peers(self.agents)
                 agent.bind_orchestrator(note_sample=self.note_gello_reinforce_sample)
+            if isinstance(agent, WebrtcPreviewAgent):
+                agent.bind_peers(self.agents)
         self.hub = VizHub()
         self.recorder = RecordController(
             cfg.record,
@@ -120,6 +123,7 @@ class Orchestrator:
             cfg,
             agents_summary_fn=self._peer_agents_summary,
             sensors_summary_fn=self._peer_sensors_summary,
+            preview_catalog_fn=self.build_preview_catalog_local,
         )
         self.peer.bind_record_handlers(
             on_prepare=self._peer_on_prepare,
@@ -299,6 +303,67 @@ class Orchestrator:
             "site": getattr(self.manager.bundle, "site", None),
             "dry_run": bool(getattr(self.manager.ctx, "dry_run", False)),
             "device_ids": ids,
+        }
+
+    def build_preview_catalog_local(self) -> dict[str, Any]:
+        """Preview directory for this station only (never applied as DcsConfig)."""
+        from sensors_dcs.config import station_summary
+        from sensors_dcs.preview_catalog import build_local_preview_catalog
+
+        st = station_summary(self.cfg)
+        return build_local_preview_catalog(
+            station_id=str(st["id"]),
+            role=str(st["role"]),
+            advertise_ip=str(st.get("advertise_ip") or ""),
+            viz_port=int(st.get("viz_port") or self.cfg.runtime.viz_port),
+            agents=self.agents,
+            agent_summaries=self._peer_agents_summary(),
+        )
+
+    def preview_catalog_merged(self) -> dict[str, Any]:
+        return self.peer.merged_preview_catalog()
+
+    def preview_open_url(self) -> dict[str, Any]:
+        """URL hint for「打开预览软件」— points at webrtc-preview with master catalog."""
+        import os
+
+        from sensors_dcs.config import station_summary
+
+        st = station_summary(self.cfg)
+        preview_base = (
+            os.environ.get("WEBRTC_PREVIEW_URL")
+            or os.environ.get("SENSORS_DCS_PREVIEW_APP_URL")
+            or "http://127.0.0.1:7050/"
+        ).rstrip("/") + "/"
+        catalog = None
+        if st.get("is_slave"):
+            with self.peer._lock:  # noqa: SLF001
+                mc = self.peer._master_conn  # noqa: SLF001
+            if mc and isinstance(mc.preview_catalog, dict):
+                catalog = mc.preview_catalog.get("catalog_url")
+            if not catalog:
+                mip = (st.get("master_ip") or "").strip()
+                # Prefer master's viz_port from hello_ack; else assume same as local.
+                mport = None
+                if mc is not None and mc.viz_port:
+                    mport = int(mc.viz_port)
+                if not mport:
+                    mport = int(st.get("viz_port") or self.cfg.runtime.viz_port)
+                if mip:
+                    catalog = f"http://{mip}:{mport}/api/preview/catalog"
+        else:
+            catalog = st.get("catalog_url")
+            if not catalog:
+                # Local loopback fallback for single-machine / unset advertise.
+                catalog = f"http://127.0.0.1:{int(st.get('viz_port') or self.cfg.runtime.viz_port)}/api/preview/catalog"
+        from urllib.parse import quote
+
+        open_url = f"{preview_base}?catalog={quote(str(catalog), safe='')}"
+        return {
+            "ok": True,
+            "preview_app_base": preview_base,
+            "catalog_url": catalog,
+            "open_url": open_url,
         }
 
     def _peer_on_prepare(
@@ -1345,13 +1410,110 @@ class Orchestrator:
         threading.Thread(target=_cleanup, name="sensors-dcs-shutdown", daemon=True).start()
         return {"ok": True, "message": "shutdown requested"}
 
+    def _webrtc_preview_agents(self) -> list[WebrtcPreviewAgent]:
+        return [a for a in self.agents.values() if isinstance(a, WebrtcPreviewAgent)]
+
+    def _jpeg_suppress_agent_ids(self) -> set[str]:
+        out: set[str] = set()
+        for a in self._webrtc_preview_agents():
+            out |= a.camera_ids_for_suppress()
+        return out
+
+    def webrtc_preview_status(self) -> dict[str, Any]:
+        agents = self._webrtc_preview_agents()
+        if not agents:
+            return {
+                "ok": False,
+                "configured": False,
+                "error": "webrtc_preview agent not configured",
+            }
+        # One agent is the product shape; if several, expose primary + list.
+        primary = agents[0]
+        return {
+            "ok": True,
+            "configured": True,
+            "agent_id": primary.agent_id,
+            "agents": [a.status_payload() for a in agents],
+            **primary.status_payload(),
+        }
+
+    def webrtc_preview_client_metrics(
+        self,
+        *,
+        preview_fps: float | None = None,
+        glass_ms: float | None = None,
+        control_rtt_ms: float | None = None,
+        mode_label: str | None = None,
+        agent_id: str | None = None,
+    ) -> dict[str, Any]:
+        ag = self._webrtc_preview_pick(agent_id)
+        if ag is None:
+            return {"ok": False, "error": "webrtc_preview agent not configured"}
+        return ag.note_client_metrics(
+            preview_fps=preview_fps,
+            glass_ms=glass_ms,
+            control_rtt_ms=control_rtt_ms,
+            mode_label=mode_label,
+        )
+
+    def webrtc_preview_benchmark_start(
+        self,
+        *,
+        duration_s: float = 30.0,
+        mode_label: str | None = None,
+        agent_id: str | None = None,
+    ) -> dict[str, Any]:
+        ag = self._webrtc_preview_pick(agent_id)
+        if ag is None:
+            return {"ok": False, "error": "webrtc_preview agent not configured"}
+        return ag.benchmark_start(duration_s=duration_s, mode_label=mode_label)
+
+    def webrtc_preview_benchmark_stop(
+        self, *, agent_id: str | None = None
+    ) -> dict[str, Any]:
+        ag = self._webrtc_preview_pick(agent_id)
+        if ag is None:
+            return {"ok": False, "error": "webrtc_preview agent not configured"}
+        return ag.benchmark_stop()
+
+    async def webrtc_preview_offer(
+        self,
+        *,
+        sdp: str,
+        camera_agent_id: str | None = None,
+        agent_id: str | None = None,
+        telemetry_only: bool = False,
+        telemetry_agent_id: str | None = None,
+    ) -> dict[str, Any]:
+        ag = self._webrtc_preview_pick(agent_id)
+        if ag is None:
+            return {"ok": False, "error": "webrtc_preview agent not configured"}
+        return await ag.handle_offer(
+            sdp=sdp,
+            camera_agent_id=camera_agent_id,
+            telemetry_only=bool(telemetry_only),
+            telemetry_agent_id=telemetry_agent_id,
+        )
+
+    def _webrtc_preview_pick(
+        self, agent_id: str | None
+    ) -> WebrtcPreviewAgent | None:
+        if agent_id:
+            a = self.agents.get(agent_id)
+            return a if isinstance(a, WebrtcPreviewAgent) else None
+        agents = self._webrtc_preview_agents()
+        return agents[0] if agents else None
+
     def _viz_payload(self) -> dict[str, Any]:
         frames = []
         agent_rates: dict[str, Any] = {}
+        suppress = self._jpeg_suppress_agent_ids()
         for aid, agent in self.agents.items():
             fr = agent.ring.latest.get()
             if fr is not None:
-                frames.append(self._frame_for_viz(fr))
+                frames.append(
+                    self._frame_for_viz(fr, strip_jpeg=aid in suppress)
+                )
             st = agent.stats()
             agent_rates[aid] = {
                 "hz_target": agent.hz,
@@ -1377,18 +1539,21 @@ class Orchestrator:
             "arm_abs_ramp": self.arm_abs_ramp_status(),
             "arm_home": self.arm_home_status(),
             "delta_pose_offset": self.delta_pose_offset_status(),
+            "webrtc_preview": self.webrtc_preview_status(),
         }
 
     @staticmethod
-    def _frame_for_viz(fr: Frame) -> dict[str, Any]:
+    def _frame_for_viz(fr: Frame, *, strip_jpeg: bool = False) -> dict[str, Any]:
         """Serialize frame for WebSocket: keep preview JPEG, drop full-res disk JPEG."""
         data = fr.to_dict()
         payload = dict(data.get("payload") or {})
         preview = payload.get("jpeg_b64_preview") or payload.get("jpeg_b64")
         payload.pop("jpeg_b64", None)
         payload.pop("jpeg_b64_preview", None)
-        if preview is not None:
+        if preview is not None and not strip_jpeg:
             payload["jpeg_b64_preview"] = preview
+        if strip_jpeg:
+            payload["jpeg_suppressed_for_webrtc"] = True
         payload.pop("depth_png_b64", None)
         data["payload"] = payload
         return data
@@ -4102,6 +4267,14 @@ class Orchestrator:
             station_peer_probe=self.peer.probe_slave,
             record_start_fn=self.coordinated_record_start,
             record_stop_fn=self.coordinated_record_stop,
+            webrtc_preview_status=self.webrtc_preview_status,
+            webrtc_preview_client_metrics=self.webrtc_preview_client_metrics,
+            webrtc_preview_benchmark_start=self.webrtc_preview_benchmark_start,
+            webrtc_preview_benchmark_stop=self.webrtc_preview_benchmark_stop,
+            webrtc_preview_offer=self.webrtc_preview_offer,
+            preview_catalog_fn=self.preview_catalog_merged,
+            preview_catalog_local_fn=self.build_preview_catalog_local,
+            preview_open_url_fn=self.preview_open_url,
         )
         self._server = uvicorn.Server(
             uvicorn.Config(

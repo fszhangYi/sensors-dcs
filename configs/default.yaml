@@ -8,14 +8,15 @@ version: 1
 site: dcs-full-cell
 
 # 多机主从（可选；整段省略 ≡ 单机主站）。见 docs/station-multi-machine.md
-# station:
-#   role: master                 # master | slave
-#   id: cell-a
-#   advertise_ip: 192.168.1.10   # 前端只读回显；从站连主用
-#   peer_port: 7010              # 默认 = runtime.control_port
-#   # slave 时必填：
-#   # master_ip: 192.168.1.10
-#   # master_port: 7010
+# 与 configs/slave_cam_dryrun.yaml 联调时启用下面主站身份（示意 IP，按实机改）
+station:
+  role: master
+  id: cell-a
+  advertise_ip: 192.168.10.10  # 本机局域网 IP；从站 master_ip / 预览 catalog 用
+  peer_port: 7010              # 默认 = runtime.control_port
+  # slave 时才需要：
+  # master_ip: 192.168.10.10
+  # master_port: 7010
 
 sensors_config: ./sensors_default.yaml
 # true = 合成假数据；false = 真机（串口 + RealSense serial）
@@ -170,4 +171,20 @@ agents:
     hz: 20
     buffer_frames: 8
     gello_agent_id: gello
+
+  # WebRTC 预览面（可选）：配了就启用 Collect 页 WebRTC 条。不进 episode 落盘。
+  # docs/webrtc-preview-agent.md ；依赖: pip install -e ".[webrtc]"
+  # Cell C / G26562 实机相机（勿用旧 cam-left/right/middle）
+  - id: webrtc-preview
+    type: webrtc_preview
+    hz: 2
+    buffer_frames: 8
+    # dry_run 默认三路；真机 Cell C 可改成 cam-g26562-*
+    camera_agent_ids: [cam-left, cam-right, cam-middle]
+    suppress_jpeg_ws: true
+    max_bitrate_kbps: 2500
+    preferred_codec: H264
+    backend: auto
+    telemetry_enabled: true
+    telemetry_hz: 15
 

@@ -1,0 +1,22 @@
+# Snippet: add under `agents:` in g26562.yaml / camera.yaml to enable WebRTC preview plane.
+# Full story + A/B hooks: docs/webrtc-preview-agent.md
+#
+# - id: webrtc-preview
+#   type: webrtc_preview
+#   hz: 2
+#   buffer_frames: 8
+#   # empty → all realsense agents; or list concrete ids:
+#   # Cell C: cam-g26562-left/right/wrist（勿写旧 cam-left/right/middle）
+#   camera_agent_ids: [cam-g26562-wrist]
+#   suppress_jpeg_ws: true
+#   max_bitrate_kbps: 2500
+#   preferred_codec: H264
+#   backend: auto   # auto | stub | aiortc  (media: pip install -e ".[webrtc]")
+#   # Phase E — best-effort DataChannel telemetry (not recorded)
+#   telemetry_enabled: true
+#   telemetry_hz: 15
+#   # telemetry_agent_ids: []   # empty = all peers except webrtc agent itself
+#
+# Collect UI: WebRTC bar under camera grid (connect / bench 30s).
+# Preview app: DataChannel label sensors-preview → HUD.
+# Dev log: docs/webrtc-preview-agent.md

@@ -582,6 +582,9 @@ class RecordController:
                 if fr.error and fr.kind not in ("gripper_write", "arm_write"):
                     continue
                 # Shared YAML: Collect skips pi05; Infer skips gello.
+                # webrtc_preview is media-plane only — never episode hot path.
+                if fr.kind == "webrtc_preview":
+                    continue
                 if mode == "collect" and fr.kind == "pi05":
                     continue
                 if mode == "infer" and fr.kind == "gello":

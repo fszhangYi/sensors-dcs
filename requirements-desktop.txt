@@ -11,3 +11,5 @@ pyarrow>=14.0
 httptools>=0.6
 websockets>=12.0
 watchfiles>=0.21
+# WebRTC preview agent (pyproject [webrtc]); must be frozen into desktop onedir
+aiortc>=1.6

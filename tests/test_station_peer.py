@@ -106,6 +106,12 @@ def test_master_kick_slave(peer_pair) -> None:
     kick = master.kick_slave("slave-t")
     assert kick.get("ok") is True
     assert master.has_active_slaves() is False
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        if slave.status().get("link_state") == "idle":
+            break
+        time.sleep(0.05)
+    assert slave.status().get("link_state") == "idle"
 
 
 def test_slave_rejects_inbound() -> None:

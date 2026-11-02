@@ -66,7 +66,7 @@ RealSense / 驱动 → agent ring（可含全分辨率 jpeg_b64 写盘）
 | **P0** | **DCS / sensors-view 浏览器预览：JPEG@WS → WebRTC 视频轨** | 同带宽下更高预览 FPS、更低 glass-to-glass；控制 JSON 与媒体解耦，减轻 WS 卡顿 | ★★★★★ 完整「媒体面/控制面分离」叙事 |
 | **P1** | **多机：从站编码 → 主站/办公网浏览器订阅（可选 SFU）** | 主站不靠「每个从站开一整页高带宽 JPEG」；演示/监工可行；仍不碰落盘热路径 | ★★★★☆ 分布式工位 + 实时汇聚 |
 | **P2** | **远程遥操 overlay（人在办公网，臂在实验室）** | 视觉闭环延迟下降后，人手遥操更稳；**指令仍走现有 teleop API / latest-wins** | ★★★★☆ 但需安全闸（Arm/急停/只读预览默认） |
-| **P3** | DataChannel 传低频 telemetry 或「预览专用」事件 | 次要；机器人命令仍建议可靠有序通道 | ★★☆☆☆ 易写成空话，慎作为主叙事 |
+| **P3** | DataChannel 传低频 **预览** telemetry（关节/夹爪等 HUD） | 已落地为 best-effort `sensors-preview` DC；**命令/急停/barrier 仍走 WS/Peer** | ★★★☆☆ 预览面补齐，勿写成控制面 |
 | **不做** | 用 WebRTC 替换 episode 录制 / parquet / filter | 无益，增加复杂度 | 简历写了反而减分 |
 | **不做** | 用 WebRTC「加速」IK、servoj、对齐 Hz | 风马牛不相及 | 禁止 |
 
@@ -177,10 +177,13 @@ WebRTC 的增益是：**人眼反馈更快** → 在写频已密的前提下减�
 | A. 测量基线 | 现网 JPEG@WS glass-to-glass、Mbps、`viz_hz` | 有数字，可写进对比表 |
 | B. 单路 PoC | DCS 单相机 WebRTC + 旧预览开关并存 | 功能开关；单机默认仍 JPEG |
 | C. 多路 | 2–3 路；编码预算与降分辨率策略 | 预览 FPS≥15，控制 WS 无堆积 |
-| D. 多机可选 | 从站预览轨 → 主站浏览器 | 符合 station「默认可空转」 |
+| D. 多机可选 | 预览目录 + **各站直连** WebRTC（非 Peer 中继；见 [preview-catalog-webrtc.md](preview-catalog-webrtc.md)） | 符合 station「默认可空转」；不破坏 barrier 采集 |
 | E. 叙事固化 | 本页 + 测分表格进 README/答辩 | 简历条目与仓库一致 |
 
 工作量粗估：B≈1–2 周（一人，含坑）；C–D 视硬编与 SFU 再定。
+
+**工程开发记录（agent 开关 + A/B 钩子 + 阶段勾选）：** [webrtc-preview-agent.md](webrtc-preview-agent.md)  
+配置示例：`configs/webrtc_preview.example.yaml`。
 
 ---
 
@@ -189,6 +192,7 @@ WebRTC 的增益是：**人眼反馈更快** → 在写频已密的前提下减�
 | 文档 | 关系 |
 |------|------|
 | [station-multi-machine.md](station-multi-machine.md) | 不冲突：WebRTC=可选预览，非落盘热路径 |
+| [preview-catalog-webrtc.md](preview-catalog-webrtc.md) | 多站预览目录 / 合成 API / 各站直连 stream 清单；一期不做 SFU |
 | [gello-arm-teleop.md](gello-arm-teleop.md) | 指令面；WebRTC 只补视觉闭环 |
 | [episode-00003-quality-bottlenecks.md](episode-00003-quality-bottlenecks.md) | 质量差主因非预览协议；勿混为一谈 |
 | [cs66-remote-teleop-smooth.md](../../sensors-arm/docs/cs66-remote-teleop-smooth.md) | 臂侧写路径；可与 P2 组成「指令+视频」故事 |

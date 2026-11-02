@@ -217,6 +217,14 @@ def main(argv: list[str] | None = None) -> None:
         station_peer_probe=orch.peer.probe_slave,
         record_start_fn=orch.coordinated_record_start,
         record_stop_fn=orch.coordinated_record_stop,
+        webrtc_preview_status=orch.webrtc_preview_status,
+        webrtc_preview_client_metrics=orch.webrtc_preview_client_metrics,
+        webrtc_preview_benchmark_start=orch.webrtc_preview_benchmark_start,
+        webrtc_preview_benchmark_stop=orch.webrtc_preview_benchmark_stop,
+        webrtc_preview_offer=orch.webrtc_preview_offer,
+        preview_catalog_fn=orch.preview_catalog_merged,
+        preview_catalog_local_fn=orch.build_preview_catalog_local,
+        preview_open_url_fn=orch.preview_open_url,
     )
     orch.cfg.runtime.viz_port = port
 

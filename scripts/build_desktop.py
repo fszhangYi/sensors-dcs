@@ -362,6 +362,7 @@ def _verify_bundled_imports(
     *,
     env: dict | None = None,
     require_elite_cs_sdk: bool = False,
+    require_webrtc: bool = False,
 ) -> None:
     required = [
         "dynamixel_sdk",
@@ -383,10 +384,14 @@ def _verify_bundled_imports(
     ]
     if require_elite_cs_sdk:
         required = [*required, "elite_cs_sdk"]
+    if require_webrtc:
+        required = [*required, "aiortc", "av"]
     # watchfiles is optional under Wine (Rust extension often fails DLL load); still try.
     optional = ["watchfiles"]
     if not require_elite_cs_sdk:
         optional = [*optional, "elite_cs_sdk"]
+    if not require_webrtc:
+        optional = [*optional, "aiortc", "av"]
     TMP_BASE.mkdir(parents=True, exist_ok=True)
     script = TMP_BASE / "_verify_wine_imports.py"
     script.write_text(
@@ -984,7 +989,9 @@ def build_windows_native(*, skip_frontend: bool = True, delta: bool = True) -> P
             env=env,
         )
     _run([*py_cmd, "-m", "pip", "uninstall", "-y", "watchfiles"], env=env, check=False)
-    _verify_bundled_imports([str(py)], env=env, require_elite_cs_sdk=True)
+    _verify_bundled_imports(
+        [str(py)], env=env, require_elite_cs_sdk=True, require_webrtc=True
+    )
 
     # Avoid WinError 5 when a previous sensors-dcs.exe / Explorer holds dist DLLs:
     # unique dist/work paths + best-effort kill + rename-aside cleanup.
@@ -1041,7 +1048,7 @@ def build_windows_native(*, skip_frontend: bool = True, delta: bool = True) -> P
         "entry": f"{APP_EXE}.exe",
         "notes": (
             "Built on Windows host with embed CPython 3.12 + native PyInstaller "
-            "(includes elite_cs_sdk for CS66 / arm_cs_write)"
+            "(includes elite_cs_sdk for CS66 / arm_cs_write; aiortc+av for WebRTC preview)"
         ),
         "host_python": sys.version.split()[0],
         "bundle_python": "3.12.10-embed",

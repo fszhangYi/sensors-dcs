@@ -32,6 +32,7 @@ role 缺省 / master + 无已连接从站
 
 - 身份与 `advertise_ip` **仅 YAML 配置，前端只读回显**。
 - 从站连主站时上报的是**站元信息 + agents/sensors 摘要**，不覆盖主站运行 YAML。
+  （可选附加 `preview_catalog` 仅供多站预览合成，见 [preview-catalog-webrtc.md](preview-catalog-webrtc.md)；仍不写回运行配置。）
 - 仅 master 接受 peer 入站；若对从站发起「被连接」则失败。
 - 有活跃从站时，主站开录/开推理走 **PREPARE → ACK → COMMIT** barrier；超时则 ABORT，主站也不 start。
 - **大钟差（甚至 ≥1min）**：采集与 barrier 仍可用；跨站禁止用绝对 `t_wall` 硬并，必须用相对 τ（开录 `t0` 为零时）。

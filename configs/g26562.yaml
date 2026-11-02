@@ -100,6 +100,19 @@ agents:
   #   hz: 60
   #   buffer_frames: 2
 
+  # WebRTC：与上方启用的相机一致；左右启用后把 id 补进 camera_agent_ids
+  - id: webrtc-preview
+    type: webrtc_preview
+    hz: 2
+    buffer_frames: 8
+    camera_agent_ids: [cam-g26562-wrist]
+    suppress_jpeg_ws: true
+    max_bitrate_kbps: 2500
+    preferred_codec: H264
+    backend: auto
+    telemetry_enabled: true
+    telemetry_hz: 15
+
   - id: arm-cs66
     type: arm
     sensor_id: arm-cs66
