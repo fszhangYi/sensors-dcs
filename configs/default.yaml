@@ -38,6 +38,12 @@ runtime:
   # 含多路 JPEG，推送略降
   viz_hz: 5
   console_hz: 5
+  # 「打开预览软件」：先起 webrtc-preview 后端，再开此地址前端。
+  # 也可用环境变量 WEBRTC_PREVIEW_URL / SENSORS_DCS_PREVIEW_APP_URL 覆盖。
+  preview_app_url: "http://127.0.0.1:7050/"
+  # 留空则自动：python -m webrtc_preview_app web …；或填完整命令 / exe。
+  # preview_app_cmd: ""
+  preview_app_bind_host: "0.0.0.0"
 
 gello_arm_sync:
   align_max_rad: 0.8

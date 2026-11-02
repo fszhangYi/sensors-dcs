@@ -87,6 +87,14 @@ class RuntimeConfig(BaseModel):
     viz_port: int = 7011
     viz_hz: float = 15.0
     console_hz: float = 5.0
+    # webrtc-preview host app (「打开预览软件」). URL = frontend origin; DCS
+    # starts the backend there first when missing. Env WEBRTC_PREVIEW_URL wins.
+    preview_app_url: str = "http://127.0.0.1:7050/"
+    # Optional launch argv string; empty → auto (python -m webrtc_preview_app /
+    # packaged exe). Env WEBRTC_PREVIEW_LAUNCH / SENSORS_DCS_PREVIEW_LAUNCH.
+    preview_app_cmd: str = ""
+    # Bind address used when DCS spawns the preview backend.
+    preview_app_bind_host: str = "0.0.0.0"
 
 
 class GelloArmSyncConfig(BaseModel):
@@ -312,6 +320,10 @@ class StationConfig(BaseModel):
     # Slave-only: master endpoint to dial.
     master_ip: str = ""
     master_port: int | None = None
+    # Optional postprocess-visible root (NAS / shared mount). Empty → local paths only.
+    share_root: str = ""
+    # Subdir under share_root for this station; empty → station.id.
+    share_station_subdir: str = ""
 
     @field_validator("role", mode="before")
     @classmethod
@@ -325,7 +337,9 @@ class StationConfig(BaseModel):
             raise ValueError("station.role must be master or slave")
         return s
 
-    @field_validator("id", "advertise_ip", "master_ip", mode="before")
+    @field_validator(
+        "id", "advertise_ip", "master_ip", "share_root", "share_station_subdir", mode="before"
+    )
     @classmethod
     def _strip_str(cls, v: Any) -> str:
         if v is None:
@@ -536,6 +550,8 @@ def station_summary(cfg: DcsConfig) -> dict[str, Any]:
         "catalog_url": catalog_url,
         "master_ip": (st.master_ip or "").strip(),
         "master_port": resolve_master_port(cfg) if st.role == "slave" else None,
+        "share_root": (st.share_root or "").strip(),
+        "share_station_subdir": (st.share_station_subdir or "").strip(),
         "is_master": st.role == "master",
         "is_slave": st.role == "slave",
     }

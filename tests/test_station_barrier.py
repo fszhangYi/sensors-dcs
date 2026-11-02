@@ -83,8 +83,10 @@ def test_barrier_falls_back_without_slaves() -> None:
     master.stop()
 
 
-def test_barrier_start_and_stop(linked_peers) -> None:
+def test_barrier_start_and_stop(linked_peers, tmp_path) -> None:
     master, slave = linked_peers
+    master.cfg.record.save_dir = str(tmp_path / "master_data")
+    slave.cfg.record.save_dir = str(tmp_path / "slave_data")
     slave_events: list[tuple[str, Any]] = []
 
     def on_prepare(mode: str) -> dict[str, Any]:
@@ -93,7 +95,13 @@ def test_barrier_start_and_stop(linked_peers) -> None:
 
     def on_commit(mode: str, meta: dict[str, Any]) -> dict[str, Any]:
         slave_events.append(("commit", mode, meta))
-        return {"ok": True, "state": "recording"}
+        return {
+            "ok": True,
+            "state": "recording",
+            "save_dir": str(tmp_path / "slave_data"),
+            "episode_path": str(tmp_path / "slave_data" / "episode_00000"),
+            "t_start": time.time(),
+        }
 
     def on_abort(session_id: str, reason: str) -> None:
         slave_events.append(("abort", session_id, reason))
@@ -113,7 +121,13 @@ def test_barrier_start_and_stop(linked_peers) -> None:
 
     def local_start(*, mode: str = "collect", session_meta=None):
         master_starts.append({"mode": mode, "session_meta": session_meta})
-        return {"ok": True, "state": "recording", "t_start": time.time()}
+        return {
+            "ok": True,
+            "state": "recording",
+            "t_start": time.time(),
+            "save_dir": str(tmp_path / "master_data"),
+            "episode_path": str(tmp_path / "master_data" / "episode_00000"),
+        }
 
     def local_stop(*, valid=True, async_flush=False, keep_files=True):
         return {
@@ -130,6 +144,12 @@ def test_barrier_start_and_stop(linked_peers) -> None:
     assert r.get("session_id")
     assert master_starts and master_starts[0]["session_meta"]["session_id"]
     assert master_starts[0]["session_meta"]["station_role"] == "master"
+    meta = master_starts[0]["session_meta"]
+    assert isinstance(meta.get("participants"), list) and len(meta["participants"]) >= 2
+    assert meta.get("session_registry")
+    peer0 = (meta.get("peer_slaves") or [None])[0]
+    assert peer0 and "save_dir" in peer0
+    assert r.get("session_registry")
 
     deadline = time.time() + 3.0
     while time.time() < deadline and not any(e[0] == "commit" for e in slave_events):
@@ -139,6 +159,7 @@ def test_barrier_start_and_stop(linked_peers) -> None:
     commit = next(e for e in slave_events if e[0] == "commit")
     assert commit[2].get("station_role") == "slave"
     assert commit[2].get("session_id") == r["session_id"]
+    assert isinstance(commit[2].get("participants"), list)
 
     s = master.barrier_stop(local_stop=local_stop, valid=True)
     assert s.get("ok") is True, s

@@ -323,48 +323,73 @@ class Orchestrator:
     def preview_catalog_merged(self) -> dict[str, Any]:
         return self.peer.merged_preview_catalog()
 
-    def preview_open_url(self) -> dict[str, Any]:
-        """URL hint for「打开预览软件」— points at webrtc-preview with master catalog."""
-        import os
-
+    def _preview_catalog_url(self) -> str | None:
         from sensors_dcs.config import station_summary
 
         st = station_summary(self.cfg)
-        preview_base = (
-            os.environ.get("WEBRTC_PREVIEW_URL")
-            or os.environ.get("SENSORS_DCS_PREVIEW_APP_URL")
-            or "http://127.0.0.1:7050/"
-        ).rstrip("/") + "/"
-        catalog = None
         if st.get("is_slave"):
             with self.peer._lock:  # noqa: SLF001
                 mc = self.peer._master_conn  # noqa: SLF001
             if mc and isinstance(mc.preview_catalog, dict):
                 catalog = mc.preview_catalog.get("catalog_url")
-            if not catalog:
-                mip = (st.get("master_ip") or "").strip()
-                # Prefer master's viz_port from hello_ack; else assume same as local.
-                mport = None
-                if mc is not None and mc.viz_port:
-                    mport = int(mc.viz_port)
-                if not mport:
-                    mport = int(st.get("viz_port") or self.cfg.runtime.viz_port)
-                if mip:
-                    catalog = f"http://{mip}:{mport}/api/preview/catalog"
-        else:
-            catalog = st.get("catalog_url")
-            if not catalog:
-                # Local loopback fallback for single-machine / unset advertise.
-                catalog = f"http://127.0.0.1:{int(st.get('viz_port') or self.cfg.runtime.viz_port)}/api/preview/catalog"
-        from urllib.parse import quote
+                if catalog:
+                    return str(catalog)
+            mip = (st.get("master_ip") or "").strip()
+            mport = None
+            if mc is not None and mc.viz_port:
+                mport = int(mc.viz_port)
+            if not mport:
+                mport = int(st.get("viz_port") or self.cfg.runtime.viz_port)
+            if mip:
+                return f"http://{mip}:{mport}/api/preview/catalog"
+            return None
+        catalog = st.get("catalog_url")
+        if catalog:
+            return str(catalog)
+        return (
+            f"http://127.0.0.1:"
+            f"{int(st.get('viz_port') or self.cfg.runtime.viz_port)}"
+            f"/api/preview/catalog"
+        )
 
-        open_url = f"{preview_base}?catalog={quote(str(catalog), safe='')}"
-        return {
+    def preview_open_url(
+        self,
+        *,
+        preview_app_url: str | None = None,
+        ensure_backend: bool = False,
+    ) -> dict[str, Any]:
+        """Deep-link for「打开预览软件」; optionally spawn webrtc-preview backend first."""
+        from sensors_dcs.preview_launch import (
+            build_preview_open_url,
+            ensure_preview_backend,
+            resolve_preview_app_url,
+        )
+
+        rt = self.cfg.runtime
+        preview_base = resolve_preview_app_url(
+            preview_app_url,
+            runtime_url=getattr(rt, "preview_app_url", None),
+        )
+        catalog = self._preview_catalog_url()
+        out: dict[str, Any] = {
             "ok": True,
             "preview_app_base": preview_base,
             "catalog_url": catalog,
-            "open_url": open_url,
+            "open_url": build_preview_open_url(preview_base, catalog),
+            "backend": None,
         }
+        if ensure_backend:
+            backend = ensure_preview_backend(
+                base_url=preview_base,
+                bind_host=getattr(rt, "preview_app_bind_host", None) or "0.0.0.0",
+                cmd=(getattr(rt, "preview_app_cmd", None) or "").strip() or None,
+                catalog=catalog,
+            )
+            out["backend"] = backend
+            if not backend.get("ok"):
+                out["ok"] = False
+                out["error"] = backend.get("error") or "preview backend failed to start"
+        return out
 
     def _peer_on_prepare(
         self, mode: str, body: dict[str, Any] | None = None

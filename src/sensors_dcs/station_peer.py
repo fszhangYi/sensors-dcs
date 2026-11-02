@@ -142,6 +142,7 @@ class _PeerConn:
         self.sensors_summary: dict[str, Any] = {}
         self.preview_catalog: dict[str, Any] = {}
         self.viz_port: int | None = None
+        self.save_dir: str = ""
         self.state = "connecting"
         self.last_rx = _now()
         self.last_error = ""
@@ -200,6 +201,7 @@ class _PeerConn:
             "sensors_summary": dict(self.sensors_summary),
             "preview_catalog": dict(self.preview_catalog) if self.preview_catalog else None,
             "viz_port": self.viz_port,
+            "save_dir": self.save_dir or None,
         }
 
 
@@ -279,6 +281,17 @@ class StationPeer:
         self._on_abort = on_abort
         self._on_stop = on_stop
 
+    def _resolved_save_dir(self) -> str:
+        raw = self.cfg.record.save_dir or "./data"
+        try:
+            return str(Path(raw).expanduser().resolve())
+        except OSError:
+            return str(Path(raw).expanduser())
+
+    def _share_opts(self) -> tuple[str, str]:
+        st = self.cfg.station
+        return (st.share_root or "").strip(), (st.share_station_subdir or "").strip()
+
     def barrier_start(
         self,
         *,
@@ -293,7 +306,7 @@ class StationPeer:
         network flight instead of waiting for master start to finish first.
         When ``episode_index`` is set, master and all slaves open the same
         ``episode_NNNNN`` for cross-station consistency.
-        No slaves → ``local_start`` only.
+        No slaves → ``local_start`` only (no session registry).
         """
         if self.cfg.station.role != "master":
             return {"ok": False, "error": "barrier_start is master-only", **self.status()}
@@ -305,14 +318,27 @@ class StationPeer:
         token = str(uuid.uuid4())
         local = station_summary(self.cfg)
         ep_assigned = int(episode_index) if episode_index is not None else None
+        master_id = str(local["id"])
         with self._lock:
             slaves = [c for c in self._slaves.values() if c.state == "connected"]
             self._link_state = "syncing"
             self._active_session_id = session_id
             self._last_error = ""
-            peer_slaves = [
-                {"id": c.station_id, "advertise_ip": c.advertise_ip} for c in slaves
-            ]
+
+        # Uniqueness: slave ids must be unique (dict keys) and ≠ master.
+        slave_ids = [c.station_id for c in slaves]
+        if len(slave_ids) != len(set(slave_ids)):
+            err = f"duplicate slave station_id among peers: {slave_ids}"
+            with self._lock:
+                self._link_state = "connected" if self._slaves else "listening"
+                self._last_error = err
+            return {"ok": False, "error": err, "session_id": session_id}
+        if master_id in set(slave_ids):
+            err = f"slave station_id collides with master: {master_id}"
+            with self._lock:
+                self._link_state = "connected" if self._slaves else "listening"
+                self._last_error = err
+            return {"ok": False, "error": err, "session_id": session_id}
 
         expect = {c.station_id for c in slaves}
         self._begin_barrier(phase="prepare", expect=expect, token=token)
@@ -333,7 +359,7 @@ class StationPeer:
                     self._last_error = f"prepare send failed to {c.station_id}"
                 return {"ok": False, "error": self._last_error, "session_id": session_id}
 
-        ok_prep, prep_detail = self._wait_acks(
+        ok_prep, prep_detail, prep_acks = self._wait_acks(
             expect=expect, ack_type="prepare_ack", token=token, timeout_s=timeout_s
         )
         if not ok_prep:
@@ -348,23 +374,88 @@ class StationPeer:
                 **self.status(),
             }
 
+        from sensors_dcs.session_registry import build_participant
+
+        share_root, share_sub = self._share_opts()
+        master_save = self._resolved_save_dir()
+        # Enrich peer_slaves from prepare_ack (+ hello cache fallback).
+        peer_slaves: list[dict[str, Any]] = []
+        slave_participants: list[dict[str, Any]] = []
+        for c in slaves:
+            ack = prep_acks.get(c.station_id) or {}
+            save_dir = str(ack.get("save_dir") or c.save_dir or "").strip()
+            try:
+                viz = ack.get("viz_port", c.viz_port)
+                viz_i = int(viz) if viz is not None else None
+            except (TypeError, ValueError):
+                viz_i = c.viz_port
+            adv = str(ack.get("advertise_ip") or c.advertise_ip or "").strip()
+            agents = ack.get("agents") if isinstance(ack.get("agents"), list) else list(c.agents)
+            peer_slaves.append(
+                {
+                    "id": c.station_id,
+                    "advertise_ip": adv,
+                    "viz_port": viz_i,
+                    "save_dir": save_dir or None,
+                }
+            )
+            try:
+                slave_participants.append(
+                    build_participant(
+                        station_id=c.station_id,
+                        role="slave",
+                        advertise_ip=adv,
+                        viz_port=viz_i,
+                        save_dir=save_dir,
+                        episode_index=ep_assigned,
+                        agents=agents,
+                        share_root=share_root,
+                        share_station_subdir=share_sub,
+                    )
+                )
+            except ValueError as e:
+                self._broadcast_abort(session_id, token, reason=str(e))
+                with self._lock:
+                    self._link_state = "connected" if self._slaves else "listening"
+                    self._last_error = str(e)
+                return {"ok": False, "error": str(e), "session_id": session_id}
+
+        master_participant = build_participant(
+            station_id=master_id,
+            role="master",
+            advertise_ip=str(local.get("advertise_ip") or ""),
+            viz_port=local.get("viz_port"),
+            save_dir=master_save,
+            episode_index=ep_assigned,
+            agents=self._agents_summary_fn(),
+            share_root=share_root,
+            share_station_subdir=share_sub,
+        )
+        participants = [master_participant, *slave_participants]
         session_meta: dict[str, Any] = {
             "session_id": session_id,
-            "station_id": local["id"],
+            "station_id": master_id,
             "station_role": "master",
             "peer_slaves": peer_slaves,
+            "participants": participants,
+            "session_registry": f"sessions/{session_id}/session.json",
         }
         if ep_assigned is not None:
             session_meta["episode_index"] = ep_assigned
+
         t_commit_send = time.time()
         self._begin_barrier(phase="commit", expect=expect, token=token)
-        slave_meta: dict[str, Any] = {
-            "session_id": session_id,
-            "station_role": "slave",
-        }
-        if ep_assigned is not None:
-            slave_meta["episode_index"] = ep_assigned
         for c in slaves:
+            slave_meta: dict[str, Any] = {
+                "session_id": session_id,
+                "station_role": "slave",
+                "station_id": c.station_id,
+                "participants": participants,
+            }
+            if ep_assigned is not None:
+                slave_meta["episode_index"] = ep_assigned
+            # Point slave at master's registry path hint (local relative).
+            slave_meta["session_registry"] = f"sessions/{session_id}/session.json"
             if not c.send(
                 {
                     "type": "commit",
@@ -374,7 +465,7 @@ class StationPeer:
                     "mode": mode_n,
                     "t_start_wall": t_commit_send,
                     "t_commit_send": t_commit_send,
-                    "session_meta": {**slave_meta, "station_id": c.station_id},
+                    "session_meta": slave_meta,
                 }
             ):
                 self._broadcast_abort(session_id, token, reason="commit send failed")
@@ -397,7 +488,7 @@ class StationPeer:
                 self._link_state = "connected" if self._slaves else "listening"
             return {**local_res, "session_id": session_id}
 
-        ok_commit, commit_detail = self._wait_acks(
+        ok_commit, commit_detail, commit_acks = self._wait_acks(
             expect=expect, ack_type="commit_ack", token=token, timeout_s=timeout_s
         )
         if not ok_commit:
@@ -414,10 +505,90 @@ class StationPeer:
                 **self.status(),
             }
 
+        # Enrich participants with actual episode_path / t_start, write registry.
+        registry_path = None
+        try:
+            from sensors_dcs.session_registry import (
+                build_session_doc,
+                write_session_registry,
+            )
+
+            master_t0 = local_res.get("t_start")
+            master_ep_path = local_res.get("episode_path")
+            master_save_live = str(local_res.get("save_dir") or master_save)
+            final_parts: list[dict[str, Any]] = [
+                build_participant(
+                    station_id=master_id,
+                    role="master",
+                    advertise_ip=str(local.get("advertise_ip") or ""),
+                    viz_port=local.get("viz_port"),
+                    save_dir=master_save_live,
+                    episode_index=ep_assigned,
+                    episode_path=str(master_ep_path) if master_ep_path else None,
+                    t_start=float(master_t0) if master_t0 is not None else None,
+                    agents=self._agents_summary_fn(),
+                    share_root=share_root,
+                    share_station_subdir=share_sub,
+                )
+            ]
+            for c in slaves:
+                ack = commit_acks.get(c.station_id) or {}
+                prep = prep_acks.get(c.station_id) or {}
+                save_dir = str(
+                    ack.get("save_dir") or prep.get("save_dir") or c.save_dir or ""
+                ).strip()
+                try:
+                    viz = ack.get("viz_port", prep.get("viz_port", c.viz_port))
+                    viz_i = int(viz) if viz is not None else None
+                except (TypeError, ValueError):
+                    viz_i = c.viz_port
+                adv = str(
+                    ack.get("advertise_ip") or prep.get("advertise_ip") or c.advertise_ip or ""
+                ).strip()
+                agents = (
+                    ack.get("agents")
+                    if isinstance(ack.get("agents"), list)
+                    else (
+                        prep.get("agents")
+                        if isinstance(prep.get("agents"), list)
+                        else list(c.agents)
+                    )
+                )
+                t0 = ack.get("t_start")
+                final_parts.append(
+                    build_participant(
+                        station_id=c.station_id,
+                        role="slave",
+                        advertise_ip=adv,
+                        viz_port=viz_i,
+                        save_dir=save_dir,
+                        episode_index=ep_assigned,
+                        episode_path=str(ack.get("episode_path") or "") or None,
+                        t_start=float(t0) if t0 is not None else None,
+                        agents=agents,
+                        share_root=share_root,
+                        share_station_subdir=share_sub,
+                    )
+                )
+            doc = build_session_doc(
+                session_id=session_id,
+                episode_index=ep_assigned,
+                mode=mode_n,
+                master_station_id=master_id,
+                participants=final_parts,
+                created_at=t_commit_send,
+            )
+            registry_path = write_session_registry(master_save_live, doc)
+        except Exception as e:  # noqa: BLE001
+            # Recording already started on all stations — keep going but surface warning.
+            with self._lock:
+                self._last_error = f"session registry write failed: {e}"
+            print(f"[sensors-dcs] session registry write failed: {e}", flush=True)
+
         with self._lock:
             self._link_state = "connected"
             self._session_token = token
-        return {
+        out = {
             "ok": True,
             "session_id": session_id,
             "barrier": True,
@@ -425,6 +596,9 @@ class StationPeer:
             **local_res,
             "peer": self.status(),
         }
+        if registry_path is not None:
+            out["session_registry"] = str(registry_path)
+        return out
 
     def barrier_stop(
         self,
@@ -462,7 +636,7 @@ class StationPeer:
                     "keep_files": bool(keep_files),
                 }
             )
-        ok_stop, stop_detail = self._wait_acks(
+        ok_stop, stop_detail, _stop_acks = self._wait_acks(
             expect=expect, ack_type="stop_ack", token=token, timeout_s=timeout_s
         )
         local_res = local_stop(
@@ -512,12 +686,12 @@ class StationPeer:
         ack_type: str,
         token: str,
         timeout_s: float,
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool, str, dict[str, dict[str, Any]]]:
         deadline = _now() + max(0.5, float(timeout_s))
         with self._ack_cv:
             while _now() < deadline and not self._stop.is_set():
                 if self._barrier_token != token:
-                    return False, "barrier token changed"
+                    return False, "barrier token changed", {}
                 got = {
                     sid: m
                     for sid, m in self._pending_acks.items()
@@ -528,14 +702,19 @@ class StationPeer:
                         m = got[sid]
                         if m.get("ready") is False or m.get("ok") is False:
                             err = str(m.get("error") or f"{sid} not ready")
-                            return False, err
-                    return True, "ok"
+                            return False, err, got
+                    return True, "ok", got
                 remaining = deadline - _now()
                 if remaining <= 0:
                     break
                 self._ack_cv.wait(timeout=min(0.2, remaining))
             missing = sorted(expect - set(self._pending_acks.keys()))
-            return False, f"{ack_type} timeout; missing={missing}"
+            got = {
+                sid: m
+                for sid, m in self._pending_acks.items()
+                if str(m.get("type") or "") == ack_type
+            }
+            return False, f"{ack_type} timeout; missing={missing}", got
 
     def _broadcast_abort(self, session_id: str, token: str, *, reason: str) -> None:
         with self._lock:
@@ -1178,6 +1357,7 @@ class StationPeer:
             conn.viz_port = int(vp) if vp is not None else None
         except (TypeError, ValueError):
             conn.viz_port = None
+        conn.save_dir = str(hello.get("save_dir") or "").strip()
         from sensors_dcs.preview_catalog import normalize_hello_preview_catalog
 
         conn.preview_catalog = normalize_hello_preview_catalog(
@@ -1199,6 +1379,7 @@ class StationPeer:
                 "advertise_ip": local.get("advertise_ip") or "",
                 "role": "master",
                 "viz_port": local.get("viz_port"),
+                "save_dir": self._resolved_save_dir(),
                 "catalog_url": local.get("catalog_url"),
             }
         )
@@ -1381,6 +1562,10 @@ class StationPeer:
                     "error": err or None,
                     "t_wall": _now(),
                     "t_mono": time.monotonic(),
+                    "save_dir": self._resolved_save_dir(),
+                    "viz_port": local.get("viz_port"),
+                    "advertise_ip": local.get("advertise_ip") or "",
+                    "agents": self._agents_summary_fn(),
                 }
             )
             return
@@ -1394,6 +1579,7 @@ class StationPeer:
             meta.setdefault("station_role", "slave")
             ok = True
             err = ""
+            res: dict[str, Any] = {}
             if self._on_commit is not None:
                 try:
                     res = self._on_commit(mode, meta) or {}
@@ -1416,6 +1602,13 @@ class StationPeer:
                     "ok": ok,
                     "ready": ok,
                     "error": err or None,
+                    "save_dir": str(res.get("save_dir") or self._resolved_save_dir()),
+                    "episode_path": res.get("episode_path"),
+                    "episode_index": res.get("episode_index"),
+                    "t_start": res.get("t_start"),
+                    "viz_port": local.get("viz_port"),
+                    "advertise_ip": local.get("advertise_ip") or "",
+                    "agents": self._agents_summary_fn(),
                 }
             )
             return
@@ -1498,6 +1691,7 @@ class StationPeer:
             "advertise_ip": st.get("advertise_ip") or "",
             "peer_port": st.get("peer_port"),
             "viz_port": st.get("viz_port"),
+            "save_dir": self._resolved_save_dir(),
             "agents": self._agents_summary_fn(),
             "sensors_summary": self._sensors_summary_fn(),
             "t_wall": _now(),

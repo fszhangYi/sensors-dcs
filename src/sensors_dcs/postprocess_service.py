@@ -48,6 +48,26 @@ def default_camera_map_candidates() -> list[str]:
     return out
 
 
+def resolve_camera_map_path(camera_map: str | Path | None) -> str | None:
+    """Return an existing camera-map YAML path, or the best default candidate.
+
+    Packaged-desktop localStorage often keeps a stale absolute path under another
+    machine's ``Downloads\\...\\_internal\\configs\\hik_camera_map.yaml``. When
+    that file is missing, fall back to ``default_camera_map_candidates()``.
+    """
+    raw = str(camera_map or "").strip()
+    if raw:
+        p = Path(raw).expanduser()
+        try:
+            p = p.resolve()
+        except OSError:
+            pass
+        if p.is_file():
+            return str(p)
+    cands = default_camera_map_candidates()
+    return cands[0] if cands else None
+
+
 def default_rate_policy_candidates() -> list[str]:
     """Prefer launch-pwd / repo rate-policy JSONs."""
     from sensors_dcs.paths import capture_launch_cwd
@@ -119,7 +139,245 @@ def postprocess_defaults(
         "tcp_xyz": tcp,
         "steps": list(DEFAULT_STEPS),
         "episodes": list_episodes(save_dir) if save_dir else [],
+        "sessions": list_sessions(save_dir) if save_dir else [],
         "save_dir": str(Path(save_dir).expanduser().resolve()) if save_dir else None,
+    }
+
+
+def list_sessions(save_dir: str | Path | None) -> list[dict[str, Any]]:
+    """List multi-station session registries under ``save_dir/sessions/``."""
+    from sensors_dcs.session_registry import list_session_docs
+
+    return list_session_docs(save_dir)
+
+
+def inspect_session(
+    *,
+    save_dir: str | Path | None,
+    session_id: str,
+    remaps: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Load session.json and check whether each participant episode is readable."""
+    from sensors_dcs.session_registry import (
+        inspect_session_paths,
+        read_session_registry,
+    )
+
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {"ok": False, "error": "empty session_id", "session_id": None}
+    if not save_dir:
+        return {"ok": False, "error": "empty save_dir", "session_id": sid}
+    root = str(Path(save_dir).expanduser().resolve())
+    doc = read_session_registry(root, sid)
+    if not doc:
+        return {
+            "ok": False,
+            "error": f"session registry not found: {sid}",
+            "session_id": sid,
+            "save_dir": root,
+        }
+    health = inspect_session_paths(
+        doc, remaps=remaps, save_dir=root, session_id=sid
+    )
+    return {
+        "ok": True,
+        "session_id": sid,
+        "save_dir": root,
+        "doc": doc,
+        "health": health,
+        "all_present": bool(health.get("all_present")),
+    }
+
+
+def run_postprocess_session(
+    *,
+    save_dir: str | Path,
+    session_id: str,
+    remaps: dict[str, str] | None = None,
+    master_station_id: str | None = None,
+    master_agent: str | None = None,
+    max_match_dt: float | None = 0.033,
+    also_per_station: bool = False,
+    write_tau_table: bool = False,
+    steps: list[str] | None = None,
+    align: str = DEFAULT_ALIGN,
+    master: str = DEFAULT_MASTER,
+    master_hz: float | None = DEFAULT_MASTER_HZ,
+    rate_policy: str | None = None,
+    align_clock: str = DEFAULT_ALIGN_CLOCK,
+    primary_camera: str = DEFAULT_PRIMARY_CAMERA,
+    require: str = DEFAULT_REQUIRE,
+    trim: str = DEFAULT_TRIM,
+    materialize: bool = True,
+    camera_map: str | None = None,
+    allow_invalid: bool = False,
+    tcp_xyz: list[float] | tuple[float, float, float] | None = None,
+) -> dict[str, Any]:
+    """Federate multi-station episodes then run the same 3-step postprocess.
+
+    1. Build ``sessions/<id>/merged/episode_XXXXX/`` (τ→common ``t_wall``, slave
+       agents prefixed ``{station_id}__…``).
+    2. Run ``run_postprocess`` on that episode → ``export/`` + hik_dataset.
+    3. Optional: also_per_station / write_tau_table.
+    """
+    from sensors_dcs.export.session_federate import build_federated_episode
+    from sensors_dcs.session_registry import resolve_participant_episode_path
+
+    root = str(Path(save_dir).expanduser().resolve())
+    insp = inspect_session(save_dir=root, session_id=session_id, remaps=remaps)
+    if not insp.get("ok"):
+        return {**insp, "results": []}
+    if not insp.get("all_present"):
+        return {
+            "ok": False,
+            "session_id": session_id,
+            "save_dir": root,
+            "error": "missing participant episode dirs",
+            "health": insp.get("health"),
+            "results": [],
+        }
+
+    federate = build_federated_episode(
+        save_dir=root,
+        session_id=session_id,
+        remaps=remaps,
+        master_station_id=master_station_id,
+    )
+    if not federate.get("ok"):
+        return {
+            "ok": False,
+            "session_id": session_id,
+            "save_dir": root,
+            "federate": federate,
+            "error": federate.get("error"),
+            "health": insp.get("health"),
+            "results": [],
+        }
+
+    # Cross-station HW clocks are not aligned — prefer wall on federated episode.
+    clock = (align_clock or DEFAULT_ALIGN_CLOCK).strip().lower()
+    if clock == "hw_ts":
+        clock = "wall"
+
+    fed_ep = str(federate["episode_path"])
+    try:
+        post = run_postprocess(
+            episode=fed_ep,
+            steps=steps,
+            align=align,
+            master=master_agent or master,
+            master_hz=master_hz,
+            rate_policy=rate_policy,
+            align_clock=clock,
+            primary_camera=primary_camera,
+            require=require,
+            max_match_dt=str(max_match_dt)
+            if max_match_dt is not None
+            else DEFAULT_MAX_MATCH_DT,
+            trim=trim,
+            materialize=materialize,
+            camera_map=camera_map,
+            allow_invalid=allow_invalid,
+            tcp_xyz=tcp_xyz,
+        )
+    except Exception as e:  # noqa: BLE001
+        import traceback
+
+        return {
+            "ok": False,
+            "session_id": session_id,
+            "save_dir": root,
+            "federate": {
+                "ok": True,
+                "episode_path": fed_ep,
+                "meta_path": federate.get("meta_path"),
+                "written_states": federate.get("written_states"),
+                "written_frames": federate.get("written_frames"),
+            },
+            "episode": fed_ep,
+            "error": f"{type(e).__name__}: {e}",
+            "traceback": traceback.format_exc(),
+            "health": insp.get("health"),
+            "results": [],
+        }
+
+    per_station: list[dict[str, Any]] = []
+    if also_per_station:
+        doc = insp.get("doc") or {}
+        for p in doc.get("participants") or []:
+            if not isinstance(p, dict):
+                continue
+            ep = resolve_participant_episode_path(
+                p, remaps=remaps, save_dir=root, session_id=session_id
+            )
+            if ep is None:
+                per_station.append(
+                    {
+                        "station_id": p.get("station_id"),
+                        "ok": False,
+                        "error": "episode path not found",
+                    }
+                )
+                continue
+            r = run_postprocess(
+                episode=ep,
+                steps=steps,
+                align=align,
+                master=master,
+                master_hz=master_hz,
+                rate_policy=rate_policy,
+                align_clock=align_clock,
+                primary_camera=primary_camera,
+                require=require,
+                max_match_dt=str(max_match_dt)
+                if max_match_dt is not None
+                else DEFAULT_MAX_MATCH_DT,
+                trim=trim,
+                materialize=materialize,
+                camera_map=camera_map,
+                allow_invalid=allow_invalid,
+                tcp_xyz=tcp_xyz,
+            )
+            per_station.append(
+                {
+                    "station_id": p.get("station_id"),
+                    "episode": str(ep),
+                    **r,
+                }
+            )
+
+    tau_merge: dict[str, Any] | None = None
+    if write_tau_table:
+        from sensors_dcs.export.session_merge import merge_session_tau
+
+        tau_merge = merge_session_tau(
+            save_dir=root,
+            session_id=session_id,
+            remaps=remaps,
+            master_station_id=master_station_id,
+            master_agent=master_agent or master,
+            max_match_dt=max_match_dt,
+        )
+
+    return {
+        "ok": bool(post.get("ok")),
+        "session_id": session_id,
+        "save_dir": root,
+        "federate": {
+            "ok": True,
+            "episode_path": fed_ep,
+            "meta_path": federate.get("meta_path"),
+            "written_states": federate.get("written_states"),
+            "written_frames": federate.get("written_frames"),
+        },
+        "postprocess": post,
+        "episode": fed_ep,
+        "results": post.get("results") or [],
+        "per_station": per_station,
+        "tau_merge": tau_merge,
+        "error": None if post.get("ok") else post.get("error"),
+        "health": insp.get("health"),
     }
 
 
@@ -580,7 +838,8 @@ def run_postprocess(
     except Exception:  # noqa: BLE001
         pass
 
-    cam_map = (camera_map or "").strip() or None
+    cam_map_requested = (camera_map or "").strip() or None
+    cam_map = resolve_camera_map_path(cam_map_requested)
     rate_path = (rate_policy or "").strip() or None
     try:
         export_tcp = resolve_export_tcp_xyz(tcp_xyz)
@@ -592,6 +851,12 @@ def run_postprocess(
     )
     results: list[dict[str, Any]] = []
     log_lines: list[str] = []
+    if cam_map_requested and cam_map and cam_map != cam_map_requested:
+        log_lines.append(
+            f"camera_map missing ({cam_map_requested}); using fallback {cam_map}"
+        )
+    elif cam_map_requested and not cam_map:
+        log_lines.append(f"camera_map missing and no fallback found: {cam_map_requested}")
 
     for step in wanted:
         log_lines.append(f"==> {step}")
@@ -621,7 +886,9 @@ def run_postprocess(
                 if not cam_map:
                     raise ValueError(
                         "camera_map is required for export-hik-dataset "
-                        "(path to hik_camera_map.yaml)"
+                        "(path to hik_camera_map.yaml). Saved UI path was missing; "
+                        "place configs/hik_camera_map.yaml under the app cwd or "
+                        "paste a valid path in Step 3."
                     )
                 meta = export_hik_dataset(
                     ep,

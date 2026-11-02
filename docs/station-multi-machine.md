@@ -126,20 +126,27 @@ Stop 同理：STOP → ACK → 各自 finalize
 
 ### 8.1 多站对齐操作约定
 
-1. 各站 episode 的 `manifest.json` 含同一 `session_id`（主站 barrier 分配）及本站 `station_id` / `station_role`；开录零时为 **`manifest.t_start`（COMMIT 后真正 start）**。
-2. 收集方式：共享盘 / `rsync` / 移动介质，建议目录布局：
+1. 各站 episode 的 `manifest.json` 含同一 `session_id`（主站 barrier 分配）及本站 `station_id` / `station_role`；开录零时为 **`manifest.t_start`（COMMIT 后真正 start）**。主站另写联邦清单：
    ```text
-   sessions/<session_id>/
-     <station_id>/episode_XXXXX/
+   {master_save_dir}/sessions/<session_id>/session.json
    ```
-3. 单站内对齐：继续用现有 `export-timeline` / `filter-timeline`（见 [hw-timeline-align.md](hw-timeline-align.md)），`--master` 选该站某 camera。
-4. 跨站对齐（默认）：
-   - 每帧 `τ = t_wall - t0`（`t0 = manifest.t_start`）；在 **τ 域** 合并；  
-   - **不要**在未同步或大钟差时用绝对 `t_wall` 硬并；  
-   - chrony 用于缩小绝对差与排障，**不替代** τ 作为跨站默认；  
-   - 合并键为 `session_id`；协同开录时各站 `episode_index` 应相同（主站分配），仍建议按 `station_id` 分子目录存放以免拷盘冲突。
-5. barrier 网络延迟导致两边 `t0` 可能差数毫秒～几十毫秒：靠 chrony + 紧 COMMIT 路径压掉；主站 UI「测速」可读 RTT/2；显式写入 manifest 补偿仍为可选增强。
-6. 现有后处理 UI 仍面向**单站 save_dir**；跨站一键合并列为后续增强，不阻塞采集。
+   （schema `dcs_session_v1`：participants 含 `save_dir` / `viz_port` / `episode_uri` / `t_start`；`session_id` UUID 唯一；`(session_id, station_id)` 唯一。无从站时不写。）
+2. 收集方式：共享盘 / `rsync` / 移动介质。可选 YAML `station.share_root`。**推荐拷到主站 save_dir 约定布局**（后处理优先发现）：
+   ```text
+   {master_save_dir}/
+     episode_XXXXX/                                          # 主站本地
+     sessions/<session_id>/session.json
+     sessions/<session_id>/<slave_station_id>/episode_XXXXX/ # 从站整目录拷来
+   ```
+3. 联机后处理（与单站相同效果）：
+   - UI「联机后处理（同单站三步）」→ `POST /api/postprocess/session/run`
+   - 合成 federated episode：`sessions/<id>/merged/episode_XXXXX/`  
+     （`t_wall' = master_t0 + τ`；从站 agent 前缀 `{station_id}__`；主站 agent 名不变）
+   - 再跑与单站相同的 `export-timeline` → `filter-timeline` → `export-hik-dataset`  
+     → 产物在 `sessions/<id>/merged/episode_XXXXX/export/`（含 `hik_dataset/`）
+4. 跨站时间：`τ = t_wall - t0`；federated 默认 `align_clock=wall`（各站 HW 钟不可比）；不要用未同步绝对 `t_wall` 硬并。
+5. barrier 网络延迟：靠 chrony + 紧 COMMIT；主站 UI「测速」可读 RTT/2。
+6. Peer 拉集仍不做；单站 Episode 列表 / 三步流程不变。
 
 ## 9. 实现分期
 
@@ -149,7 +156,8 @@ Stop 同理：STOP → ACK → 各自 finalize
 | **P1** | 从站 API/UI 权限门禁 | ✅ 已落地（`station_control_locked` + HTTP deny） |
 | **P2** | 采集/推理 barrier | ✅ 已落地（`barrier_start` / `barrier_stop`） |
 | **P3** | manifest `session_id` + 多站对齐说明/工具钩子 | ✅ 字段已写入；约定见 §8.1 / clock 专文 |
-| **P4** | chrony 运维说明 + `COMMIT→master start` 紧路径 | ✅ 底线已落地；可选 sync/RTT **未做**；Peer 跨站后处理 **明确不做** |
+| **P4** | chrony 运维说明 + `COMMIT→master start` 紧路径 | ✅ 底线已落地；可选 sync/RTT **未做**；Peer 拉集 **明确不做** |
+| **P5** | 联机后处理：session 清单 + federated episode + 同单站三步 | ✅ 已落地（单机路径不变；缺站拒绝静默合并） |
 
 回退写法约定：
 

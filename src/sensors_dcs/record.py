@@ -103,6 +103,7 @@ class RecordController:
             "save_dir": str(self.save_dir),
             "episode_index": self.episode_index,
             "episode_path": str(sess.ep_dir) if sess is not None else None,
+            "t_start": float(sess.t_start) if sess is not None else None,
             "record_mode": sess.mode if sess is not None else None,
             "accepting": bool(sess.accepting) if sess is not None else False,
             "written": int(sess.written) if sess is not None else 0,
@@ -111,6 +112,7 @@ class RecordController:
             "last_error": (sess.last_error if sess is not None else None) or self._last_error,
             "flushing_count": len(self._flush_jobs),
             "flushing_jobs": self._flush_jobs_unlocked(),
+            "session_id": (sess.session_meta or {}).get("session_id") if sess else None,
         }
 
     def set_save_dir(self, raw: str | None) -> dict[str, Any]:
@@ -543,7 +545,15 @@ class RecordController:
             "format": "dcs_episode_v1",
         }
         meta = dict(session_meta or {})
-        for key in ("session_id", "station_id", "station_role", "peer_slaves", "episode_index"):
+        for key in (
+            "session_id",
+            "station_id",
+            "station_role",
+            "peer_slaves",
+            "episode_index",
+            "participants",
+            "session_registry",
+        ):
             if key in meta and meta[key] is not None:
                 manifest[key] = meta[key]
         if provisional:

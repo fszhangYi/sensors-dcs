@@ -57,6 +57,13 @@ class WebrtcPreviewOfferBody(BaseModel):
     telemetry_agent_id: str | None = None
 
 
+class PreviewOpenBody(BaseModel):
+    """Ensure webrtc-preview backend, then return browser deep-link."""
+
+    preview_app_url: str | None = None
+    ensure_backend: bool = True
+
+
 class DeltaPoseOffsetBody(BaseModel):
     enabled: bool | None = None
     offset: list[float] | None = None
@@ -153,6 +160,31 @@ class PostprocessRootBody(BaseModel):
     camera_map: str | None = None
     allow_invalid: bool = False
     overwrite: bool = True
+    tcp_xyz: list[float] | None = None
+
+
+class PostprocessSessionBody(BaseModel):
+    """τ-merge a multi-station session registry under save_dir/sessions/."""
+
+    session_id: str
+    save_dir: str | None = None
+    remaps: dict[str, str] | None = None
+    master_station_id: str | None = None
+    master_agent: str | None = None
+    max_match_dt: float | None = 0.033
+    also_per_station: bool = False
+    steps: list[str] | None = None
+    align: str = "asof"
+    master: str = "cam-left"
+    master_hz: float | None = 5.0
+    rate_policy: str | None = None
+    align_clock: str = "wall"
+    primary_camera: str = "cam-middle"
+    require: str = "arm,cam-left,cam-right,cam-middle,gripper-read"
+    trim: str = "both"
+    materialize: bool = True
+    camera_map: str | None = None
+    allow_invalid: bool = False
     tcp_xyz: list[float] | None = None
 
 
@@ -1534,6 +1566,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
       max-height: 11rem;
       min-height: 4rem;
     }
+    .pp-zone-session #ppSessionLog {
+      margin-top: 0.35rem;
+      min-height: 4.5rem;
+      max-height: min(14rem, 28vh);
+    }
+    .pp-zone-session #ppSessionHealth {
+      margin-top: 0.35rem;
+      min-height: 3.25rem;
+      max-height: min(9rem, 20vh);
+    }
     .pp-fields {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -1887,10 +1929,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
       font-size: 0.9em;
       color: var(--accent);
     }
-    pre#ppLog {
+    pre#ppLog,
+    pre#ppSessionLog,
+    pre#ppSessionHealth {
       margin: 0;
       padding: 0.65rem 0.85rem;
       overflow: auto;
+      overflow-x: auto;
+      overflow-y: auto;
       background: var(--input-bg);
       border: 1px solid var(--border);
       border-radius: 12px;
@@ -1898,9 +1944,33 @@ PREVIEW_HTML = """<!DOCTYPE html>
       line-height: 1.4;
       color: var(--text);
       font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+      box-sizing: border-box;
+      width: 100%;
+      max-width: 100%;
+      min-width: 12rem;
       max-height: 28vh;
       min-height: 5rem;
-      white-space: pre-wrap;
+      scrollbar-width: thin;
+      scrollbar-color: var(--scrollbar-thumb) transparent;
+    }
+    pre#ppLog::-webkit-scrollbar,
+    pre#ppSessionLog::-webkit-scrollbar,
+    pre#ppSessionHealth::-webkit-scrollbar {
+      width: var(--scrollbar-size);
+      height: var(--scrollbar-size);
+    }
+    pre#ppLog::-webkit-scrollbar-thumb,
+    pre#ppSessionLog::-webkit-scrollbar-thumb,
+    pre#ppSessionHealth::-webkit-scrollbar-thumb {
+      background: var(--scrollbar-thumb);
+      border-radius: 999px;
+    }
+    pre#ppLog::-webkit-scrollbar-thumb:hover,
+    pre#ppSessionLog::-webkit-scrollbar-thumb:hover,
+    pre#ppSessionHealth::-webkit-scrollbar-thumb:hover {
+      background: var(--scrollbar-thumb-hover);
     }
     .inf-pi05-panel {
       --inf-fs: 0.8125rem;
@@ -3332,6 +3402,29 @@ PREVIEW_HTML = """<!DOCTYPE html>
                 <div class="pp-row">
                   <label class="quick-collect"><input type="checkbox" id="ppAllowInvalid" /> <span data-i18n="pp.allow_invalid">allow-invalid（作废 episode 也导出）</span></label>
                 </div>
+                <div class="pp-zone pp-zone-session" aria-labelledby="ppZoneSession">
+                  <h3 id="ppZoneSession" data-i18n="pp.session_title">联机会话</h3>
+                  <p class="pp-hint" data-i18n="pp.session_hint">默认扫描当前采集 save_dir 下的 sessions/；可改成解压后的数据集根（内含 episode_* 与 sessions/）。camera-map 与下方 Step 3 共用。</p>
+                  <div class="pp-row">
+                    <label for="ppSessionSaveDir" data-i18n="pp.session_save_dir">数据根</label>
+                    <input type="text" class="wide" id="ppSessionSaveDir" data-i18n-placeholder="pp.session_save_dir_ph" placeholder="例如 D:\\data 或 …\\_dcs_data" />
+                    <button type="button" id="btnPpBrowseSessionSaveDir" data-i18n="pp.browse">浏览…</button>
+                  </div>
+                  <div class="pp-row">
+                    <label for="ppSessionSelect" data-i18n="pp.session_list">会话</label>
+                    <select id="ppSessionSelect"></select>
+                    <button type="button" id="btnPpSessionRefresh" data-i18n="btn.refresh">刷新</button>
+                  </div>
+                  <pre id="ppSessionHealth" class="pp-session-health" data-i18n="pp.session_health_idle">（未选择会话）</pre>
+                  <div class="pp-row">
+                    <label class="quick-collect"><input type="checkbox" id="ppSessionAlsoPerStation" /> <span data-i18n="pp.session_also_station">额外再跑各站各自三步</span></label>
+                  </div>
+                  <div class="pp-actions">
+                    <button type="button" class="primary" id="btnPpSessionMerge" data-i18n="pp.session_merge">联机后处理（同单站三步）</button>
+                    <span class="hint" id="ppSessionHint"></span>
+                  </div>
+                  <pre id="ppSessionLog" data-i18n="pp.log_idle">（尚未运行）</pre>
+                </div>
               </div>
               <div class="pp-zone pp-zone-run" aria-labelledby="ppZoneRunAll">
                 <h2 id="ppZoneRunAll" data-i18n="pp.run_all_title">一键三步</h2>
@@ -3623,6 +3716,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <span class="settings-nav-label" data-i18n="settings.tabs.sensors.label">传感器</span>
             <span class="settings-nav-hint" data-i18n="settings.tabs.sensors.hint">sensors-view 嵌入地址</span>
           </button>
+          <button type="button" class="settings-nav-item" id="settingsNavPreview" data-settings-tab="preview">
+            <span class="settings-nav-label" data-i18n="settings.tabs.preview.label">预览软件</span>
+            <span class="settings-nav-hint" data-i18n="settings.tabs.preview.hint">后端启动地址</span>
+          </button>
           <button type="button" class="settings-nav-item" id="settingsNavAuth" data-settings-tab="auth">
             <span class="settings-nav-label" data-i18n="settings.tabs.auth.label">鉴权</span>
             <span class="settings-nav-hint" data-i18n="settings.tabs.auth.hint">会话与退出</span>
@@ -3740,6 +3837,28 @@ PREVIEW_HTML = """<!DOCTYPE html>
                 </div>
                 <p class="settings-sensors-saved" id="settingsSensorsSaved" hidden data-i18n="settings.sensors.saved">已保存到本机</p>
                 <p class="settings-sensors-hint" data-i18n="settings.sensors.unreachableHint">地址不可达时，「传感器状态」入口会置灰，无法打开。</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="settings-panel" id="settingsPanelPreview" data-settings-panel="preview" role="tabpanel">
+          <h3 class="settings-panel-title" data-i18n="settings.tabs.preview.label">预览软件</h3>
+          <div class="settings-row settings-row-stack">
+            <div class="settings-row-text">
+              <div class="settings-row-title">
+                <span data-i18n="settings.preview.url">后端 / 前端地址</span>
+                <span class="settings-badge" data-i18n="common.live">实时</span>
+              </div>
+              <p class="settings-row-desc" data-i18n="settings.preview.urlDesc">「打开预览软件」会先在此地址启动 webrtc-preview 后端（若未运行），再打开浏览器前端。默认 http://127.0.0.1:7050/；也可在 DCS YAML runtime.preview_app_url 或环境变量 WEBRTC_PREVIEW_URL 配置。</p>
+            </div>
+            <div class="settings-row-control">
+              <div class="settings-sensors-control">
+                <input type="url" id="settingsPreviewAppUrl" class="settings-users-input" data-i18n-placeholder="settings.preview.urlPlaceholder" placeholder="http://127.0.0.1:7050/" spellcheck="false" autocomplete="off" />
+                <div class="settings-sensors-meta">
+                  <span class="settings-sensors-status" id="settingsPreviewStatus"></span>
+                  <button type="button" class="settings-ghost-btn settings-sensors-ping" id="btnSettingsPreviewPing" data-i18n="settings.preview.ping">探测后端</button>
+                </div>
+                <p class="settings-sensors-saved" id="settingsPreviewSaved" hidden data-i18n="settings.preview.saved">已保存到本机</p>
               </div>
             </div>
           </div>
@@ -4096,17 +4215,132 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     if (webrtcConnectBtn) webrtcConnectBtn.addEventListener('click', () => { webrtcConnect(); });
     if (webrtcDisconnectBtn) webrtcDisconnectBtn.addEventListener('click', () => { webrtcDisconnect(); });
-    async function openPreviewApp() {
+    const LS_PREVIEW_APP_URL = 'dcs.previewAppUrl';
+    function readPreviewAppUrlOverride() {
+      const fromInput = (document.getElementById('settingsPreviewAppUrl')
+        && document.getElementById('settingsPreviewAppUrl').value
+        || '').trim();
+      if (fromInput) return fromInput;
       try {
-        const r = await fetch('/api/preview/open-url', { credentials: 'same-origin', cache: 'no-store' });
+        return (localStorage.getItem(LS_PREVIEW_APP_URL) || '').trim();
+      } catch (_) {
+        return '';
+      }
+    }
+    function savePreviewAppUrlOverride(url) {
+      const v = (url || '').trim();
+      try {
+        if (v) localStorage.setItem(LS_PREVIEW_APP_URL, v);
+        else localStorage.removeItem(LS_PREVIEW_APP_URL);
+      } catch (_) {}
+      const el = document.getElementById('settingsPreviewAppUrl');
+      if (el && document.activeElement !== el) el.value = v;
+      const saved = document.getElementById('settingsPreviewSaved');
+      if (saved) {
+        saved.hidden = false;
+        setTimeout(() => { if (saved) saved.hidden = true; }, 1600);
+      }
+    }
+    async function pingPreviewBackend() {
+      const statusEl = document.getElementById('settingsPreviewStatus');
+      if (statusEl) {
+        statusEl.textContent = t('settings.preview.statusChecking');
+        statusEl.className = 'settings-sensors-status';
+      }
+      try {
+        const q = encodeURIComponent(readPreviewAppUrlOverride() || '');
+        const r = await fetch('/api/preview/backend-status?url=' + q, {
+          credentials: 'same-origin',
+          cache: 'no-store',
+        });
         const j = await r.json();
-        if (!j || !j.ok || !j.open_url) {
-          alert(t('header.open_preview_fail', { error: (j && j.error) || ('HTTP ' + r.status) }));
+        if (statusEl) {
+          const ok = !!(j && j.ok && j.healthy);
+          statusEl.textContent = ok ? t('settings.preview.statusOk') : t('settings.preview.statusFail');
+          statusEl.className = 'settings-sensors-status'
+            + (ok ? ' settings-sensors-status-ok' : ' settings-sensors-status-fail');
+        }
+        if (j && j.preview_app_base) {
+          const el = document.getElementById('settingsPreviewAppUrl');
+          if (el && !el.value.trim()) el.value = j.preview_app_base;
+        }
+        return j;
+      } catch (e) {
+        if (statusEl) {
+          statusEl.textContent = t('settings.preview.statusFail');
+          statusEl.className = 'settings-sensors-status settings-sensors-status-fail';
+        }
+        return { ok: false, error: String(e) };
+      }
+    }
+    async function waitPreviewHealthyClient(baseUrl, timeoutMs) {
+      const deadline = Date.now() + (timeoutMs || 10000);
+      const q = encodeURIComponent(baseUrl || '');
+      while (Date.now() < deadline) {
+        try {
+          const r = await fetch('/api/preview/backend-status?url=' + q, {
+            credentials: 'same-origin',
+            cache: 'no-store',
+          });
+          const j = await r.json();
+          if (j && j.healthy) return true;
+        } catch (_) {}
+        await new Promise((res) => setTimeout(res, 250));
+      }
+      return false;
+    }
+    async function openPreviewApp() {
+      const btn = btnOpenPreviewApp || webrtcOpenAppBtn;
+      const prevLabel = btn ? btn.textContent : '';
+      try {
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = t('header.open_preview_starting');
+        }
+        const override = readPreviewAppUrlOverride();
+        const ac = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        const timer = ac ? setTimeout(() => ac.abort(), 20000) : null;
+        let r;
+        try {
+          r = await fetch('/api/preview/open', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            cache: 'no-store',
+            signal: ac ? ac.signal : undefined,
+            body: JSON.stringify({
+              preview_app_url: override || null,
+              ensure_backend: true,
+            }),
+          });
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+        const j = await r.json();
+        const openUrl = j && j.open_url;
+        const base = (j && j.preview_app_base) || override || '';
+        if (base) savePreviewAppUrlOverride(base);
+        if (j && j.ok && openUrl) {
+          window.open(String(openUrl), '_blank', 'noopener,noreferrer');
           return;
         }
-        window.open(String(j.open_url), '_blank', 'noopener,noreferrer');
+        // Server spawn timed out / failed — one short client-side poll, then open or error.
+        if (openUrl && base) {
+          const ready = await waitPreviewHealthyClient(base, 6000);
+          if (ready) {
+            window.open(String(openUrl), '_blank', 'noopener,noreferrer');
+            return;
+          }
+        }
+        const err = (j && j.error) || (j && j.backend && j.backend.error) || ('HTTP ' + r.status);
+        alert(t('header.open_preview_fail', { error: err }));
       } catch (e) {
-        alert(t('header.open_preview_fail', { error: String(e) }));
+        alert(t('header.open_preview_fail', { error: String(e && e.name === 'AbortError' ? t('header.open_preview_timeout') : e) }));
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = prevLabel || t('header.open_preview');
+        }
       }
     }
     const btnOpenPreviewApp = document.getElementById('btnOpenPreviewApp');
@@ -7635,6 +7869,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const bootBannerErr = document.getElementById('bootBannerErr');
     const ppEpisode = document.getElementById('ppEpisode');
     const ppEpisodeSelect = document.getElementById('ppEpisodeSelect');
+    const ppSessionSelect = document.getElementById('ppSessionSelect');
+    const ppSessionSaveDir = document.getElementById('ppSessionSaveDir');
+    const ppSessionHealth = document.getElementById('ppSessionHealth');
+    const ppSessionHint = document.getElementById('ppSessionHint');
+    const ppSessionLog = document.getElementById('ppSessionLog');
+    const ppSessionAlsoPerStation = document.getElementById('ppSessionAlsoPerStation');
     const ppAlign = document.getElementById('ppAlign');
     const ppAlignClock = document.getElementById('ppAlignClock');
     const ppPrimaryCamera = document.getElementById('ppPrimaryCamera');
@@ -8193,6 +8433,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const settingsNavLanguage = document.getElementById('settingsNavLanguage');
     const settingsNavInfer = document.getElementById('settingsNavInfer');
     const settingsNavSensors = document.getElementById('settingsNavSensors');
+    const settingsNavPreview = document.getElementById('settingsNavPreview');
     const settingsNavAuth = document.getElementById('settingsNavAuth');
     const settingsNavConfig = document.getElementById('settingsNavConfig');
     const settingsNavUsers = document.getElementById('settingsNavUsers');
@@ -8200,6 +8441,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const settingsPanelLanguage = document.getElementById('settingsPanelLanguage');
     const settingsPanelInfer = document.getElementById('settingsPanelInfer');
     const settingsPanelSensors = document.getElementById('settingsPanelSensors');
+    const settingsPanelPreview = document.getElementById('settingsPanelPreview');
     const settingsTcpMass = document.getElementById('settingsTcpMass');
     const settingsTcpMassVal = document.getElementById('settingsTcpMassVal');
     const settingsPanelAuth = document.getElementById('settingsPanelAuth');
@@ -8249,13 +8491,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
 
     function switchSettingsTab(name) {
-      const allowed = { appearance: 1, language: 1, infer: 1, sensors: 1, auth: 1, config: 1, users: 1 };
+      const allowed = { appearance: 1, language: 1, infer: 1, sensors: 1, preview: 1, auth: 1, config: 1, users: 1 };
       const which = allowed[name] ? name : 'appearance';
       const navs = {
         appearance: settingsNavAppearance,
         language: settingsNavLanguage,
         infer: settingsNavInfer,
         sensors: settingsNavSensors,
+        preview: settingsNavPreview,
         auth: settingsNavAuth,
         config: settingsNavConfig,
         users: settingsNavUsers,
@@ -8265,6 +8508,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         language: settingsPanelLanguage,
         infer: settingsPanelInfer,
         sensors: settingsPanelSensors,
+        preview: settingsPanelPreview,
         auth: settingsPanelAuth,
         config: settingsPanelConfig,
         users: settingsPanelUsers,
@@ -8750,8 +8994,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
             : (target === 'packInput' ? 'pathPicker.titlePackInput'
               : (target === 'packOutput' ? 'pathPicker.titlePackOutput'
                 : (target === 'batchRoot' ? 'pathPicker.titleBatchRoot'
-                  : (target === 'ratePolicy' ? 'pathPicker.titleRatePolicy'
-                    : (target === 'rateSave' ? 'pathPicker.titleRateSave' : 'pathPicker.title'))))))
+                  : (target === 'sessionSaveDir' ? 'pathPicker.titleSessionSaveDir'
+                    : (target === 'ratePolicy' ? 'pathPicker.titleRatePolicy'
+                      : (target === 'rateSave' ? 'pathPicker.titleRateSave' : 'pathPicker.title')))))))
       );
       await ensureSettingsRoots();
       let seed = opts.seed;
@@ -8766,6 +9011,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
           seed = (ppPackOutput && ppPackOutput.value) || '';
         } else if (target === 'batchRoot') {
           seed = (ppBatchRoot && ppBatchRoot.value) || '';
+        } else if (target === 'sessionSaveDir') {
+          seed = (ppSessionSaveDir && ppSessionSaveDir.value) || '';
         } else if (target === 'ratePolicy') {
           seed = (ppRatePolicy && ppRatePolicy.value) || '';
         } else if (target === 'rateSave') {
@@ -8959,6 +9206,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
         syncSensorsEmbedStatusUi();
       });
     }
+    if (settingsNavPreview) {
+      settingsNavPreview.addEventListener('click', () => {
+        switchSettingsTab('preview');
+        pingPreviewBackend();
+      });
+    }
     if (settingsNavAuth) settingsNavAuth.addEventListener('click', () => switchSettingsTab('auth'));
     if (settingsNavConfig) {
       settingsNavConfig.addEventListener('click', async () => {
@@ -8991,6 +9244,37 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const btnSettingsSensorsPing = document.getElementById('btnSettingsSensorsPing');
     if (btnSettingsSensorsPing) {
       btnSettingsSensorsPing.addEventListener('click', () => pingSensorsEmbed());
+    }
+    const settingsPreviewAppUrl = document.getElementById('settingsPreviewAppUrl');
+    if (settingsPreviewAppUrl) {
+      try {
+        const savedPrev = (localStorage.getItem(LS_PREVIEW_APP_URL) || '').trim();
+        if (savedPrev) settingsPreviewAppUrl.value = savedPrev;
+      } catch (_) {}
+      if (!settingsPreviewAppUrl.value.trim()) {
+        fetch('/api/preview/backend-status', { credentials: 'same-origin', cache: 'no-store' })
+          .then((r) => r.json())
+          .then((j) => {
+            if (j && j.preview_app_base && settingsPreviewAppUrl && !settingsPreviewAppUrl.value.trim()) {
+              settingsPreviewAppUrl.value = j.preview_app_base;
+            }
+          })
+          .catch(() => {});
+      }
+      settingsPreviewAppUrl.addEventListener('change', () => {
+        savePreviewAppUrlOverride(settingsPreviewAppUrl.value);
+      });
+      settingsPreviewAppUrl.addEventListener('blur', () => {
+        savePreviewAppUrlOverride(settingsPreviewAppUrl.value);
+      });
+    }
+    const btnSettingsPreviewPing = document.getElementById('btnSettingsPreviewPing');
+    if (btnSettingsPreviewPing) {
+      btnSettingsPreviewPing.addEventListener('click', () => {
+        const el = document.getElementById('settingsPreviewAppUrl');
+        if (el) savePreviewAppUrlOverride(el.value);
+        pingPreviewBackend();
+      });
     }
     document.querySelectorAll('#settingsThemeSeg [data-theme-pref]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -9134,6 +9418,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
           if (ppBatchRoot) {
             ppBatchRoot.value = val;
             savePpForm();
+          }
+        } else if (target === 'sessionSaveDir') {
+          if (ppSessionSaveDir) {
+            ppSessionSaveDir.value = val;
+            savePpForm();
+            refreshSessionList();
           }
         } else if (target === 'ratePolicy') {
           if (ppRatePolicy) {
@@ -10353,7 +10643,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
         pack_allow_invalid: !!(ppPackAllowInvalid && ppPackAllowInvalid.checked),
         batch_root: (ppBatchRoot && ppBatchRoot.value || '').trim() || '',
         batch_overwrite: !(ppBatchOverwrite && ppBatchOverwrite.checked === false),
+        session_save_dir: (ppSessionSaveDir && ppSessionSaveDir.value || '').trim() || '',
       };
+    }
+
+    function getSessionSaveDir() {
+      return (ppSessionSaveDir && ppSessionSaveDir.value || '').trim();
+    }
+
+    function sessionSaveDirQuery() {
+      const root = getSessionSaveDir();
+      return root ? ('&save_dir=' + encodeURIComponent(root)) : '';
     }
 
     function getPpTcpXyz() {
@@ -10444,16 +10744,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
       window._ppSavedPrimaryCamera =
         src.primary_camera || (defaults && defaults.primary_camera) || 'cam-middle';
       fillPrimaryCameraSelect([], window._ppSavedPrimaryCamera);
-      // Prefer launch-pwd camera-map from server; skip stale AppData/user-data seeds.
+      // Prefer launch-pwd camera-map from server; skip stale seeds (AppData /
+      // other-machine Downloads\\...\\_internal packaged paths).
       let map = src.camera_map || '';
       const defMap = (defaults && defaults.camera_map) || '';
       if (defMap) {
         const norm = String(map).replace(/\\\\/g, '/');
         const staleUser =
-          /sensors-dcs\/configs\/hik_camera_map\.yaml$/i.test(norm) &&
+          /hik_camera_map\.yaml$/i.test(norm) &&
           (/\/\.local\/share\//i.test(norm) ||
-            /\/AppData\/Roaming\//i.test(norm) ||
-            /\/Application Support\//i.test(norm));
+            /\/AppData\/(Roaming|Local)\//i.test(norm) ||
+            /\/Application Support\//i.test(norm) ||
+            /\/Downloads\/.*sensors-dcs/i.test(norm) ||
+            /\/_internal\/configs\//i.test(norm) ||
+            /\/Users\/Administrator\//i.test(norm));
         if (!map || staleUser) map = defMap;
       }
       if (map) ppCameraMap.value = map;
@@ -10474,11 +10778,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (ppBatchOverwrite && src.batch_overwrite != null) {
         ppBatchOverwrite.checked = !!src.batch_overwrite;
       }
+      if (ppSessionSaveDir) {
+        const savedRoot = (src.session_save_dir || '').trim();
+        const defRoot = (defaults && defaults.save_dir) || '';
+        ppSessionSaveDir.value = savedRoot || defRoot || '';
+      }
       syncRateSavePathFromName();
       refreshRatePolicySummary();
     }
 
-    [ppAlign, ppAlignClock, ppPrimaryCamera, ppMaster, ppRatePolicy, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppTcpX, ppTcpY, ppTcpZ, ppAllowInvalid, ppEpisode, ppPackInput, ppPackOutput, ppPackAllowInvalid, ppBatchRoot, ppBatchOverwrite].forEach((el) => {
+    [ppAlign, ppAlignClock, ppPrimaryCamera, ppMaster, ppRatePolicy, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppTcpX, ppTcpY, ppTcpZ, ppAllowInvalid, ppEpisode, ppPackInput, ppPackOutput, ppPackAllowInvalid, ppBatchRoot, ppBatchOverwrite, ppSessionSaveDir].forEach((el) => {
       if (!el) return;
       el.addEventListener('change', savePpForm);
       el.addEventListener('blur', savePpForm);
@@ -10525,6 +10834,155 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (ppEpisodeSelect.value !== cur) ppEpisodeSelect.value = '';
       }
       fillRateEpOverlay(episodes || []);
+    }
+
+    function fillSessionSelect(sessions) {
+      if (!ppSessionSelect) return;
+      const cur = ppSessionSelect.value;
+      ppSessionSelect.innerHTML = '';
+      const opt0 = document.createElement('option');
+      opt0.value = '';
+      opt0.textContent = sessions && sessions.length ? t('pp.session_select') : t('pp.session_none');
+      ppSessionSelect.appendChild(opt0);
+      (sessions || []).forEach((s) => {
+        const o = document.createElement('option');
+        o.value = s.session_id;
+        let label = (s.session_id || '').slice(0, 8);
+        if (s.episode_index != null) label += ' · ep' + String(s.episode_index).padStart(5, '0');
+        if (s.participant_count != null) label += ' · n=' + s.participant_count;
+        if (s.has_merged) label += ' · merged';
+        o.textContent = label;
+        ppSessionSelect.appendChild(o);
+      });
+      if (cur) {
+        ppSessionSelect.value = cur;
+        if (ppSessionSelect.value !== cur) ppSessionSelect.value = '';
+      }
+    }
+
+    async function refreshSessionList() {
+      try {
+        const q = getSessionSaveDir();
+        const url = '/api/postprocess/sessions' + (q ? ('?save_dir=' + encodeURIComponent(q)) : '');
+        const j = await fetch(url, { credentials: 'same-origin' }).then((r) => r.json());
+        if (j && j.ok) {
+          fillSessionSelect(j.sessions || []);
+          if (ppSessionSaveDir && j.save_dir && !getSessionSaveDir()) {
+            ppSessionSaveDir.value = j.save_dir;
+          }
+        }
+        if (ppSessionSelect && ppSessionSelect.value) await inspectSelectedSession(ppSessionSelect.value);
+      } catch (_) {}
+    }
+
+    async function inspectSelectedSession(sessionId) {
+      if (!ppSessionHealth) return null;
+      const sid = (sessionId || '').trim();
+      if (!sid) {
+        ppSessionHealth.textContent = t('pp.session_health_idle');
+        return null;
+      }
+      try {
+        const j = await fetch(
+          '/api/postprocess/session?session_id=' + encodeURIComponent(sid) + sessionSaveDirQuery(),
+          { credentials: 'same-origin' }
+        ).then((r) => r.json());
+        if (!j.ok) {
+          ppSessionHealth.textContent = j.error || t('pp.session_health_bad');
+          return j;
+        }
+        const rows = ((j.health && j.health.participants) || []).map((p) => {
+          const mark = p.ok ? 'OK' : 'MISSING';
+          const found = p.path || '';
+          const expect = (p.convention_paths && p.convention_paths[0])
+            || p.expected_episode_path
+            || '—';
+          if (p.ok) return mark + '  ' + (p.station_id || '?') + '  ' + found;
+          return mark + '  ' + (p.station_id || '?') + '  put→ ' + expect;
+        });
+        const head = (j.all_present ? t('pp.session_health_ok') : t('pp.session_health_missing'))
+          + '  ' + sid.slice(0, 8)
+          + (j.doc && j.doc.episode_index != null ? '  ep' + String(j.doc.episode_index).padStart(5, '0') : '');
+        const hint = j.all_present ? '' : ('\\n' + t('pp.session_copy_hint'));
+        ppSessionHealth.textContent = head + '\\n' + rows.join('\\n') + hint;
+        return j;
+      } catch (e) {
+        ppSessionHealth.textContent = String(e);
+        return null;
+      }
+    }
+
+    async function runSessionMerge() {
+      if (!ppSessionSelect || !ppSessionSelect.value) {
+        if (ppSessionHint) ppSessionHint.textContent = t('pp.session_need');
+        return;
+      }
+      const body = {
+        session_id: ppSessionSelect.value,
+        save_dir: getSessionSaveDir() || null,
+        max_match_dt: ppMaxDt && ppMaxDt.value ? Number(ppMaxDt.value) : 0.033,
+        master_agent: (ppMaster && ppMaster.value) || null,
+        also_per_station: !!(ppSessionAlsoPerStation && ppSessionAlsoPerStation.checked),
+        align: (ppAlign && ppAlign.value) || 'asof',
+        master: (ppMaster && ppMaster.value) || 'cam-left',
+        master_hz: null,
+        rate_policy: (ppRatePolicy && ppRatePolicy.value) || null,
+        align_clock: (ppAlignClock && ppAlignClock.value) || 'wall',
+        primary_camera: (ppPrimaryCamera && ppPrimaryCamera.value) || 'cam-middle',
+        require: (ppRequire && ppRequire.value) || '',
+        trim: (ppTrim && ppTrim.value) || 'both',
+        materialize: !!(ppMaterialize && ppMaterialize.checked),
+        // Empty/null → server resolves configs/hik_camera_map.yaml (avoids stale
+        // Downloads\\...\\_internal paths from packaged builds).
+        // Same field as Step 3 #ppCameraMap — session zone does not duplicate the control.
+        camera_map: (ppCameraMap && ppCameraMap.value && String(ppCameraMap.value).trim()) || null,
+        allow_invalid: !!(ppAllowInvalid && ppAllowInvalid.checked),
+      };
+      setPpBusy(true, t('pp.session_running'));
+      if (ppSessionLog) ppSessionLog.textContent = 'running session postprocess…\\n' + JSON.stringify(body, null, 2);
+      try {
+        const r = await fetch('/api/postprocess/session/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify(body),
+        });
+        const raw = await r.text();
+        let j;
+        try {
+          j = raw ? JSON.parse(raw) : { ok: false, error: 'empty response' };
+        } catch (_) {
+          j = {
+            ok: false,
+            error: 'HTTP ' + r.status + ' non-JSON: ' + String(raw || '').slice(0, 400),
+          };
+        }
+        if (ppSessionLog) ppSessionLog.textContent = JSON.stringify(j, null, 2);
+        if (ppSessionHint) {
+          ppSessionHint.textContent = j.ok
+            ? t('pp.session_done', {
+              episode: (j.episode || (j.federate && j.federate.episode_path) || '').toString(),
+            })
+            : t('pp.session_fail', { error: j.error || ('HTTP ' + r.status) });
+        }
+        // Step3 (hik/map) may fail while filter already succeeded — still show align figure/score.
+        try {
+          const post = j.postprocess || j;
+          showPpAlignFigure({
+            ok: !!(post && post.ok),
+            episode: j.episode || (post && post.episode) || '',
+            results: (post && post.results) || j.results || [],
+          });
+        } catch (_) {}
+        try { refreshSessionList(); } catch (_) {}
+        return j;
+      } catch (e) {
+        if (ppSessionHint) ppSessionHint.textContent = String(e);
+        if (ppSessionLog) ppSessionLog.textContent = String(e);
+        return { ok: false, error: String(e) };
+      } finally {
+        setPpBusy(false);
+      }
     }
 
     function isPostTabActive() {
@@ -10601,6 +11059,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const j = await fetch('/api/postprocess/defaults').then((r) => r.json());
         if (j.ok) {
           fillEpisodeSelect(j.episodes || []);
+          if (ppSessionSaveDir && !getSessionSaveDir() && j.save_dir) {
+            ppSessionSaveDir.value = j.save_dir;
+          }
+          // Prefer explicit session root (may differ from recorder save_dir).
+          if (getSessionSaveDir()) refreshSessionList();
+          else fillSessionSelect(j.sessions || []);
           if (!ppCameraMap.value && j.camera_map) ppCameraMap.value = j.camera_map;
         }
       } catch (e) {}
@@ -10626,7 +11090,33 @@ PREVIEW_HTML = """<!DOCTYPE html>
         fillMasterSelect([]);
       }
     });
-    document.getElementById('btnPpRefresh').addEventListener('click', () => refreshEpisodeList());
+    document.getElementById('btnPpRefresh').addEventListener('click', () => {
+      refreshEpisodeList();
+      refreshSessionList();
+    });
+    if (ppSessionSelect) {
+      ppSessionSelect.addEventListener('change', () => {
+        inspectSelectedSession(ppSessionSelect.value);
+      });
+    }
+    if (ppSessionSaveDir) {
+      ppSessionSaveDir.addEventListener('change', () => {
+        savePpForm();
+        refreshSessionList();
+      });
+    }
+    const btnPpSessionRefresh = document.getElementById('btnPpSessionRefresh');
+    if (btnPpSessionRefresh) btnPpSessionRefresh.addEventListener('click', () => refreshSessionList());
+    const btnPpSessionMerge = document.getElementById('btnPpSessionMerge');
+    if (btnPpSessionMerge) btnPpSessionMerge.addEventListener('click', () => runSessionMerge());
+    const btnPpBrowseSessionSaveDir = document.getElementById('btnPpBrowseSessionSaveDir');
+    if (btnPpBrowseSessionSaveDir) {
+      btnPpBrowseSessionSaveDir.addEventListener('click', () => openPathPicker({
+        target: 'sessionSaveDir',
+        pathKind: 'dir',
+        titleKey: 'pathPicker.titleSessionSaveDir',
+      }));
+    }
     const btnPpBrowseEpisode = document.getElementById('btnPpBrowseEpisode');
     if (btnPpBrowseEpisode) {
       btnPpBrowseEpisode.addEventListener('click', () => openPathPicker({ target: 'episode', pathKind: 'dir' }));
@@ -10671,7 +11161,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
         'btnPpBrowsePackInput', 'btnPpBrowsePackOutput',
         'btnPpBatchRun', 'btnPpBrowseBatchRoot',
         'btnPpBrowseRatePolicy', 'btnPpBrowseRateSave',
-        'btnPpRateSave', 'btnPpRateApply'].forEach((id) => {
+        'btnPpRateSave', 'btnPpRateApply',
+        'btnPpSessionRefresh', 'btnPpSessionMerge'].forEach((id) => {
         const b = document.getElementById(id);
         if (b) b.disabled = !!on;
       });
@@ -11077,6 +11568,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (!j.ok) return;
       loadPpForm(j);
       fillEpisodeSelect(j.episodes || []);
+      fillSessionSelect(j.sessions || []);
       fillMasterSelect([]);
       // Episode path stays empty until the user selects one on Postprocess.
     }).catch(() => {
@@ -12959,7 +13451,7 @@ def create_viz_app(
     webrtc_preview_offer: Callable[..., dict[str, Any]] | None = None,
     preview_catalog_fn: Callable[[], dict[str, Any]] | None = None,
     preview_catalog_local_fn: Callable[[], dict[str, Any]] | None = None,
-    preview_open_url_fn: Callable[[], dict[str, Any]] | None = None,
+    preview_open_url_fn: Callable[..., dict[str, Any]] | None = None,
 ) -> FastAPI:
     from sensors_dcs.auth_session import (
         auth_enabled,
@@ -13004,10 +13496,14 @@ def create_viz_app(
         return boot_error
 
     def _gello_collect_ready(agents: Any) -> tuple[bool, str | None]:
-        """Collect requires at least one kind=gello agent (not optional gello_reinforce).
+        """Collect requires at least one kind=gello agent on master stations.
 
-        Missing gello locks Collect. Open/connect failure is already a boot_error.
+        Slave stations skip this gate: Collect is Peer-driven and often camera-only
+        (no local gello). Missing gello still locks Collect on master.
+        Open/connect failure is already a boot_error.
         """
+        if _station_is_slave():
+            return True, None
         if not isinstance(agents, dict):
             return False, "no gello agent — Collect requires kind=gello"
         for st in agents.values():
@@ -13715,6 +14211,94 @@ def create_viz_app(
         finally:
             _pp_lock.release()
 
+    def _pp_save_dir(override: str | None = None) -> str | None:
+        if override and str(override).strip():
+            return str(Path(str(override).strip()).expanduser().resolve())
+        save_dir = postprocess_save_dir
+        if recorder is not None:
+            try:
+                save_dir = recorder.status().get("save_dir") or save_dir
+            except Exception:  # noqa: BLE001
+                pass
+        if save_dir:
+            return str(Path(str(save_dir)).expanduser().resolve())
+        return None
+
+    @app.get("/api/postprocess/sessions")
+    async def postprocess_sessions(save_dir: str = "") -> dict[str, Any]:
+        from sensors_dcs.postprocess_service import list_sessions
+
+        root = _pp_save_dir(save_dir or None)
+        return {"ok": True, "save_dir": root, "sessions": list_sessions(root)}
+
+    @app.get("/api/postprocess/session")
+    async def postprocess_session_get(
+        session_id: str = "", save_dir: str = ""
+    ) -> dict[str, Any]:
+        from sensors_dcs.postprocess_service import inspect_session
+
+        root = _pp_save_dir(save_dir or None)
+        return inspect_session(save_dir=root, session_id=session_id)
+
+    @app.post("/api/postprocess/session/run")
+    async def postprocess_session_run(req: PostprocessSessionBody) -> dict[str, Any]:
+        root = _pp_save_dir(req.save_dir)
+        if not root:
+            return {"ok": False, "error": "save_dir unavailable"}
+        if not _pp_lock.acquire(blocking=False):
+            return {"ok": False, "error": "another postprocess job is running"}
+        try:
+            try:
+                from sensors_dcs.postprocess_service import run_postprocess_session
+            except Exception as e:  # noqa: BLE001
+                return {
+                    "ok": False,
+                    "error": (
+                        f"session postprocess unavailable ({type(e).__name__}: {e}). "
+                        "If using a packaged desktop build, restart from updated source "
+                        "or rebuild so session_federate is included."
+                    ),
+                }
+
+            def _run() -> dict[str, Any]:
+                try:
+                    return run_postprocess_session(
+                        save_dir=root,
+                        session_id=req.session_id,
+                        remaps=req.remaps,
+                        master_station_id=req.master_station_id,
+                        master_agent=req.master_agent,
+                        max_match_dt=req.max_match_dt,
+                        also_per_station=bool(req.also_per_station),
+                        steps=req.steps,
+                        align=req.align,
+                        master=req.master,
+                        master_hz=req.master_hz,
+                        rate_policy=req.rate_policy,
+                        align_clock=req.align_clock,
+                        primary_camera=req.primary_camera,
+                        require=req.require,
+                        trim=req.trim,
+                        materialize=req.materialize,
+                        camera_map=req.camera_map,
+                        allow_invalid=req.allow_invalid,
+                        tcp_xyz=req.tcp_xyz,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    import traceback
+
+                    return {
+                        "ok": False,
+                        "error": f"{type(e).__name__}: {e}",
+                        "traceback": traceback.format_exc(),
+                        "session_id": req.session_id,
+                        "save_dir": root,
+                    }
+
+            return await asyncio.to_thread(_run)
+        finally:
+            _pp_lock.release()
+
     @app.post("/api/gripper/command")
     async def gripper_cmd(req: GripperCommandBody) -> dict[str, Any]:
         if _station_is_slave():
@@ -13880,7 +14464,44 @@ def create_viz_app(
     async def preview_open_url_get() -> dict[str, Any]:
         if preview_open_url_fn is None:
             return {"ok": False, "error": "preview open-url unavailable"}
-        return await asyncio.to_thread(preview_open_url_fn)
+        # Legacy: URL only (no spawn). Prefer POST /api/preview/open.
+        return await asyncio.to_thread(preview_open_url_fn, ensure_backend=False)
+
+    @app.get("/api/preview/backend-status")
+    async def preview_backend_status_get(url: str = "") -> dict[str, Any]:
+        from sensors_dcs.preview_launch import (
+            health_url,
+            probe_preview_health,
+            resolve_preview_app_url,
+        )
+
+        runtime_url = None
+        if preview_open_url_fn is not None:
+            try:
+                hint = await asyncio.to_thread(
+                    preview_open_url_fn, preview_app_url=None, ensure_backend=False
+                )
+                runtime_url = (hint or {}).get("preview_app_base")
+            except Exception:  # noqa: BLE001
+                runtime_url = None
+        base = resolve_preview_app_url(url or None, runtime_url=runtime_url)
+        healthy = await asyncio.to_thread(probe_preview_health, base)
+        return {
+            "ok": True,
+            "preview_app_base": base,
+            "health_url": health_url(base),
+            "healthy": bool(healthy),
+        }
+
+    @app.post("/api/preview/open")
+    async def preview_open_post(req: PreviewOpenBody) -> dict[str, Any]:
+        if preview_open_url_fn is None:
+            return {"ok": False, "error": "preview open unavailable"}
+        return await asyncio.to_thread(
+            preview_open_url_fn,
+            preview_app_url=req.preview_app_url,
+            ensure_backend=bool(req.ensure_backend),
+        )
 
     @app.post("/api/arm/command")
     async def arm_cmd(req: ArmCommandBody) -> dict[str, Any]:
