@@ -1,9 +1,9 @@
 # 数采能力量化指标 — 详细说明与开发计划（易 / 中）
 
 日期：2026-11-02  
-状态：E1–E4 已落地（E4：tags 录入 + `tag_vocab.yaml` 下拉 + metrics 按 tag 透视）；M1–M3 仍待开发  
+状态：E1–E4 + **M3** 已落地（M3：`coverage` 传感器/同步覆盖报表）；M1–M2 仍待开发  
 范围：`sensors-dcs` 采集/后处理 + 可选对接 `embody_model_eval` 离线门控  
-相关：[`pi05-infer-flywheel.md`](pi05-infer-flywheel.md) · [`filter-timeline.md`](filter-timeline.md) · [`station-multi-machine.md`](station-multi-machine.md) · [`session-gather.md`](session-gather.md)（从站 gather） · [`known-gaps.md`](known-gaps.md) · [`standard-export-step4.md`](standard-export-step4.md)（Step 4 主流格式）
+相关：[`pi05-infer-flywheel.md`](pi05-infer-flywheel.md) · [`filter-timeline.md`](filter-timeline.md) · [`sensor-coverage.md`](sensor-coverage.md)（M3 ↔ E4 术语） · [`station-multi-machine.md`](station-multi-machine.md) · [`session-gather.md`](session-gather.md)（从站 gather） · [`known-gaps.md`](known-gaps.md) · [`standard-export-step4.md`](standard-export-step4.md)（Step 4 主流格式）
 
 ---
 
@@ -335,11 +335,11 @@ near-miss：无真机接触传感时，用 **最小间隙 &lt; 阈值且未碰**
 
 #### 3.7 开发任务
 
-| ID | 任务 | 估时 |
-|----|------|------|
-| M3.1 | 从 `filter_meta.json` / `export_meta` / manifest 抽覆盖行 | 0.5–1d |
-| M3.2 | 并入 E3 summary（`coverage` 块） | 0.5d |
-| M3.3 | 文档：与 E4「场景覆盖」术语对照，避免混名 | 0.25d |
+| ID | 任务 | 估时 | 状态 |
+|----|------|------|------|
+| M3.1 | 从 `filter_meta.json` / `export_meta` / manifest 抽覆盖行 | 0.5–1d | ✅ `metrics/coverage.py` |
+| M3.2 | 并入 E3 summary（`coverage` 块） | 0.5d | ✅ aggregate + KPI UI 折叠表 |
+| M3.3 | 文档：与 E4「场景覆盖」术语对照，避免混名 | 0.25d | ✅ [`sensor-coverage.md`](sensor-coverage.md) |
 
 **验收：** 无 filter 的 episode 显示「未后处理」；有 filter 的给出 keep_rate 与缺失 agent 列表。
 
@@ -414,8 +414,9 @@ Week 4–5   M1 FT agent + grasp 启发（有硬件再启）
 | 停录 UX | `viz.py` Collect/Infer |
 | 写入 | `record.py` `_write_manifest` |
 | 干预 | `intervention_log.py` + runtime 打点 |
-| 汇总 | `sensors_dcs/metrics/` + `/api/metrics/summary`（含 E4 tag 透视） |
+| 汇总 | `sensors_dcs/metrics/` + `/api/metrics/summary`（含 E4 tag 透视 + M3 `coverage`） |
 | 标签词表 | `tag_vocab.py` + `configs/tag_vocab.yaml` + `/api/tag-vocab` |
+| 传感器覆盖 | `metrics/coverage.py` · [`sensor-coverage.md`](sensor-coverage.md) |
 | 抓取启发 | `sensors_dcs/export/grasp_heuristic.py`（名可调） |
 | 离线质量 | `export/quality/` + embody 适配器 |
 | 配置 | `runtime.require_task_outcome`；FT example YAML |
@@ -429,3 +430,4 @@ Week 4–5   M1 FT agent + grasp 启发（有硬件再启）
 | 2026-11-02 | 初稿：易 E1–E4、中 M1–M3 与排期 |
 | 2026-11-02 | E1 实现：`task_outcome`/`tags` 写入 manifest、停录弹窗、`sensors-dcs outcomes summary` |
 | 2026-11-03 | E4：词表 YAML/API/停录 datalist；metrics 按 object/env/task 透视与 KPI UI |
+| 2026-11-03 | M3：`coverage` 块（未后处理 / 滤波保留率 / 缺失 agent / 丢帧 / hw）；术语对照文档 |

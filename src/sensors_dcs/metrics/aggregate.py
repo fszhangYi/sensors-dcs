@@ -174,6 +174,7 @@ def aggregate_metrics(root: str | Path, *, write: bool = False) -> dict[str, Any
     n_with_env = 0
     n_with_object = 0
     n_untagged = 0
+    finalized_eps: list[Path] = []
 
     for ep in episodes:
         man = _read_json(ep / "manifest.json")
@@ -182,6 +183,7 @@ def aggregate_metrics(root: str | Path, *, write: bool = False) -> dict[str, Any
         if man.get("provisional"):
             continue
         n_final += 1
+        finalized_eps.append(ep)
         if man.get("valid") is True:
             n_valid += 1
         elif man.get("valid") is False:
@@ -314,6 +316,19 @@ def aggregate_metrics(root: str | Path, *, write: bool = False) -> dict[str, Any
     }
 
     out["kpis"] = kpis
+    # M3: sensor/timeline coverage (orthogonal to E4 tag_coverage / valid keep_rate)
+    try:
+        from sensors_dcs.metrics.coverage import build_coverage_block
+
+        out["coverage"] = build_coverage_block(finalized_eps)
+    except Exception as e:  # noqa: BLE001
+        out["coverage"] = {
+            "schema": "dcs_sensor_coverage_v1",
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+            "summary": {},
+            "episodes": [],
+        }
     if write:
         written = write_metrics_summary(base, out)
         out["written"] = written

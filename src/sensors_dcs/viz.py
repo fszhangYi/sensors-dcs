@@ -1721,7 +1721,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       font-variant-numeric: tabular-nums;
     }
     .pp-zone-metrics .pp-metrics-raw,
-    .pp-zone-metrics .pp-metrics-pivots {
+    .pp-zone-metrics .pp-metrics-pivots,
+    .pp-zone-metrics .pp-metrics-coverage {
       margin-top: 0.45rem;
       border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
       border-radius: 8px;
@@ -1729,7 +1730,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       overflow: hidden;
     }
     .pp-zone-metrics .pp-metrics-raw > summary,
-    .pp-zone-metrics .pp-metrics-pivots > summary {
+    .pp-zone-metrics .pp-metrics-pivots > summary,
+    .pp-zone-metrics .pp-metrics-coverage > summary {
       cursor: pointer;
       user-select: none;
       list-style: none;
@@ -1738,14 +1740,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
       color: var(--muted);
     }
     .pp-zone-metrics .pp-metrics-raw > summary::-webkit-details-marker,
-    .pp-zone-metrics .pp-metrics-pivots > summary::-webkit-details-marker { display: none; }
+    .pp-zone-metrics .pp-metrics-pivots > summary::-webkit-details-marker,
+    .pp-zone-metrics .pp-metrics-coverage > summary::-webkit-details-marker { display: none; }
     .pp-zone-metrics .pp-metrics-raw > summary::before,
-    .pp-zone-metrics .pp-metrics-pivots > summary::before {
+    .pp-zone-metrics .pp-metrics-pivots > summary::before,
+    .pp-zone-metrics .pp-metrics-coverage > summary::before {
       content: "▸ ";
       color: var(--accent, #3dd6c6);
     }
     .pp-zone-metrics .pp-metrics-raw[open] > summary::before,
-    .pp-zone-metrics .pp-metrics-pivots[open] > summary::before {
+    .pp-zone-metrics .pp-metrics-pivots[open] > summary::before,
+    .pp-zone-metrics .pp-metrics-coverage[open] > summary::before {
       content: "▾ ";
     }
     .pp-zone-metrics #ppMetricsLog {
@@ -3762,6 +3767,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <details class="pp-metrics-pivots" id="ppMetricsPivotsWrap" hidden>
               <summary data-i18n="pp.metrics_pivots_toggle">按标签透视（默认折叠）</summary>
               <div id="ppMetricsPivots" class="pp-metrics-pivots-body"></div>
+            </details>
+            <details class="pp-metrics-coverage" id="ppMetricsCoverageWrap" hidden>
+              <summary data-i18n="pp.metrics_coverage_toggle">传感器/同步覆盖（默认折叠）</summary>
+              <div id="ppMetricsCoverage" class="pp-metrics-pivots-body"></div>
             </details>
             <details class="pp-metrics-raw">
               <summary data-i18n="pp.metrics_raw_toggle">原始 JSON（默认折叠）</summary>
@@ -12058,6 +12067,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const ppMetricsHint = document.getElementById('ppMetricsHint');
     const ppMetricsPivots = document.getElementById('ppMetricsPivots');
     const ppMetricsPivotsWrap = document.getElementById('ppMetricsPivotsWrap');
+    const ppMetricsCoverage = document.getElementById('ppMetricsCoverage');
+    const ppMetricsCoverageWrap = document.getElementById('ppMetricsCoverageWrap');
     function _ppFmtRate(x) {
       if (x == null || !Number.isFinite(Number(x))) return '—';
       return (Number(x) * 100).toFixed(1) + '%';
@@ -12115,12 +12126,67 @@ PREVIEW_HTML = """<!DOCTYPE html>
         + _renderPivotTable(t('pp.metrics_by_task'), k.by_task_id || {});
       ppMetricsPivotsWrap.hidden = false;
     }
+    function _ppCoverageStatus(st) {
+      if (st === 'filtered') return t('pp.metrics_cov_filtered');
+      if (st === 'unprocessed') return t('pp.metrics_cov_unprocessed');
+      return st || '—';
+    }
+    function renderMetricsCoverage(j) {
+      if (!ppMetricsCoverage || !ppMetricsCoverageWrap) return;
+      const cov = (j && j.coverage) || {};
+      const sum = cov.summary || {};
+      const fkr = sum.filter_keep_rate || {};
+      const lines = [];
+      lines.push('<p class="pp-hint">' + _ppEsc(t('pp.metrics_coverage_note')) + '</p>');
+      lines.push('<p class="pp-hint">' + _ppEsc(t('pp.metrics_coverage_summary', {
+        filtered: sum.filtered != null ? sum.filtered : 0,
+        unprocessed: sum.unprocessed != null ? sum.unprocessed : 0,
+        alerts: sum.alert_count != null ? sum.alert_count : 0,
+        keep: _ppFmtRate(fkr.mean),
+      })) + '</p>');
+      const miss = sum.missing_agent_freq || {};
+      const missKeys = Object.keys(miss);
+      if (missKeys.length) {
+        lines.push('<p class="pp-hint">' + _ppEsc(t('pp.metrics_coverage_missing_freq') + ': '
+          + missKeys.slice(0, 8).map((k) => k + '=' + miss[k]).join(', ')) + '</p>');
+      }
+      const rows = Array.isArray(cov.episodes) ? cov.episodes : [];
+      if (!rows.length) {
+        lines.push('<p class="pp-hint">' + _ppEsc(t('pp.metrics_pivots_empty')) + '</p>');
+      } else {
+        const body = rows.map((r) => {
+          const missA = (r.missing_agents || []).join(',');
+          const alerts = (r.alerts || []).join(',');
+          return '<tr><td>' + _ppEsc(r.episode || '')
+            + '</td><td>' + _ppEsc(_ppCoverageStatus(r.status))
+            + '</td><td>' + _ppEsc(_ppFmtRate(r.filter_keep_rate))
+            + '</td><td>' + _ppEsc(missA || '—')
+            + '</td><td>' + _ppEsc(_ppFmtRate(r.drop_rate))
+            + '</td><td>' + _ppEsc(r.hw_coverage != null ? Number(r.hw_coverage).toFixed(2) : '—')
+            + '</td><td>' + _ppEsc(alerts || '—')
+            + '</td></tr>';
+        }).join('');
+        lines.push('<div class="pp-pivot-block"><h4>' + _ppEsc(t('pp.metrics_coverage_rows'))
+          + '</h4><table><thead><tr>'
+          + '<th>episode</th>'
+          + '<th>' + _ppEsc(t('pp.metrics_cov_status')) + '</th>'
+          + '<th>' + _ppEsc(t('pp.metrics_cov_filter_keep')) + '</th>'
+          + '<th>' + _ppEsc(t('pp.metrics_cov_missing')) + '</th>'
+          + '<th>' + _ppEsc(t('pp.metrics_cov_drop')) + '</th>'
+          + '<th>hw</th>'
+          + '<th>alerts</th>'
+          + '</tr></thead><tbody>' + body + '</tbody></table></div>');
+      }
+      ppMetricsCoverage.innerHTML = lines.join('');
+      ppMetricsCoverageWrap.hidden = false;
+    }
     function renderMetricsGrid(j) {
       if (!ppMetricsGrid) return;
       const k = (j && j.kpis) || {};
       const dur = k.duration_s || {};
       const aq = k.align_quality || {};
       const mode = k.by_mode || {};
+      const covSum = ((j && j.coverage) || {}).summary || {};
       const cells = [
         [t('pp.metrics.episodes'), k.episodes != null ? String(k.episodes) : '—'],
         [t('pp.metrics.keep_rate'), _ppFmtRate(k.keep_rate)],
@@ -12134,12 +12200,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
         [t('pp.metrics.sessions'), k.sessions != null ? String(k.sessions) : '—'],
         [t('pp.metrics.collect'), mode.collect != null ? String(mode.collect) : '—'],
         [t('pp.metrics.infer'), mode.infer != null ? String(mode.infer) : '—'],
+        [t('pp.metrics_cov_unprocessed'), covSum.unprocessed != null ? String(covSum.unprocessed) : '—'],
+        [t('pp.metrics_cov_alerts'), covSum.alert_count != null ? String(covSum.alert_count) : '—'],
       ];
       ppMetricsGrid.innerHTML = cells.map(([label, val]) => (
         '<div class="pp-metric"><span class="k">' + label + '</span><span class="v">' + val + '</span></div>'
       )).join('');
       ppMetricsGrid.hidden = false;
       renderMetricsPivots(j);
+      renderMetricsCoverage(j);
     }
     async function runMetricsSummary(opts) {
       opts = opts || {};
