@@ -2836,6 +2836,51 @@ PREVIEW_HTML = """<!DOCTYPE html>
       width: 100%; min-width: 0; padding: 0.35rem 0.5rem;
       border-radius: 8px; border: 1px solid var(--border); background: var(--input-bg); color: var(--text);
     }
+    .outcome-modal .outcome-suggest-wrap {
+      position: relative;
+      min-width: 0;
+    }
+    .outcome-modal .outcome-suggest-list {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: calc(100% + 0.2rem);
+      z-index: 6;
+      margin: 0;
+      padding: 0.25rem;
+      list-style: none;
+      max-height: 10.5rem;
+      overflow: auto;
+      border-radius: 10px;
+      border: 1px solid color-mix(in srgb, var(--border) 88%, var(--accent));
+      background: color-mix(in srgb, var(--surface, var(--panel)) 94%, #000);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+    .outcome-modal .outcome-suggest-list[hidden] { display: none !important; }
+    .outcome-modal .outcome-suggest-list li {
+      margin: 0;
+      padding: 0.38rem 0.55rem;
+      border-radius: 7px;
+      font-size: 0.82rem;
+      color: var(--text);
+      cursor: pointer;
+      line-height: 1.3;
+    }
+    .outcome-modal .outcome-suggest-list li:hover,
+    .outcome-modal .outcome-suggest-list li.is-active {
+      background: color-mix(in srgb, var(--accent) 22%, transparent);
+      color: var(--text);
+    }
+    .outcome-modal .outcome-suggest-list li.is-empty {
+      cursor: default;
+      color: var(--muted);
+      font-size: 0.76rem;
+    }
+    .outcome-modal .outcome-suggest-list li.is-empty:hover {
+      background: transparent;
+    }
     .outcome-modal .outcome-actions {
       display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 0.35rem;
     }
@@ -4056,13 +4101,25 @@ PREVIEW_HTML = """<!DOCTYPE html>
         </div>
       </div>
       <div class="outcome-tags">
-        <label><span data-i18n="outcome.task_id">task_id</span><input type="text" id="outcomeTaskId" list="outcomeTaskIdList" autocomplete="off" placeholder="pick_place_v1" /></label>
-        <label><span data-i18n="outcome.env_id">env_id</span><input type="text" id="outcomeEnvId" list="outcomeEnvIdList" autocomplete="off" placeholder="lab_table_a" /></label>
-        <label><span data-i18n="outcome.object_ids">object_ids</span><input type="text" id="outcomeObjectIds" list="outcomeObjectIdList" autocomplete="off" placeholder="cup_red, bowl" /></label>
+        <label><span data-i18n="outcome.task_id">task_id</span>
+          <div class="outcome-suggest-wrap">
+            <input type="text" id="outcomeTaskId" autocomplete="off" placeholder="pick_place_v1" />
+            <ul class="outcome-suggest-list" id="outcomeTaskIdSuggest" hidden role="listbox"></ul>
+          </div>
+        </label>
+        <label><span data-i18n="outcome.env_id">env_id</span>
+          <div class="outcome-suggest-wrap">
+            <input type="text" id="outcomeEnvId" autocomplete="off" placeholder="lab_table_a" />
+            <ul class="outcome-suggest-list" id="outcomeEnvIdSuggest" hidden role="listbox"></ul>
+          </div>
+        </label>
+        <label><span data-i18n="outcome.object_ids">object_ids</span>
+          <div class="outcome-suggest-wrap">
+            <input type="text" id="outcomeObjectIds" autocomplete="off" placeholder="cup_red, bowl" />
+            <ul class="outcome-suggest-list" id="outcomeObjectIdSuggest" hidden role="listbox"></ul>
+          </div>
+        </label>
         <label><span data-i18n="outcome.note">备注</span><input type="text" id="outcomeNote" autocomplete="off" /></label>
-        <datalist id="outcomeTaskIdList"></datalist>
-        <datalist id="outcomeEnvIdList"></datalist>
-        <datalist id="outcomeObjectIdList"></datalist>
         <p class="pp-hint" id="outcomeVocabHint" data-i18n="outcome.vocab_hint">可选词表：configs/tag_vocab.yaml（可自由输入新值）</p>
       </div>
       <div class="outcome-actions">
@@ -4072,7 +4129,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         </label>
         <div class="outcome-actions-btns">
           <button type="button" class="ghost" id="outcomeModalCancel" data-i18n="outcome.cancel">取消</button>
-          <button type="button" class="primary" id="outcomeModalConfirm" data-i18n="outcome.confirm">确认并结束</button>
+          <button type="button" class="primary" id="outcomeModalConfirm" data-i18n="outcome.confirm">确认标注</button>
         </div>
       </div>
     </div>
@@ -4886,9 +4943,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       };
     }
     let _tagVocabLoaded = false;
-    function _fillDatalist(id, values) {
-      const el = document.getElementById(id);
-      if (!el) return;
+    const _tagVocab = { task_ids: [], env_ids: [], object_ids: [] };
+    function _uniqStrings(values) {
       const uniq = [];
       const seen = new Set();
       (values || []).forEach((v) => {
@@ -4897,16 +4953,131 @@ PREVIEW_HTML = """<!DOCTYPE html>
         seen.add(s);
         uniq.push(s);
       });
-      el.innerHTML = uniq.map((s) => '<option value="' + s.replace(/"/g, '&quot;') + '"></option>').join('');
+      return uniq;
     }
+    function _hideAllOutcomeSuggest() {
+      document.querySelectorAll('.outcome-suggest-list').forEach((el) => {
+        el.hidden = true;
+        el.innerHTML = '';
+      });
+    }
+    function _outcomeSuggestToken(value, multi) {
+      const raw = String(value == null ? '' : value);
+      if (!multi) return { head: '', token: raw };
+      const m = raw.match(/^(.*[,;]\s*)([^,;]*)$/);
+      if (!m) return { head: '', token: raw };
+      return { head: m[1], token: m[2] };
+    }
+    function _filterOutcomeSuggest(values, token) {
+      const q = String(token || '').trim().toLowerCase();
+      const all = _uniqStrings(values);
+      if (!q) return all.slice(0, 12);
+      return all.filter((s) => s.toLowerCase().includes(q)).slice(0, 12);
+    }
+    function _bindOutcomeSuggest(inputId, listId, valuesKey, multi) {
+      const input = document.getElementById(inputId);
+      const list = document.getElementById(listId);
+      if (!input || !list) return;
+      let active = -1;
+      let blurTimer = null;
+      function hide() {
+        list.hidden = true;
+        list.innerHTML = '';
+        active = -1;
+      }
+      function applyValue(item) {
+        const parts = _outcomeSuggestToken(input.value, !!multi);
+        input.value = multi ? (parts.head + item) : item;
+        hide();
+        input.focus();
+        try {
+          const n = input.value.length;
+          input.setSelectionRange(n, n);
+        } catch (_) {}
+      }
+      function render() {
+        const parts = _outcomeSuggestToken(input.value, !!multi);
+        const items = _filterOutcomeSuggest(_tagVocab[valuesKey] || [], parts.token);
+        list.innerHTML = '';
+        active = -1;
+        if (!(_tagVocab[valuesKey] || []).length) {
+          hide();
+          return;
+        }
+        if (!items.length) {
+          const li = document.createElement('li');
+          li.className = 'is-empty';
+          li.textContent = t('outcome.vocab_no_match');
+          list.appendChild(li);
+          list.hidden = false;
+          return;
+        }
+        items.forEach((item, idx) => {
+          const li = document.createElement('li');
+          li.setAttribute('role', 'option');
+          li.textContent = item;
+          li.addEventListener('mousedown', (ev) => {
+            ev.preventDefault();
+            applyValue(item);
+          });
+          li.addEventListener('mouseenter', () => {
+            active = idx;
+            list.querySelectorAll('li').forEach((n, i) => n.classList.toggle('is-active', i === active));
+          });
+          list.appendChild(li);
+        });
+        list.hidden = false;
+      }
+      input.addEventListener('focus', () => {
+        if (blurTimer) { clearTimeout(blurTimer); blurTimer = null; }
+        render();
+      });
+      input.addEventListener('input', () => render());
+      input.addEventListener('keydown', (ev) => {
+        if (list.hidden) {
+          if (ev.key === 'ArrowDown') { render(); ev.preventDefault(); }
+          return;
+        }
+        const opts = Array.from(list.querySelectorAll('li:not(.is-empty)'));
+        if (ev.key === 'Escape') {
+          hide();
+          ev.preventDefault();
+          return;
+        }
+        if (ev.key === 'ArrowDown') {
+          if (!opts.length) return;
+          active = (active + 1) % opts.length;
+          opts.forEach((n, i) => n.classList.toggle('is-active', i === active));
+          ev.preventDefault();
+          return;
+        }
+        if (ev.key === 'ArrowUp') {
+          if (!opts.length) return;
+          active = active <= 0 ? opts.length - 1 : active - 1;
+          opts.forEach((n, i) => n.classList.toggle('is-active', i === active));
+          ev.preventDefault();
+          return;
+        }
+        if (ev.key === 'Enter' && active >= 0 && opts[active]) {
+          applyValue(opts[active].textContent || '');
+          ev.preventDefault();
+        }
+      });
+      input.addEventListener('blur', () => {
+        blurTimer = setTimeout(hide, 120);
+      });
+    }
+    _bindOutcomeSuggest('outcomeTaskId', 'outcomeTaskIdSuggest', 'task_ids', false);
+    _bindOutcomeSuggest('outcomeEnvId', 'outcomeEnvIdSuggest', 'env_ids', false);
+    _bindOutcomeSuggest('outcomeObjectIds', 'outcomeObjectIdSuggest', 'object_ids', true);
     async function ensureTagVocab() {
       if (_tagVocabLoaded) return;
       try {
         const r = await fetch('/api/tag-vocab', { credentials: 'same-origin' });
         const j = await r.json();
-        _fillDatalist('outcomeTaskIdList', j.task_ids || []);
-        _fillDatalist('outcomeEnvIdList', j.env_ids || []);
-        _fillDatalist('outcomeObjectIdList', j.object_ids || []);
+        _tagVocab.task_ids = _uniqStrings(j.task_ids || []);
+        _tagVocab.env_ids = _uniqStrings(j.env_ids || []);
+        _tagVocab.object_ids = _uniqStrings(j.object_ids || []);
         const hint = document.getElementById('outcomeVocabHint');
         if (hint) {
           if (j.path) {
@@ -4925,6 +5096,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       return new Promise((resolve) => {
         _outcomeResolve = resolve;
         ensureTagVocab();
+        _hideAllOutcomeSuggest();
         if (outcomeFollowLast) outcomeFollowLast.checked = _readOutcomeFollow();
         const follow = !!(outcomeFollowLast && outcomeFollowLast.checked);
         if (follow) {
@@ -4943,6 +5115,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       // Remember whatever is on screen so next open (with 跟随上次) matches last popup.
       _saveOutcomeLastForm();
       if (outcomeFollowLast) _writeOutcomeFollow(!!outcomeFollowLast.checked);
+      _hideAllOutcomeSuggest();
       if (outcomeModal) outcomeModal.classList.remove('show');
       const r = _outcomeResolve;
       _outcomeResolve = null;
