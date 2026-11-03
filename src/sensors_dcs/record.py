@@ -13,6 +13,7 @@ from typing import Any, Callable
 from sensors_dcs.agents.base import BaseAgent
 from sensors_dcs.config import RecordConfig
 from sensors_dcs.frame import Frame
+from sensors_dcs.intervention_log import InterventionLogger
 
 
 def _episode_dir(save_dir: Path, episode: int) -> Path:
@@ -94,6 +95,8 @@ class RecordController:
         # ep_index → {task_outcome, tags} applied when async finalize writes manifest
         self._pending_outcomes: dict[int, dict[str, Any]] = {}
         self._last_error: str | None = None
+        # E2: append-only intervention jsonl for the active episode
+        self.interventions = InterventionLogger()
 
     def _flush_jobs_unlocked(self) -> list[dict[str, Any]]:
         return [dict(v) for v in self._flush_jobs.values()]
@@ -191,14 +194,20 @@ class RecordController:
             ep_dir.mkdir(parents=True, exist_ok=False)
             (ep_dir / "states").mkdir()
             (ep_dir / "cameras").mkdir()
+            (ep_dir / "events").mkdir(exist_ok=True)
+            t0 = time.time()
             sess = _EpisodeSession(
                 ep=ep,
                 ep_dir=ep_dir,
-                t_start=time.time(),
+                t_start=t0,
                 q=queue.Queue(maxsize=max(8, int(self.cfg.queue_maxsize))),
                 mode=mode_n,
                 session_meta=meta,
             )
+            try:
+                self.interventions.bind(ep_dir, t_start=t0)
+            except Exception:  # noqa: BLE001
+                pass
             sess.writer = threading.Thread(
                 target=self._writer_loop,
                 args=(sess,),
@@ -234,6 +243,19 @@ class RecordController:
                 self._last_error = sess.last_error
         self._notify()
         return {"ok": True, **self.status()}
+
+    def note_intervention(
+        self,
+        type: str,
+        *,
+        source: str = "",
+        detail: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """E2 soft-fail emit into the active episode jsonl (no-op if idle)."""
+        try:
+            return self.interventions.emit(type, source=source, detail=detail)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
     def stop(
         self,
@@ -444,6 +466,10 @@ class RecordController:
 
         deleted = False
         err: str | None = None
+        try:
+            self.interventions.unbind()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             if ep_dir.is_dir():
                 shutil.rmtree(ep_dir)
@@ -673,6 +699,23 @@ class RecordController:
             )
             # If caller omitted task_outcome and default is unknown → field absent.
             # Discard path passes void explicitly via stop().
+            # E2: fold intervention jsonl into manifest summary (best-effort).
+            try:
+                from sensors_dcs.intervention_log import summarize_episode_interventions
+
+                iv = summarize_episode_interventions(ep_dir, t_end=t_end)
+                manifest["intervention_summary"] = {
+                    "any": bool(iv.get("any")),
+                    "counts": dict(iv.get("counts") or {}),
+                    "duration_s": dict(iv.get("duration_s") or {}),
+                    "event_count": int(iv.get("event_count") or 0),
+                }
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                self.interventions.unbind()
+            except Exception:  # noqa: BLE001
+                pass
 
         prev_path.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",

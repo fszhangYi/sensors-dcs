@@ -1378,10 +1378,16 @@ class Orchestrator:
                 **self.delta_pose_offset_status(),
             }
         with self._delta_pose_offset_lock:
+            prev = bool(self._delta_pose_offset_enabled)
             self._delta_pose_offset_enabled = bool(enabled)
             # Both edges start from zero. Disable must not leave a stale offset
             # to be reapplied the next time the box is checked.
             self._reset_delta_pose_offset_locked()
+        now = bool(enabled)
+        if now and not prev:
+            self._note_intervention("delta_offset_on", source="gello_reinforce")
+        elif prev and not now:
+            self._note_intervention("delta_offset_off", source="gello_reinforce")
         return {"ok": True, **self.delta_pose_offset_status()}
 
     def _api_set_delta_pose_offset(
@@ -3331,6 +3337,8 @@ class Orchestrator:
                     self._arm_teleop_last_ok = True
                     self._arm_teleop_last_error = None
                 self._arm_teleop_last_t_wall = time.time()
+            if was:
+                self._note_intervention("teleop_off", source="gello")
             return {"ok": True, **self.gello_arm_teleop_status()}
 
         # Teleop wins over absolute ramp / Fake playback.
@@ -3407,7 +3415,29 @@ class Orchestrator:
         )
         self._arm_teleop_setpoint_thread.start()
         self._arm_teleop_thread.start()
+        self._note_intervention(
+            "teleop_on",
+            source="gello",
+            detail={
+                "gello_agent_id": gello.agent_id,
+                "arm_agent_id": reader.agent_id,
+                "hz": hz,
+            },
+        )
         return {"ok": True, **self.gello_arm_teleop_status()}
+
+    def _note_intervention(
+        self,
+        type: str,
+        *,
+        source: str = "",
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        """E2: best-effort intervention log; never affects control flow."""
+        try:
+            self.recorder.note_intervention(type, source=source, detail=detail)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _arm_teleop_pick_setpoint(self) -> list[float] | None:
         """Plan next joint command from the gello queue (two-phase: commit later).
@@ -4360,6 +4390,11 @@ class Orchestrator:
             self.cancel_arm_abs_ramp(message="因 Disarm/Estop 取消绝对下发")
             if getattr(self, "_delta_pose_offset_configured", False):
                 self.clear_delta_pose_offset()
+            if stop:
+                self._note_intervention("estop", source="arm")
+                self._note_intervention("arm_stop", source="arm")
+            if disarm:
+                self._note_intervention("disarm", source="arm")
             return agent.command(disarm=bool(disarm or stop), stop=True)
 
         if self._arm_teleop_enabled:

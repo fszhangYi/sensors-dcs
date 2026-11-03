@@ -251,7 +251,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_outcomes = sub.add_parser(
         "outcomes",
-        help="summarize task_outcome KPIs under a collect root (E1)",
+        help="summarize task_outcome (E1) + intervention (E2) KPIs under a collect root",
     )
     p_out_sub = p_outcomes.add_subparsers(dest="outcomes_cmd", required=True)
     p_out_sum = p_out_sub.add_parser(
@@ -575,9 +575,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "outcomes":
         if getattr(args, "outcomes_cmd", None) == "summary":
+            from sensors_dcs.intervention_log import summarize_interventions
             from sensors_dcs.task_outcome import summarize_outcomes
 
             result = summarize_outcomes(args.root)
+            try:
+                result["interventions"] = summarize_interventions(args.root)
+            except Exception as e:  # noqa: BLE001
+                result["interventions"] = {"ok": False, "error": str(e)}
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0 if result.get("ok") else 1
         print("[sensors-dcs] unknown outcomes subcommand", flush=True)
