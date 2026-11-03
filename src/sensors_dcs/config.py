@@ -95,6 +95,8 @@ class RuntimeConfig(BaseModel):
     preview_app_cmd: str = ""
     # Bind address used when DCS spawns the preview backend.
     preview_app_bind_host: str = "0.0.0.0"
+    # E1: Stop must pick task_outcome in UI when true (Discard defaults to void).
+    require_task_outcome: bool = False
 
 
 class GelloArmSyncConfig(BaseModel):
@@ -304,6 +306,33 @@ class RecordConfig(BaseModel):
     queue_maxsize: int = 512
 
 
+class GatherConfig(BaseModel):
+    """Post-stop session gather (slave push → master layout). See docs/session-gather.md."""
+
+    # rclone | rsync | robocopy | python | auto
+    backend: str = "auto"
+    # Master: URI/UNC slaves can write into (smb/sftp/UNC). Relative sessions/… appended.
+    # Empty → fall back to share_root when set.
+    publish_uri: str = ""
+    timeout_s: float = 3600.0
+
+    @field_validator("backend", "publish_uri", mode="before")
+    @classmethod
+    def _strip_g(cls, v: Any) -> str:
+        if v is None:
+            return ""
+        return str(v).strip()
+
+    @field_validator("timeout_s", mode="before")
+    @classmethod
+    def _timeout(cls, v: Any) -> float:
+        try:
+            x = float(v if v is not None else 3600.0)
+        except (TypeError, ValueError) as e:
+            raise ValueError("station.gather.timeout_s must be a number") from e
+        return max(30.0, x)
+
+
 class StationConfig(BaseModel):
     """LAN master/slave identity (YAML-only; UI read-only). See docs/station-multi-machine.md.
 
@@ -324,6 +353,8 @@ class StationConfig(BaseModel):
     share_root: str = ""
     # Subdir under share_root for this station; empty → station.id.
     share_station_subdir: str = ""
+    # Gather sink / backend (master publish_uri required for slave push).
+    gather: GatherConfig = GatherConfig()
 
     @field_validator("role", mode="before")
     @classmethod
@@ -552,6 +583,11 @@ def station_summary(cfg: DcsConfig) -> dict[str, Any]:
         "master_port": resolve_master_port(cfg) if st.role == "slave" else None,
         "share_root": (st.share_root or "").strip(),
         "share_station_subdir": (st.share_station_subdir or "").strip(),
+        "gather": {
+            "backend": (st.gather.backend or "auto").strip() or "auto",
+            "publish_uri": (st.gather.publish_uri or "").strip(),
+            "timeout_s": float(st.gather.timeout_s),
+        },
         "is_master": st.role == "master",
         "is_slave": st.role == "slave",
     }

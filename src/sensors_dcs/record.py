@@ -91,6 +91,8 @@ class RecordController:
         self.state = "idle"  # idle | recording | flushing (sync only)
         self._session: _EpisodeSession | None = None
         self._flush_jobs: dict[int, dict[str, Any]] = {}
+        # ep_index → {task_outcome, tags} applied when async finalize writes manifest
+        self._pending_outcomes: dict[int, dict[str, Any]] = {}
         self._last_error: str | None = None
 
     def _flush_jobs_unlocked(self) -> list[dict[str, Any]]:
@@ -240,6 +242,8 @@ class RecordController:
         valid: bool = True,
         async_flush: bool = False,
         keep_files: bool = True,
+        task_outcome: dict[str, Any] | None = None,
+        tags: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Stop accepting frames and flush the episode to disk.
 
@@ -250,10 +254,19 @@ class RecordController:
         ``keep_files=False`` (only meaningful with ``valid=False``): abort the
         episode and delete its directory — no on-disk archive. Async flush is
         ignored in that path.
+
+        ``task_outcome`` / ``tags`` (E1): written into the final manifest when
+        files are kept. Discard with keep defaults ``outcome=void`` if omitted.
         """
         drop_files = (not bool(valid)) and (not bool(keep_files))
         if drop_files:
             return self._abort_discard(timeout=timeout)
+
+        # Discard keep: default void so completion-rate denom stays clean.
+        default_oc = "void" if not bool(valid) else "unknown"
+        outcome_payload = task_outcome
+        if outcome_payload is None and not bool(valid):
+            outcome_payload = {"outcome": "void", "source": "operator"}
 
         with self._lock:
             if self.state != "recording" or self._session is None:
@@ -285,15 +298,21 @@ class RecordController:
 
         self._notify()
 
+        fin_kwargs = {
+            "sess": sess,
+            "valid": bool(valid),
+            "timeout": timeout,
+            "async_mode": False,
+            "task_outcome": outcome_payload,
+            "tags": tags,
+            "default_outcome": default_oc,
+        }
+
         if async_flush:
+            fin_kwargs["async_mode"] = True
             threading.Thread(
                 target=self._finalize_session,
-                kwargs={
-                    "sess": sess,
-                    "valid": bool(valid),
-                    "timeout": timeout,
-                    "async_mode": True,
-                },
+                kwargs=fin_kwargs,
                 name=f"record-flush-ep{ep}",
                 daemon=True,
             ).start()
@@ -308,9 +327,7 @@ class RecordController:
                 **self.status(),
             }
 
-        manifest = self._finalize_session(
-            sess=sess, valid=bool(valid), timeout=timeout, async_mode=False
-        )
+        manifest = self._finalize_session(**fin_kwargs)
         return {
             "ok": True,
             "async_flush": False,
@@ -321,6 +338,68 @@ class RecordController:
             "kept_files": True,
             **self.status(),
         }
+
+    def apply_episode_outcome(
+        self,
+        *,
+        episode_path: str | Path | None = None,
+        episode_index: int | None = None,
+        task_outcome: dict[str, Any] | None = None,
+        tags: dict[str, Any] | None = None,
+        default_outcome: str = "unknown",
+    ) -> dict[str, Any]:
+        """Attach outcome after stop (form filled later). Handles async flush pending."""
+        from sensors_dcs.task_outcome import patch_episode_outcome
+
+        ep_dir: Path | None = None
+        ep_i: int | None = int(episode_index) if episode_index is not None else None
+        if episode_path:
+            ep_dir = Path(episode_path).expanduser().resolve()
+            if ep_i is None:
+                name = ep_dir.name
+                if name.startswith("episode_"):
+                    try:
+                        ep_i = int(name.split("_", 1)[1])
+                    except ValueError:
+                        ep_i = None
+        elif ep_i is not None:
+            ep_dir = self.save_dir / f"episode_{int(ep_i):05d}"
+
+        if ep_dir is None:
+            return {"ok": False, "error": "episode_path or episode_index required"}
+
+        payload = {"task_outcome": task_outcome, "tags": tags}
+        with self._lock:
+            job = self._flush_jobs.get(int(ep_i)) if ep_i is not None else None
+            flushing = bool(job and job.get("state") == "flushing")
+            if flushing and ep_i is not None:
+                self._pending_outcomes[int(ep_i)] = payload
+                return {
+                    "ok": True,
+                    "pending": True,
+                    "episode": str(ep_dir),
+                    "episode_index": ep_i,
+                    "note": "queued for async flush final manifest",
+                }
+
+        patched = patch_episode_outcome(
+            ep_dir,
+            task_outcome=task_outcome,
+            tags=tags,
+            default_outcome=default_outcome,
+            allow_provisional=False,
+        )
+        if not patched.get("ok") and patched.get("provisional") and ep_i is not None:
+            with self._lock:
+                self._pending_outcomes[int(ep_i)] = payload
+            return {
+                "ok": True,
+                "pending": True,
+                "episode": str(ep_dir),
+                "episode_index": ep_i,
+                "note": "manifest provisional; queued for finalize",
+            }
+        return patched
 
     def _abort_discard(self, *, timeout: float = 30.0) -> dict[str, Any]:
         """Stop recording, drop the queue, delete the episode directory."""
@@ -403,6 +482,9 @@ class RecordController:
         valid: bool,
         timeout: float,
         async_mode: bool,
+        task_outcome: dict[str, Any] | None = None,
+        tags: dict[str, Any] | None = None,
+        default_outcome: str = "unknown",
     ) -> dict[str, Any]:
         sess.stop_event.set()
         if sess.sampler is not None:
@@ -422,6 +504,13 @@ class RecordController:
             sess.writer.join(timeout=timeout)
 
         t1 = time.time()
+        with self._lock:
+            pending = self._pending_outcomes.pop(int(sess.ep), None)
+        if isinstance(pending, dict):
+            if task_outcome is None and isinstance(pending.get("task_outcome"), dict):
+                task_outcome = pending.get("task_outcome")
+            if tags is None and isinstance(pending.get("tags"), dict):
+                tags = pending.get("tags")
         try:
             manifest = self._write_manifest(
                 sess.ep_dir,
@@ -434,6 +523,9 @@ class RecordController:
                 valid=bool(valid),
                 mode=sess.mode,
                 session_meta=sess.session_meta,
+                task_outcome=task_outcome,
+                tags=tags,
+                default_outcome=default_outcome,
             )
             err = None
         except Exception as e:  # noqa: BLE001
@@ -500,16 +592,22 @@ class RecordController:
         valid: bool = True,
         mode: str = "collect",
         session_meta: dict[str, Any] | None = None,
+        task_outcome: dict[str, Any] | None = None,
+        tags: dict[str, Any] | None = None,
+        default_outcome: str = "unknown",
     ) -> dict[str, Any]:
+        from sensors_dcs.task_outcome import apply_outcome_to_manifest
+
         cameras = self._collect_cameras()
         prev_path = ep_dir / "manifest.json"
+        prev: dict[str, Any] = {}
         if prev_path.is_file():
             try:
                 prev = json.loads(prev_path.read_text(encoding="utf-8"))
                 for aid, info in (prev.get("cameras") or {}).items():
                     cameras.setdefault(aid, info)
             except (OSError, json.JSONDecodeError, TypeError):
-                pass
+                prev = {}
 
         agents_meta: list[dict[str, Any]] = []
         for a in self.agents.values():
@@ -563,6 +661,18 @@ class RecordController:
             )
         elif not manifest_valid:
             manifest["note"] = "Stopped via discard (作废); data kept on disk with valid=false."
+
+        # Preserve prior outcome/tags only when finalizing without a new payload
+        # (should not happen for stop); never keep on provisional rewrite.
+        if not provisional:
+            apply_outcome_to_manifest(
+                manifest,
+                task_outcome=task_outcome,
+                tags=tags,
+                default_outcome=default_outcome,
+            )
+            # If caller omitted task_outcome and default is unknown → field absent.
+            # Discard path passes void explicitly via stop().
 
         prev_path.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",

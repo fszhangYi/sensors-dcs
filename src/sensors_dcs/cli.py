@@ -249,6 +249,141 @@ def main(argv: list[str] | None = None) -> int:
         help="also pack episodes with manifest.valid=false",
     )
 
+    p_outcomes = sub.add_parser(
+        "outcomes",
+        help="summarize task_outcome KPIs under a collect root (E1)",
+    )
+    p_out_sub = p_outcomes.add_subparsers(dest="outcomes_cmd", required=True)
+    p_out_sum = p_out_sub.add_parser(
+        "summary",
+        help="print completion rate / outcome counts for episode_* under root",
+    )
+    p_out_sum.add_argument(
+        "-c",
+        "--root",
+        required=True,
+        help="collect root containing episode_* (e.g. D:/data or _dcs_data)",
+    )
+
+    p_std = sub.add_parser(
+        "export-standard",
+        help="Step 4: convert export/filtered into selected mainstream formats "
+        "(lerobot_v21 / lerobot_v30 / hdf5); always force-overwrites output dirs",
+    )
+    p_std.add_argument("-e", "--episode", required=True, help="episode directory")
+    p_std.add_argument(
+        "-f",
+        "--format",
+        dest="formats",
+        action="append",
+        default=None,
+        help="format id (repeatable): lerobot_v21, lerobot_v30, hdf5 "
+        "(default: lerobot_v21)",
+    )
+    p_std.add_argument(
+        "--formats",
+        dest="formats_csv",
+        default=None,
+        help="comma-separated formats (alternative to repeated --format)",
+    )
+    p_std.add_argument(
+        "--camera-map",
+        default=None,
+        help="YAML serial→camera name; optional if export/filtered/camera_map.yaml exists",
+    )
+    p_std.add_argument("--fps", type=float, default=None, help="override video fps")
+    p_std.add_argument(
+        "--allow-invalid",
+        action="store_true",
+        default=False,
+        help="export even when episode manifest.valid=false",
+    )
+
+    p_std_root = sub.add_parser(
+        "export-standard-root",
+        help="Step 4 batch: scan episode_* under a dataset root; same as "
+        "export-standard per episode (always force overwrite)",
+    )
+    p_std_root.add_argument(
+        "-i",
+        "--input-root",
+        required=True,
+        help="collect root containing episode_* directories",
+    )
+    p_std_root.add_argument(
+        "-f",
+        "--format",
+        dest="formats",
+        action="append",
+        default=None,
+        help="format id (repeatable); default lerobot_v21",
+    )
+    p_std_root.add_argument(
+        "--formats",
+        dest="formats_csv",
+        default=None,
+        help="comma-separated formats",
+    )
+    p_std_root.add_argument("--camera-map", default=None)
+    p_std_root.add_argument("--fps", type=float, default=None)
+    p_std_root.add_argument(
+        "--allow-invalid",
+        action="store_true",
+        default=False,
+    )
+
+    p_gather = sub.add_parser(
+        "session-gather",
+        help="master: Peer-notify slaves to push episode trees into "
+        "sessions/<sid>/<slave>/episode_* (resume sync; needs running master viz)",
+    )
+    p_gather.add_argument(
+        "-c",
+        "--config",
+        default=None,
+        help="DCS YAML (reads viz_port / station.gather); default local 7011",
+    )
+    p_gather.add_argument(
+        "--save-dir",
+        default=None,
+        help="master collect root (default: recorder save_dir on the running master)",
+    )
+    p_gather.add_argument(
+        "--session-id",
+        default=None,
+        help="linked session id under save_dir/sessions/",
+    )
+    p_gather.add_argument(
+        "-e",
+        "--episode",
+        default=None,
+        help="master episode path (reads session_id / episode_index from manifest)",
+    )
+    p_gather.add_argument(
+        "--station",
+        action="append",
+        default=None,
+        dest="stations",
+        help="only gather this slave station_id (repeatable)",
+    )
+    p_gather.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="re-check / overwrite existing dest files when backend supports it",
+    )
+    p_gather.add_argument(
+        "--viz-url",
+        default=None,
+        help="override master viz base URL (default http://127.0.0.1:<viz_port>)",
+    )
+    p_gather.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="resolve session targets / dest_uri only (no Peer, no file transfer)",
+    )
+
     p_batch = sub.add_parser(
         "run-postprocess-root",
         help="batch-run export-timeline → filter-timeline → export-hik-dataset "
@@ -438,6 +573,144 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
 
+    if args.cmd == "outcomes":
+        if getattr(args, "outcomes_cmd", None) == "summary":
+            from sensors_dcs.task_outcome import summarize_outcomes
+
+            result = summarize_outcomes(args.root)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result.get("ok") else 1
+        print("[sensors-dcs] unknown outcomes subcommand", flush=True)
+        return 1
+
+    if args.cmd == "session-gather":
+        sid = getattr(args, "session_id", None)
+        ep = getattr(args, "episode", None)
+        if not sid and not ep:
+            print(
+                json.dumps(
+                    {"ok": False, "error": "need --session-id and/or --episode"},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 1
+        save_dir = getattr(args, "save_dir", None)
+        publish = ""
+        viz_port = 7011
+        if args.config:
+            try:
+                cfg = load_dcs_config(args.config)
+            except Exception as e:  # noqa: BLE001
+                print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False, indent=2))
+                return 1
+            viz_port = int(cfg.runtime.viz_port)
+            if not save_dir:
+                save_dir = cfg.record.save_dir
+            publish = (cfg.station.gather.publish_uri or "").strip() or (
+                cfg.station.share_root or ""
+            ).strip()
+        if getattr(args, "dry_run", False):
+            from sensors_dcs.session_gather import (
+                build_gather_dest,
+                resolve_session_for_gather,
+            )
+
+            try:
+                resolved = resolve_session_for_gather(
+                    save_dir=save_dir or "./data",
+                    session_id=sid,
+                    episode_path=ep,
+                )
+            except Exception as e:  # noqa: BLE001
+                print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False, indent=2))
+                return 1
+            want = {str(x).strip() for x in (args.stations or []) if str(x).strip()}
+            targets = []
+            for p in resolved["doc"].get("participants") or []:
+                if not isinstance(p, dict):
+                    continue
+                if str(p.get("role") or "").strip().lower() != "slave":
+                    continue
+                st_id = str(p.get("station_id") or "").strip()
+                if not st_id or (want and st_id not in want):
+                    continue
+                targets.append(
+                    build_gather_dest(
+                        save_dir=resolved["save_dir"],
+                        session_id=resolved["session_id"],
+                        station_id=st_id,
+                        episode_index=int(resolved["episode_index"]),
+                        publish_uri=publish,
+                    )
+                    | {"station_id": st_id}
+                )
+            print(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "dry_run": True,
+                        "session_id": resolved["session_id"],
+                        "episode_index": resolved["episode_index"],
+                        "publish_uri": publish or None,
+                        "targets": targets,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 0
+
+        import urllib.error
+        import urllib.request
+
+        base = (getattr(args, "viz_url", None) or "").strip().rstrip("/")
+        if not base:
+            base = f"http://127.0.0.1:{viz_port}"
+        payload = {
+            "session_id": sid,
+            "episode": ep,
+            "save_dir": save_dir,
+            "station_ids": list(args.stations or []) or None,
+            "force": bool(getattr(args, "force", False)),
+        }
+        req = urllib.request.Request(
+            f"{base}/api/postprocess/session/gather",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=7200) as resp:
+                body = resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace") if e.fp else str(e)
+            try:
+                result = json.loads(body) if body else {"ok": False, "error": str(e)}
+            except json.JSONDecodeError:
+                result = {"ok": False, "error": body or str(e)}
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 1
+        except Exception as e:  # noqa: BLE001
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": f"{type(e).__name__}: {e}",
+                        "hint": "start master with sensors-dcs run -c … first",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 1
+        try:
+            result = json.loads(body) if body else {"ok": False, "error": "empty response"}
+        except json.JSONDecodeError:
+            result = {"ok": False, "error": body[:800]}
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+
     if args.cmd == "run-postprocess-root":
         try:
             from sensors_dcs.postprocess_service import run_postprocess_root
@@ -460,6 +733,40 @@ def main(argv: list[str] | None = None) -> int:
             allow_invalid=bool(getattr(args, "allow_invalid", False)),
             overwrite=not bool(getattr(args, "no_overwrite", False)),
         )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+
+    if args.cmd in {"export-standard", "export-standard-root"}:
+        formats = list(getattr(args, "formats", None) or [])
+        csv = getattr(args, "formats_csv", None)
+        if csv:
+            formats.extend([p.strip() for p in str(csv).split(",") if p.strip()])
+        if not formats:
+            formats = ["lerobot_v21"]
+        try:
+            from sensors_dcs.postprocess_service import (
+                run_standard_export,
+                run_standard_export_root,
+            )
+        except ImportError as e:
+            print(f"[sensors-dcs] {e}", flush=True)
+            return 1
+        if args.cmd == "export-standard":
+            result = run_standard_export(
+                episode=args.episode,
+                formats=formats,
+                camera_map=args.camera_map,
+                allow_invalid=bool(getattr(args, "allow_invalid", False)),
+                fps=getattr(args, "fps", None),
+            )
+        else:
+            result = run_standard_export_root(
+                input_root=args.input_root,
+                formats=formats,
+                camera_map=args.camera_map,
+                allow_invalid=bool(getattr(args, "allow_invalid", False)),
+                fps=getattr(args, "fps", None),
+            )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
 

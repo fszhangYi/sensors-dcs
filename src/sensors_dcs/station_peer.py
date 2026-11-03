@@ -231,11 +231,15 @@ class StationPeer:
         self._last_error = ""
         self._session_token = ""
         self._active_session_id = ""
+        self._last_stop_session_id = ""
+        self._last_stop_episode_index: int | None = None
         # Record barrier handlers (slave side) + master ack waiters.
         self._on_prepare: Callable[[str], dict[str, Any]] | None = None
         self._on_commit: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None
         self._on_abort: Callable[[str, str], None] | None = None
         self._on_stop: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+        self._on_task_outcome: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+        self._on_gather: Callable[[dict[str, Any]], dict[str, Any]] | None = None
         self._ack_cv = threading.Condition()
         self._pending_acks: dict[str, dict[str, Any]] = {}
         self._barrier_expect: set[str] = set()
@@ -245,6 +249,11 @@ class StationPeer:
         self._pending_pongs: dict[str, dict[str, Any]] = {}
         self._probe_cv = threading.Condition()
         self._pending_probes: dict[str, dict[str, Any]] = {}
+        self._gather_cv = threading.Condition()
+        self._gather_acks: dict[str, dict[str, Any]] = {}
+        self._gather_dones: dict[str, dict[str, Any]] = {}
+        self._gather_job_id = ""
+        self._gather_expect: set[str] = set()
 
     # --- public status / control -------------------------------------------------
 
@@ -267,6 +276,55 @@ class StationPeer:
         with self._lock:
             return any(c.state == "connected" for c in self._slaves.values())
 
+    def broadcast_task_outcome(
+        self,
+        *,
+        task_outcome: dict[str, Any] | None,
+        tags: dict[str, Any] | None = None,
+        episode_index: int | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Master → slaves: patch the just-finished episode with operator outcome (E1).
+
+        Stop itself no longer waits for the form; this fan-out runs after the UI
+        confirms. Slaves apply to ``episode_{index:05d}`` under their save_dir.
+        """
+        if self.cfg.station.role != "master":
+            return {"ok": False, "error": "broadcast_task_outcome is master-only", "slaves": []}
+        with self._lock:
+            sid = (session_id or self._last_stop_session_id or "").strip()
+            ep_i = episode_index if episode_index is not None else self._last_stop_episode_index
+            slaves = [c for c in self._slaves.values() if c.state == "connected"]
+        if ep_i is None:
+            return {"ok": False, "error": "episode_index unknown (no recent stop)", "slaves": []}
+        msg: dict[str, Any] = {
+            "type": "task_outcome",
+            "protocol": PROTOCOL,
+            "session_id": sid or None,
+            "episode_index": int(ep_i),
+            "task_outcome": task_outcome,
+            "tags": tags,
+        }
+        results: list[dict[str, Any]] = []
+        all_ok = True
+        for c in slaves:
+            sent = c.send(msg)
+            results.append(
+                {
+                    "station_id": c.station_id,
+                    "ok": bool(sent),
+                    "error": None if sent else (c.last_error or "send failed"),
+                }
+            )
+            if not sent:
+                all_ok = False
+        return {
+            "ok": all_ok,
+            "episode_index": int(ep_i),
+            "session_id": sid or None,
+            "slaves": results,
+        }
+
     def bind_record_handlers(
         self,
         *,
@@ -274,12 +332,215 @@ class StationPeer:
         on_commit: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
         on_abort: Callable[[str, str], None] | None = None,
         on_stop: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        on_task_outcome: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        on_gather: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> None:
-        """Slave-side hooks for PREPARE/COMMIT/ABORT/STOP (P2 barrier)."""
+        """Slave-side hooks for PREPARE/COMMIT/ABORT/STOP (P2 barrier) + gather."""
         self._on_prepare = on_prepare
         self._on_commit = on_commit
         self._on_abort = on_abort
         self._on_stop = on_stop
+        self._on_task_outcome = on_task_outcome
+        self._on_gather = on_gather
+
+    def broadcast_gather(
+        self,
+        *,
+        session_id: str,
+        episode_index: int,
+        targets: list[dict[str, Any]],
+        backend: str = "auto",
+        force: bool = False,
+        timeout_s: float = 3600.0,
+        job_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Master → slaves: control-only gather_request; bytes go via rclone/rsync/copy.
+
+        ``targets`` items: ``{station_id, dest_uri, local_path?, source_hint?}``.
+        Waits for ``gather_ack`` then ``gather_done`` per connected target.
+        """
+        if self.cfg.station.role != "master":
+            return {"ok": False, "error": "broadcast_gather is master-only", "slaves": []}
+        sid = str(session_id or "").strip()
+        if not sid:
+            return {"ok": False, "error": "session_id required", "slaves": []}
+        try:
+            ep_i = int(episode_index)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "episode_index required", "slaves": []}
+        jid = str(job_id or "").strip() or uuid.uuid4().hex[:16]
+        with self._lock:
+            slaves_by_id = {
+                c.station_id: c for c in self._slaves.values() if c.state == "connected"
+            }
+        if not targets:
+            return {"ok": False, "error": "no gather targets", "job_id": jid, "slaves": []}
+
+        expect: set[str] = set()
+        send_results: list[dict[str, Any]] = []
+        for t in targets:
+            if not isinstance(t, dict):
+                continue
+            station = str(t.get("station_id") or "").strip()
+            dest_uri = str(t.get("dest_uri") or "").strip()
+            if not station:
+                continue
+            if not dest_uri:
+                send_results.append(
+                    {
+                        "station_id": station,
+                        "ok": False,
+                        "error": "dest_uri empty (set station.gather.publish_uri or share_root)",
+                    }
+                )
+                continue
+            conn = slaves_by_id.get(station)
+            if conn is None:
+                send_results.append(
+                    {
+                        "station_id": station,
+                        "ok": False,
+                        "error": "slave not connected",
+                    }
+                )
+                continue
+            msg = {
+                "type": "gather_request",
+                "protocol": PROTOCOL,
+                "job_id": jid,
+                "session_id": sid,
+                "episode_index": ep_i,
+                "station_id": station,
+                "dest_uri": dest_uri,
+                "local_path": t.get("local_path"),
+                "backend": backend,
+                "force": bool(force),
+                "timeout_s": float(timeout_s),
+            }
+            sent = conn.send(msg)
+            send_results.append(
+                {
+                    "station_id": station,
+                    "ok": bool(sent),
+                    "error": None if sent else (conn.last_error or "send failed"),
+                    "dest_uri": dest_uri,
+                }
+            )
+            if sent:
+                expect.add(station)
+
+        if not expect:
+            return {
+                "ok": False,
+                "error": "no gather_request accepted by connected slaves",
+                "job_id": jid,
+                "slaves": send_results,
+            }
+
+        with self._gather_cv:
+            self._gather_job_id = jid
+            self._gather_expect = set(expect)
+            self._gather_acks = {}
+            self._gather_dones = {}
+            self._gather_cv.notify_all()
+
+        # Wait ack then done
+        ack_timeout = min(60.0, max(10.0, float(timeout_s) * 0.05))
+        ok_ack, ack_detail, acks = self._wait_gather(
+            expect=expect, kind="ack", job_id=jid, timeout_s=ack_timeout
+        )
+        if not ok_ack:
+            return {
+                "ok": False,
+                "error": f"gather_ack: {ack_detail}",
+                "job_id": jid,
+                "slaves": send_results,
+                "acks": acks,
+            }
+        ok_done, done_detail, dones = self._wait_gather(
+            expect=expect, kind="done", job_id=jid, timeout_s=float(timeout_s)
+        )
+        slave_rows: list[dict[str, Any]] = []
+        all_ok = ok_done
+        for station in sorted(expect):
+            done = dones.get(station) or {}
+            row_ok = bool(done.get("ok"))
+            if not row_ok:
+                all_ok = False
+            slave_rows.append(
+                {
+                    "station_id": station,
+                    "ok": row_ok,
+                    "error": done.get("error"),
+                    "backend": done.get("backend"),
+                    "elapsed_s": done.get("elapsed_s"),
+                    "dest_uri": done.get("dest_uri"),
+                    "src": done.get("src"),
+                }
+            )
+        return {
+            "ok": all_ok,
+            "job_id": jid,
+            "session_id": sid,
+            "episode_index": ep_i,
+            "error": None if all_ok else (done_detail or "one or more slaves failed"),
+            "slaves": slave_rows,
+            "send": send_results,
+            "acks": acks,
+        }
+
+    def _wait_gather(
+        self,
+        *,
+        expect: set[str],
+        kind: str,
+        job_id: str,
+        timeout_s: float,
+    ) -> tuple[bool, str, dict[str, dict[str, Any]]]:
+        deadline = time.monotonic() + max(1.0, float(timeout_s))
+        store = self._gather_acks if kind == "ack" else self._gather_dones
+        with self._gather_cv:
+            while time.monotonic() < deadline:
+                if self._gather_job_id != job_id:
+                    return False, "gather job superseded", dict(store)
+                have = {sid: store[sid] for sid in expect if sid in store}
+                if len(have) >= len(expect):
+                    # For ack, require ok/accepted
+                    if kind == "ack":
+                        bad = [
+                            sid
+                            for sid, m in have.items()
+                            if not (m.get("ok") or m.get("accepted"))
+                        ]
+                        if bad:
+                            return (
+                                False,
+                                f"gather_ack rejected by {bad}",
+                                dict(have),
+                            )
+                    return True, "", dict(have)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._gather_cv.wait(timeout=min(1.0, remaining))
+            have = {sid: store[sid] for sid in expect if sid in store}
+            missing = sorted(expect - set(have))
+            return False, f"timeout waiting gather_{kind} from {missing}", dict(have)
+
+    def _note_gather_msg(self, msg: dict[str, Any]) -> None:
+        mtype = str(msg.get("type") or "")
+        jid = str(msg.get("job_id") or "")
+        sid = str(msg.get("station_id") or "").strip()
+        if not jid or not sid:
+            return
+        with self._gather_cv:
+            if self._gather_job_id and jid != self._gather_job_id:
+                return
+            if mtype == "gather_ack":
+                self._gather_acks[sid] = dict(msg)
+            elif mtype == "gather_done":
+                self._gather_dones[sid] = dict(msg)
+            self._gather_cv.notify_all()
 
     def _resolved_save_dir(self) -> str:
         raw = self.cfg.record.save_dir or "./data"
@@ -607,15 +868,22 @@ class StationPeer:
         valid: bool = True,
         async_flush: bool = False,
         keep_files: bool = True,
+        task_outcome: dict[str, Any] | None = None,
+        tags: dict[str, Any] | None = None,
         timeout_s: float = BARRIER_TIMEOUT_S,
     ) -> dict[str, Any]:
         """Master: STOP→ACK then local_stop. No slaves → local_stop only."""
         if self.cfg.station.role != "master":
             return {"ok": False, "error": "barrier_stop is master-only", **self.status()}
+        stop_kw = {
+            "valid": valid,
+            "async_flush": async_flush,
+            "keep_files": keep_files,
+            "task_outcome": task_outcome,
+            "tags": tags,
+        }
         if not self.has_active_slaves():
-            return local_stop(
-                valid=valid, async_flush=async_flush, keep_files=keep_files
-            )
+            return local_stop(**stop_kw)
 
         session_id = self._active_session_id or str(uuid.uuid4())
         token = self._session_token or str(uuid.uuid4())
@@ -625,25 +893,29 @@ class StationPeer:
         expect = {c.station_id for c in slaves}
         self._begin_barrier(phase="stop", expect=expect, token=token)
         for c in slaves:
-            c.send(
-                {
-                    "type": "stop",
-                    "protocol": PROTOCOL,
-                    "session_id": session_id,
-                    "token": token,
-                    "valid": bool(valid),
-                    "async_flush": bool(async_flush),
-                    "keep_files": bool(keep_files),
-                }
-            )
+            payload: dict[str, Any] = {
+                "type": "stop",
+                "protocol": PROTOCOL,
+                "session_id": session_id,
+                "token": token,
+                "valid": bool(valid),
+                "async_flush": bool(async_flush),
+                "keep_files": bool(keep_files),
+            }
+            if isinstance(task_outcome, dict):
+                payload["task_outcome"] = task_outcome
+            if isinstance(tags, dict):
+                payload["tags"] = tags
+            c.send(payload)
         ok_stop, stop_detail, _stop_acks = self._wait_acks(
             expect=expect, ack_type="stop_ack", token=token, timeout_s=timeout_s
         )
-        local_res = local_stop(
-            valid=valid, async_flush=async_flush, keep_files=keep_files
-        )
+        local_res = local_stop(**stop_kw)
         with self._lock:
             self._link_state = "connected" if self._slaves else "listening"
+            # Keep session_id briefly so post-stop outcome sync can still fan-out.
+            self._last_stop_session_id = session_id
+            self._last_stop_episode_index = local_res.get("finished_episode_index")
             self._active_session_id = ""
             if not ok_stop:
                 self._last_error = stop_detail
@@ -1441,6 +1713,10 @@ class StationPeer:
                     if not msg.get("station_id"):
                         msg = {**msg, "station_id": conn.station_id}
                     self._note_ack(msg)
+                elif mtype in ("gather_ack", "gather_done"):
+                    if not msg.get("station_id"):
+                        msg = {**msg, "station_id": conn.station_id}
+                    self._note_gather_msg(msg)
                 elif mtype == "disconnect":
                     conn.state = "idle"
                     self._drop_slave(conn.station_id, conn)
@@ -1511,6 +1787,13 @@ class StationPeer:
                     continue
                 if mtype in ("prepare", "commit", "abort", "stop"):
                     self._slave_handle_control(conn, msg)
+                    continue
+                if mtype == "task_outcome":
+                    self._handle_task_outcome_as_slave(msg)
+                    continue
+                if mtype == "gather_request":
+                    self._handle_gather_request_as_slave(conn, msg)
+                    continue
         with self._lock:
             if self._master_conn is conn:
                 self._master_conn = None
@@ -1518,6 +1801,90 @@ class StationPeer:
                 if conn.last_error:
                     self._last_error = conn.last_error
         conn.close()
+
+    def _handle_gather_request_as_slave(self, conn: _PeerConn, msg: dict[str, Any]) -> None:
+        """Control message only: ack immediately, push files off-Peer in a worker."""
+        local = station_summary(self.cfg)
+        sid = local["id"]
+        jid = str(msg.get("job_id") or "")
+        base = {
+            "protocol": PROTOCOL,
+            "job_id": jid,
+            "session_id": msg.get("session_id"),
+            "episode_index": msg.get("episode_index"),
+            "station_id": sid,
+        }
+        if self._on_gather is None:
+            conn.send({**base, "type": "gather_ack", "ok": False, "accepted": False, "error": "gather handler unbound"})
+            conn.send({**base, "type": "gather_done", "ok": False, "error": "gather handler unbound"})
+            return
+
+        # Immediate ack so master starts waiting for done.
+        try:
+            preview = self._on_gather({**msg, "_phase": "ack"}) or {}
+            accepted = bool(preview.get("ok", True))
+            err = str(preview.get("error") or "") if not accepted else None
+        except Exception as e:  # noqa: BLE001
+            accepted = False
+            err = str(e)
+        conn.send(
+            {
+                **base,
+                "type": "gather_ack",
+                "ok": accepted,
+                "accepted": accepted,
+                "error": err,
+            }
+        )
+        if not accepted:
+            conn.send({**base, "type": "gather_done", "ok": False, "error": err})
+            return
+
+        def _worker() -> None:
+            try:
+                result = self._on_gather({**msg, "_phase": "run"}) or {}
+            except Exception as e:  # noqa: BLE001
+                result = {"ok": False, "error": str(e)}
+            payload = {
+                **base,
+                "type": "gather_done",
+                "ok": bool(result.get("ok")),
+                "error": result.get("error"),
+                "backend": result.get("backend"),
+                "elapsed_s": result.get("elapsed_s"),
+                "src": result.get("src"),
+                "dest_uri": result.get("dest") or result.get("dest_uri") or msg.get("dest_uri"),
+                "bytes_copied": result.get("bytes_copied"),
+                "copied": result.get("copied"),
+                "skipped": result.get("skipped"),
+            }
+            try:
+                conn.send(payload)
+            except Exception:  # noqa: BLE001
+                pass
+
+        threading.Thread(target=_worker, name=f"gather-{jid[:8]}", daemon=True).start()
+
+    def _handle_task_outcome_as_slave(self, msg: dict[str, Any]) -> None:
+        """Apply master's post-stop outcome to this station's matching episode."""
+        if self._on_task_outcome is not None:
+            try:
+                self._on_task_outcome(msg)
+                return
+            except Exception as e:  # noqa: BLE001
+                print(f"[sensors-dcs] peer task_outcome handler: {e}", flush=True)
+                return
+        # Fallback: patch local episode_{index} under save_dir
+        try:
+            ep_i = int(msg.get("episode_index"))
+        except (TypeError, ValueError):
+            return
+        from sensors_dcs.task_outcome import patch_episode_outcome
+
+        ep_dir = Path(self._resolved_save_dir()) / f"episode_{ep_i:05d}"
+        to = msg.get("task_outcome") if isinstance(msg.get("task_outcome"), dict) else None
+        tags = msg.get("tags") if isinstance(msg.get("tags"), dict) else None
+        patch_episode_outcome(ep_dir, task_outcome=to, tags=tags)
 
     def _slave_handle_control(self, conn: _PeerConn, msg: dict[str, Any]) -> None:
         mtype = str(msg.get("type") or "")
@@ -1633,6 +2000,10 @@ class StationPeer:
                 "keep_files": bool(msg.get("keep_files", True)),
                 "session_id": session_id,
             }
+            if isinstance(msg.get("task_outcome"), dict):
+                body["task_outcome"] = msg["task_outcome"]
+            if isinstance(msg.get("tags"), dict):
+                body["tags"] = msg["tags"]
             ok = True
             err = ""
             if self._on_stop is not None:

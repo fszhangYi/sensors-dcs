@@ -1,4 +1,4 @@
-"""HTTP / UI helpers for the three offline postprocess CLI steps."""
+"""HTTP / UI helpers for offline postprocess (Steps 1–3 + Step 4 standard export)."""
 
 from __future__ import annotations
 
@@ -138,10 +138,68 @@ def postprocess_defaults(
         "allow_invalid": False,
         "tcp_xyz": tcp,
         "steps": list(DEFAULT_STEPS),
+        "standard_formats": _standard_format_defaults(),
         "episodes": list_episodes(save_dir) if save_dir else [],
         "sessions": list_sessions(save_dir) if save_dir else [],
         "save_dir": str(Path(save_dir).expanduser().resolve()) if save_dir else None,
     }
+
+
+def _standard_format_defaults() -> dict[str, Any]:
+    from sensors_dcs.export.standard_formats import list_standard_formats
+
+    formats = list_standard_formats()
+    # Prefer LeRobot v2.1 checked by default when available.
+    selected = [
+        f["id"]
+        for f in formats
+        if f.get("id") == "lerobot_v21" and f.get("available") != "false"
+    ]
+    if not selected and formats:
+        selected = [formats[0]["id"]]
+    return {"choices": formats, "selected": selected}
+
+
+def run_standard_export(
+    *,
+    episode: str | Path,
+    formats: list[str] | str | None = None,
+    camera_map: str | None = None,
+    allow_invalid: bool = False,
+    fps: float | None = None,
+) -> dict[str, Any]:
+    """Step 4 single-episode export (force overwrite)."""
+    from sensors_dcs.export.standard_formats import export_standard_episode
+
+    cam = resolve_camera_map_path(camera_map)
+    return export_standard_episode(
+        episode,
+        formats=formats or ["lerobot_v21"],
+        camera_map_yaml=cam,
+        allow_invalid=allow_invalid,
+        fps=fps,
+    )
+
+
+def run_standard_export_root(
+    *,
+    input_root: str | Path,
+    formats: list[str] | str | None = None,
+    camera_map: str | None = None,
+    allow_invalid: bool = False,
+    fps: float | None = None,
+) -> dict[str, Any]:
+    """Step 4 batch export over ``episode_*`` (force overwrite)."""
+    from sensors_dcs.export.standard_formats import export_standard_root
+
+    cam = resolve_camera_map_path(camera_map)
+    return export_standard_root(
+        input_root,
+        formats=formats or ["lerobot_v21"],
+        camera_map_yaml=cam,
+        allow_invalid=allow_invalid,
+        fps=fps,
+    )
 
 
 def list_sessions(save_dir: str | Path | None) -> list[dict[str, Any]]:
@@ -813,10 +871,27 @@ def run_postprocess(
             man = _json.loads(man_path.read_text(encoding="utf-8"))
         if isinstance(man, dict):
             agents = agents_index_from_manifest(man)
-            if require_s == DEFAULT_REQUIRE:
-                sug = suggest_require_agents(man)
-                if sug:
-                    require_s = ",".join(sug)
+            sug = suggest_require_agents(man)
+            federated = bool(man.get("federated"))
+            slave_ids = [a["id"] for a in agents if "__" in str(a.get("id") or "")]
+            # Default / empty → suggest from this episode (federated = all stations' cams).
+            # Federated + require that covers no slave agent → treat as stale single-station
+            # list (UI often overwrites #ppRequire when inspecting master episode_*).
+            use_suggested = bool(sug) and (
+                require_s == DEFAULT_REQUIRE
+                or not require_s.strip()
+            )
+            if federated and sug and slave_ids and not use_suggested:
+                tokens = {x.strip() for x in require_s.split(",") if x.strip()}
+                covers_slave = any(
+                    t in slave_ids
+                    or any(sid == t or sid.endswith("__" + t) for sid in slave_ids)
+                    for t in tokens
+                )
+                if not covers_slave:
+                    use_suggested = True
+            if use_suggested:
+                require_s = ",".join(sug)
             else:
                 resolved, _ = resolve_require_list(require_s, manifest=man)
                 require_s = ",".join(resolved)

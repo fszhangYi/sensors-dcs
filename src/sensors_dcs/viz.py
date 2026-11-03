@@ -163,6 +163,26 @@ class PostprocessRootBody(BaseModel):
     tcp_xyz: list[float] | None = None
 
 
+class StandardExportBody(BaseModel):
+    """Step 4: single episode → selected mainstream formats (force overwrite)."""
+
+    episode: str
+    formats: list[str] | None = None
+    camera_map: str | None = None
+    allow_invalid: bool = False
+    fps: float | None = None
+
+
+class StandardExportRootBody(BaseModel):
+    """Step 4 batch: dataset root with episode_* (force overwrite)."""
+
+    input_root: str
+    formats: list[str] | None = None
+    camera_map: str | None = None
+    allow_invalid: bool = False
+    fps: float | None = None
+
+
 class PostprocessSessionBody(BaseModel):
     """τ-merge a multi-station session registry under save_dir/sessions/."""
 
@@ -186,6 +206,16 @@ class PostprocessSessionBody(BaseModel):
     camera_map: str | None = None
     allow_invalid: bool = False
     tcp_xyz: list[float] | None = None
+
+
+class SessionGatherBody(BaseModel):
+    """Master: Peer-notify slaves to push episode trees (resume sync) into sessions/…."""
+
+    session_id: str | None = None
+    episode: str | None = None
+    save_dir: str | None = None
+    station_ids: list[str] | None = None
+    force: bool = False
 
 
 class AuthLoginBody(BaseModel):
@@ -1770,6 +1800,22 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .pp-row input.wide { flex: 1 1 16rem; min-width: 12rem; font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem; }
     .pp-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+    .pp-format-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem 1rem;
+      align-items: center;
+      flex: 1 1 16rem;
+    }
+    .pp-format-list label {
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      color: var(--text);
+      font-size: 0.85rem;
+    }
+    .pp-format-list label.is-unavailable { opacity: 0.55; }
     /* Author display:flex otherwise overrides HTML hidden on station actions. */
     #homeStationActions[hidden] { display: none !important; }
     .pp-align-fig {
@@ -2573,6 +2619,44 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .modal-card h3 { margin: 0 0 0.5rem; font-size: 1rem; font-weight: 600; }
     .modal-card p { margin: 0 0 0.85rem; color: var(--muted); font-size: 0.88rem; line-height: 1.45; white-space: pre-wrap; }
+    .outcome-modal .modal-card { max-width: 32rem; }
+    .outcome-modal .outcome-seg {
+      display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0 0 0.75rem;
+    }
+    .outcome-modal .outcome-seg button {
+      flex: 1 1 5.5rem; min-height: 2.1rem;
+    }
+    .outcome-modal .outcome-seg button.active {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 22%, var(--input-bg));
+      color: var(--text);
+    }
+    .outcome-modal .outcome-labels,
+    .outcome-modal .outcome-tags {
+      display: grid; gap: 0.4rem; margin: 0 0 0.75rem;
+    }
+    .outcome-modal .outcome-labels label {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      margin-right: 0.85rem; font-size: 0.86rem; color: var(--text);
+    }
+    .outcome-modal .outcome-tags label {
+      display: grid; grid-template-columns: 5.5rem 1fr; align-items: center; gap: 0.4rem;
+      font-size: 0.82rem; color: var(--muted);
+    }
+    .outcome-modal .outcome-tags input {
+      width: 100%; min-width: 0; padding: 0.35rem 0.5rem;
+      border-radius: 8px; border: 1px solid var(--border); background: var(--input-bg); color: var(--text);
+    }
+    .outcome-modal .outcome-actions {
+      display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 0.35rem;
+    }
+    .outcome-modal .outcome-actions-follow {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      font-size: 0.82rem; color: var(--muted); user-select: none; cursor: pointer;
+    }
+    .outcome-modal .outcome-actions-btns {
+      display: flex; align-items: center; gap: 0.5rem; margin-left: auto;
+    }
     .path-picker-overlay {
       position: fixed;
       inset: 0;
@@ -3420,6 +3504,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
                     <label class="quick-collect"><input type="checkbox" id="ppSessionAlsoPerStation" /> <span data-i18n="pp.session_also_station">额外再跑各站各自三步</span></label>
                   </div>
                   <div class="pp-actions">
+                    <button type="button" id="btnPpSessionGather" data-i18n="pp.session_gather">收集从站（Gather）</button>
                     <button type="button" class="primary" id="btnPpSessionMerge" data-i18n="pp.session_merge">联机后处理（同单站三步）</button>
                     <span class="hint" id="ppSessionHint"></span>
                   </div>
@@ -3676,6 +3761,26 @@ PREVIEW_HTML = """<!DOCTYPE html>
             <button type="button" id="btnPpHik" data-i18n="pp.run3">运行 Step 3</button>
           </div>
         </section>
+
+        <section class="pp-card" id="ppStep4Card">
+          <h2 data-i18n="pp.step4">4 · 标准格式导出</h2>
+          <p class="pp-hint" data-i18n="pp.step4_hint">只读 Step 2 的 timeline_filtered + 原始 cameras（不经过 export/filtered）。单集选上方 episode；批量选数据集根。强制覆盖格式目录。0 行无法导出。</p>
+          <div class="pp-row">
+            <label data-i18n="pp.step4_formats">格式</label>
+            <div id="ppStep4Formats" class="pp-format-list"></div>
+          </div>
+          <div class="pp-row">
+            <label for="ppStep4Root" data-i18n="pp.step4_batch_root">批量数据集根</label>
+            <input type="text" class="wide" id="ppStep4Root" data-i18n-placeholder="pp.step4_batch_root_ph" placeholder="C:\\Users\\…\\_dcs_data" />
+            <button type="button" id="btnPpBrowseStep4Root" data-i18n="pp.browse">浏览…</button>
+          </div>
+          <div class="pp-actions">
+            <button type="button" class="primary" id="btnPpStep4One" data-i18n="pp.step4_run_one">单集导出 Step 4</button>
+            <button type="button" id="btnPpStep4Batch" data-i18n="pp.step4_run_batch">批量导出 Step 4</button>
+            <span class="hint" id="ppStep4Hint"></span>
+          </div>
+          <pre id="ppStep4Log" data-i18n="pp.log_idle">（尚未运行）</pre>
+        </section>
       </div>
     </div>
   </main>
@@ -3686,6 +3791,41 @@ PREVIEW_HTML = """<!DOCTYPE html>
       <h3 id="appModalTitle" data-i18n="modal.default_title">提示</h3>
       <p id="appModalBody"></p>
       <button type="button" class="primary" id="appModalOk" data-i18n="modal.ok">知道了</button>
+    </div>
+  </div>
+  <div class="modal-backdrop outcome-modal" id="outcomeModal" role="dialog" aria-modal="true" aria-labelledby="outcomeModalTitle">
+    <div class="modal-card">
+      <h3 id="outcomeModalTitle" data-i18n="outcome.title">本局任务结果</h3>
+      <p data-i18n="outcome.hint">与「保留/作废」无关：这里只记录任务是否做成，用于完成率统计。</p>
+      <div class="outcome-seg" id="outcomeSeg" role="group" aria-label="outcome">
+        <button type="button" data-outcome="success" data-i18n="outcome.success">成功</button>
+        <button type="button" data-outcome="fail" data-i18n="outcome.fail">失败</button>
+        <button type="button" data-outcome="partial" data-i18n="outcome.partial">部分</button>
+        <button type="button" data-outcome="void" data-i18n="outcome.void">不计</button>
+      </div>
+      <div class="outcome-labels">
+        <span style="font-size:0.82rem;color:var(--muted)" data-i18n="outcome.labels">子目标（可选）</span>
+        <div>
+          <label><input type="checkbox" id="outcomeLabelGrasp" value="grasp" /> <span data-i18n="outcome.label_grasp">grasp</span></label>
+          <label><input type="checkbox" id="outcomeLabelPlace" value="place" /> <span data-i18n="outcome.label_place">place</span></label>
+        </div>
+      </div>
+      <div class="outcome-tags">
+        <label><span data-i18n="outcome.task_id">task_id</span><input type="text" id="outcomeTaskId" autocomplete="off" placeholder="pick_place_v1" /></label>
+        <label><span data-i18n="outcome.env_id">env_id</span><input type="text" id="outcomeEnvId" autocomplete="off" placeholder="lab_table_a" /></label>
+        <label><span data-i18n="outcome.object_ids">object_ids</span><input type="text" id="outcomeObjectIds" autocomplete="off" placeholder="cup_red, bowl" /></label>
+        <label><span data-i18n="outcome.note">备注</span><input type="text" id="outcomeNote" autocomplete="off" /></label>
+      </div>
+      <div class="outcome-actions">
+        <label class="outcome-actions-follow" for="outcomeFollowLast">
+          <input type="checkbox" id="outcomeFollowLast" />
+          <span data-i18n="outcome.follow_last">跟随上次</span>
+        </label>
+        <div class="outcome-actions-btns">
+          <button type="button" class="ghost" id="outcomeModalCancel" data-i18n="outcome.cancel">取消</button>
+          <button type="button" class="primary" id="outcomeModalConfirm" data-i18n="outcome.confirm">确认并结束</button>
+        </div>
+      </div>
     </div>
   </div>
   <div id="appToast" class="app-toast" role="status" aria-live="polite" hidden></div>
@@ -4385,6 +4525,166 @@ PREVIEW_HTML = """<!DOCTYPE html>
       appModalBody.textContent = body || '';
       appModal.classList.add('show');
     }
+    const outcomeModal = document.getElementById('outcomeModal');
+    const outcomeSeg = document.getElementById('outcomeSeg');
+    const outcomeModalCancel = document.getElementById('outcomeModalCancel');
+    const outcomeModalConfirm = document.getElementById('outcomeModalConfirm');
+    const outcomeFollowLast = document.getElementById('outcomeFollowLast');
+    const LS_OUTCOME_FOLLOW = 'sensors-dcs.outcome.followLast';
+    const LS_OUTCOME_LAST = 'sensors-dcs.outcome.lastForm';
+    let _outcomeResolve = null;
+    let _outcomeSelected = 'success';
+    function _readRequireTaskOutcome() {
+      try {
+        const rt = (window.__dcsStatus && window.__dcsStatus.config && window.__dcsStatus.config.runtime) || {};
+        return !!rt.require_task_outcome;
+      } catch (_) {
+        return false;
+      }
+    }
+    function _setOutcomeSelected(v) {
+      _outcomeSelected = v || 'success';
+      if (!outcomeSeg) return;
+      outcomeSeg.querySelectorAll('button[data-outcome]').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-outcome') === _outcomeSelected);
+      });
+    }
+    function _readOutcomeFollow() {
+      try { return localStorage.getItem(LS_OUTCOME_FOLLOW) === '1'; } catch (_) { return false; }
+    }
+    function _writeOutcomeFollow(on) {
+      try { localStorage.setItem(LS_OUTCOME_FOLLOW, on ? '1' : '0'); } catch (_) {}
+    }
+    function _snapshotOutcomeForm() {
+      const g = document.getElementById('outcomeLabelGrasp');
+      const p = document.getElementById('outcomeLabelPlace');
+      return {
+        outcome: _outcomeSelected || 'success',
+        grasp: !!(g && g.checked),
+        place: !!(p && p.checked),
+        task_id: ((document.getElementById('outcomeTaskId') || {}).value || ''),
+        env_id: ((document.getElementById('outcomeEnvId') || {}).value || ''),
+        object_ids: ((document.getElementById('outcomeObjectIds') || {}).value || ''),
+        note: ((document.getElementById('outcomeNote') || {}).value || ''),
+      };
+    }
+    function _saveOutcomeLastForm() {
+      try {
+        localStorage.setItem(LS_OUTCOME_LAST, JSON.stringify(_snapshotOutcomeForm()));
+      } catch (_) {}
+    }
+    function _loadOutcomeLastForm() {
+      try {
+        const raw = localStorage.getItem(LS_OUTCOME_LAST);
+        if (!raw) return null;
+        const j = JSON.parse(raw);
+        return j && typeof j === 'object' ? j : null;
+      } catch (_) {
+        return null;
+      }
+    }
+    function _applyOutcomeForm(snap, fallbackOutcome) {
+      const s = snap || {};
+      _setOutcomeSelected(s.outcome || fallbackOutcome || 'success');
+      const g = document.getElementById('outcomeLabelGrasp');
+      const p = document.getElementById('outcomeLabelPlace');
+      if (g) g.checked = !!s.grasp;
+      if (p) p.checked = !!s.place;
+      const taskEl = document.getElementById('outcomeTaskId');
+      const envEl = document.getElementById('outcomeEnvId');
+      const objEl = document.getElementById('outcomeObjectIds');
+      const noteEl = document.getElementById('outcomeNote');
+      if (taskEl) taskEl.value = s.task_id != null ? String(s.task_id) : '';
+      if (envEl) envEl.value = s.env_id != null ? String(s.env_id) : '';
+      if (objEl) objEl.value = s.object_ids != null ? String(s.object_ids) : '';
+      if (noteEl) noteEl.value = s.note != null ? String(s.note) : '';
+    }
+    function _resetOutcomeForm(defaultOutcome) {
+      _applyOutcomeForm({
+        outcome: defaultOutcome || 'success',
+        grasp: false,
+        place: false,
+        task_id: '',
+        env_id: '',
+        object_ids: '',
+        note: '',
+      }, defaultOutcome || 'success');
+    }
+    function _collectOutcomeForm() {
+      const labels = [];
+      const g = document.getElementById('outcomeLabelGrasp');
+      const p = document.getElementById('outcomeLabelPlace');
+      if (g && g.checked) labels.push('grasp');
+      if (p && p.checked) labels.push('place');
+      const taskId = ((document.getElementById('outcomeTaskId') || {}).value || '').trim();
+      const envId = ((document.getElementById('outcomeEnvId') || {}).value || '').trim();
+      const objs = ((document.getElementById('outcomeObjectIds') || {}).value || '').trim();
+      const note = ((document.getElementById('outcomeNote') || {}).value || '').trim();
+      const tags = {};
+      if (taskId) tags.task_id = taskId;
+      if (envId) tags.env_id = envId;
+      if (objs) {
+        tags.object_ids = objs.split(/[,;]/).map((x) => x.trim()).filter(Boolean);
+      }
+      return {
+        task_outcome: {
+          outcome: _outcomeSelected || 'success',
+          labels: labels,
+          note: note,
+          source: 'operator',
+        },
+        tags: Object.keys(tags).length ? tags : null,
+      };
+    }
+    function openOutcomeModal(opts) {
+      opts = opts || {};
+      return new Promise((resolve) => {
+        _outcomeResolve = resolve;
+        if (outcomeFollowLast) outcomeFollowLast.checked = _readOutcomeFollow();
+        const follow = !!(outcomeFollowLast && outcomeFollowLast.checked);
+        if (follow) {
+          const last = _loadOutcomeLastForm();
+          if (last) _applyOutcomeForm(last, opts.defaultOutcome || 'success');
+          else _setOutcomeSelected(opts.defaultOutcome || 'success');
+        } else {
+          _resetOutcomeForm(opts.defaultOutcome || 'success');
+        }
+        if (outcomeModal) outcomeModal.classList.add('show');
+        const confirmBtn = outcomeModalConfirm;
+        if (confirmBtn) confirmBtn.focus();
+      });
+    }
+    function closeOutcomeModal(result) {
+      // Remember whatever is on screen so next open (with 跟随上次) matches last popup.
+      _saveOutcomeLastForm();
+      if (outcomeFollowLast) _writeOutcomeFollow(!!outcomeFollowLast.checked);
+      if (outcomeModal) outcomeModal.classList.remove('show');
+      const r = _outcomeResolve;
+      _outcomeResolve = null;
+      if (r) r(result);
+    }
+    if (outcomeSeg) {
+      outcomeSeg.querySelectorAll('button[data-outcome]').forEach((btn) => {
+        btn.addEventListener('click', () => _setOutcomeSelected(btn.getAttribute('data-outcome')));
+      });
+    }
+    if (outcomeFollowLast) {
+      outcomeFollowLast.checked = _readOutcomeFollow();
+      outcomeFollowLast.addEventListener('change', () => {
+        _writeOutcomeFollow(!!outcomeFollowLast.checked);
+      });
+    }
+    if (outcomeModalCancel) {
+      outcomeModalCancel.addEventListener('click', () => closeOutcomeModal(null));
+    }
+    if (outcomeModalConfirm) {
+      outcomeModalConfirm.addEventListener('click', () => closeOutcomeModal(_collectOutcomeForm()));
+    }
+    if (outcomeModal) {
+      outcomeModal.addEventListener('click', (e) => {
+        if (e.target === outcomeModal) closeOutcomeModal(null);
+      });
+    }
     const appToast = document.getElementById('appToast');
     let appToastTimer = null;
     function showAppToast(message, opts) {
@@ -4749,8 +5049,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
       throw new Error(t('hint.qc_wait_flush_timeout', { detail: lastNote || 'timeout' }));
     }
 
-    async function postRecord(path, body, panel) {
+    async function postRecord(path, body, panel, extra) {
       const ui = panel || collectRec;
+      extra = extra || {};
       busy = true;
       recordPanels.forEach((p) => {
         if (p.btnStart) p.btnStart.disabled = true;
@@ -4780,6 +5081,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
         const r = await fetch(path, opts);
         const j = await r.json();
         applyRecordUi(j);
+        if (isStop) {
+          try {
+            ui._lastStopResult = j;
+            window.__lastStopResult = j;
+          } catch (_) {}
+        }
         if (!j.ok && j.error) {
           if (ui.runHint) ui.runHint.textContent = j.error;
         } else if (discarding && j.ok) {
@@ -4788,6 +5095,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
               ? t('hint.discarded_drop')
               : t('hint.discarded');
           }
+        }
+        // Outcome modal / peer sync right after stop returns — before quick-collect wait.
+        if (isStop && j.ok && typeof extra.afterStop === 'function') {
+          try { await extra.afterStop(j); } catch (_) {}
         }
         const wantQc = !!(ui.chkQuickCollect && ui.chkQuickCollect.checked);
         if (isStop && j.ok && wantQc && j.finished_episode_path && j.kept_files !== false) {
@@ -4852,10 +5163,52 @@ PREVIEW_HTML = """<!DOCTYPE html>
         { mode: panel.mode || 'collect' },
         panel,
       ));
-      panel.btnStop.addEventListener('click', () => postRecord('/api/record/stop', {
-        valid: true,
-        async_flush: !!(panel.chkAsyncFlush && panel.chkAsyncFlush.checked),
-      }, panel));
+      async function patchOutcomeAfterStop(panel, last, defaultOutcome) {
+        if (!last || !last.ok || last.kept_files === false) return;
+        const form = await openOutcomeModal({ defaultOutcome: defaultOutcome || 'success' });
+        if (!form) {
+          if (_readRequireTaskOutcome() && panel.runHint) {
+            panel.runHint.textContent = t('outcome.required_after');
+          }
+          return;
+        }
+        try {
+          const r = await fetch('/api/record/outcome', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+              episode_path: last.finished_episode_path || null,
+              episode_index: last.finished_episode_index != null ? last.finished_episode_index : null,
+              session_id: last.session_id || null,
+              task_outcome: form.task_outcome,
+              tags: form.tags,
+              sync_peers: true,
+            }),
+          });
+          const j = await r.json();
+          if (!j.ok && panel.runHint) {
+            panel.runHint.textContent = t('outcome.patch_fail', { error: j.error || ('HTTP ' + r.status) });
+          } else if (panel.runHint && j.ok) {
+            const peers = j.peers;
+            const n = peers && peers.slaves ? peers.slaves.length : 0;
+            panel.runHint.textContent = n
+              ? t('outcome.patch_ok_peers', { n: n })
+              : t('outcome.patch_ok');
+          }
+        } catch (e) {
+          if (panel.runHint) panel.runHint.textContent = t('outcome.patch_fail', { error: String(e) });
+        }
+      }
+      panel.btnStop.addEventListener('click', () => {
+        // Stop/flush immediately; outcome form runs in afterStop (before quick-collect).
+        postRecord('/api/record/stop', {
+          valid: true,
+          async_flush: !!(panel.chkAsyncFlush && panel.chkAsyncFlush.checked),
+        }, panel, {
+          afterStop: (j) => patchOutcomeAfterStop(panel, j, 'success'),
+        });
+      });
       panel.btnDiscard.addEventListener('click', () => {
         const isInfer = panel.mode === 'infer';
         // Collect: confirm + keep on disk (valid=false). Infer/Flow: drop files, no dialog.
@@ -4866,7 +5219,13 @@ PREVIEW_HTML = """<!DOCTYPE html>
           valid: false,
           keep_files: !isInfer,
           async_flush: !!(panel.chkAsyncFlush && panel.chkAsyncFlush.checked),
-        }, panel);
+          task_outcome: (!isInfer) ? { outcome: 'void', source: 'operator' } : null,
+        }, panel, {
+          afterStop: (j) => {
+            if (isInfer) return Promise.resolve();
+            return patchOutcomeAfterStop(panel, j, 'void');
+          },
+        });
       });
     }
     recordPanels.forEach(wireRecordButtons);
@@ -7656,6 +8015,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     function isUiOverlayBlockingKeys() {
       if (appModal && appModal.classList.contains('show')) return true;
+      if (outcomeModal && outcomeModal.classList.contains('show')) return true;
       const settingsEl = document.getElementById('settingsModal');
       if (settingsEl && settingsEl.classList.contains('show')) return true;
       const pathPicker = document.getElementById('pathPickerOverlay');
@@ -7914,6 +8274,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const ppBatchOverwrite = document.getElementById('ppBatchOverwrite');
     const ppBatchHint = document.getElementById('ppBatchHint');
     const ppBatchLog = document.getElementById('ppBatchLog');
+    const ppStep4Formats = document.getElementById('ppStep4Formats');
+    const ppStep4Root = document.getElementById('ppStep4Root');
+    const ppStep4Hint = document.getElementById('ppStep4Hint');
+    const ppStep4Log = document.getElementById('ppStep4Log');
     let ppBusy = false;
     let collectOk = true;
     let inferOk = true;
@@ -8994,9 +9358,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
             : (target === 'packInput' ? 'pathPicker.titlePackInput'
               : (target === 'packOutput' ? 'pathPicker.titlePackOutput'
                 : (target === 'batchRoot' ? 'pathPicker.titleBatchRoot'
-                  : (target === 'sessionSaveDir' ? 'pathPicker.titleSessionSaveDir'
-                    : (target === 'ratePolicy' ? 'pathPicker.titleRatePolicy'
-                      : (target === 'rateSave' ? 'pathPicker.titleRateSave' : 'pathPicker.title')))))))
+                  : (target === 'step4Root' ? 'pathPicker.titleStep4Root'
+                    : (target === 'sessionSaveDir' ? 'pathPicker.titleSessionSaveDir'
+                      : (target === 'ratePolicy' ? 'pathPicker.titleRatePolicy'
+                        : (target === 'rateSave' ? 'pathPicker.titleRateSave' : 'pathPicker.title'))))))))
       );
       await ensureSettingsRoots();
       let seed = opts.seed;
@@ -9011,6 +9376,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
           seed = (ppPackOutput && ppPackOutput.value) || '';
         } else if (target === 'batchRoot') {
           seed = (ppBatchRoot && ppBatchRoot.value) || '';
+        } else if (target === 'step4Root') {
+          seed = (ppStep4Root && ppStep4Root.value) || (ppBatchRoot && ppBatchRoot.value) || '';
         } else if (target === 'sessionSaveDir') {
           seed = (ppSessionSaveDir && ppSessionSaveDir.value) || '';
         } else if (target === 'ratePolicy') {
@@ -9419,6 +9786,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
             ppBatchRoot.value = val;
             savePpForm();
           }
+        } else if (target === 'step4Root') {
+          if (ppStep4Root) {
+            ppStep4Root.value = val;
+            savePpForm();
+          }
         } else if (target === 'sessionSaveDir') {
           if (ppSessionSaveDir) {
             ppSessionSaveDir.value = val;
@@ -9762,6 +10134,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       return fetch('/api/status', { credentials: 'same-origin' })
         .then((r) => r.json())
         .then((j) => {
+          try { window.__dcsStatus = j; } catch (_) {}
           const ok = j.collect_ok !== false && !j.boot_error;
           applyCollectGate(ok, j);
           applyTcpXyzFromStatus(j);
@@ -10643,8 +11016,45 @@ PREVIEW_HTML = """<!DOCTYPE html>
         pack_allow_invalid: !!(ppPackAllowInvalid && ppPackAllowInvalid.checked),
         batch_root: (ppBatchRoot && ppBatchRoot.value || '').trim() || '',
         batch_overwrite: !(ppBatchOverwrite && ppBatchOverwrite.checked === false),
+        step4_root: (ppStep4Root && ppStep4Root.value || '').trim() || '',
+        step4_formats: getStep4Formats(),
         session_save_dir: (ppSessionSaveDir && ppSessionSaveDir.value || '').trim() || '',
       };
+    }
+
+    function getStep4Formats() {
+      if (!ppStep4Formats) return ['lerobot_v21'];
+      const out = [];
+      ppStep4Formats.querySelectorAll('input[type="checkbox"][data-format]').forEach((el) => {
+        if (el.checked && !el.disabled) out.push(el.getAttribute('data-format'));
+      });
+      return out;
+    }
+
+    function renderStep4Formats(choices, selected) {
+      if (!ppStep4Formats) return;
+      const want = new Set(
+        (selected && selected.length) ? selected : ['lerobot_v21']
+      );
+      ppStep4Formats.innerHTML = '';
+      (choices || []).forEach((fmt) => {
+        const id = fmt.id || fmt;
+        const label = document.createElement('label');
+        const unavailable = String(fmt.available || 'true') === 'false';
+        if (unavailable) label.classList.add('is-unavailable');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.setAttribute('data-format', id);
+        cb.checked = want.has(id) && !unavailable;
+        cb.disabled = unavailable;
+        cb.addEventListener('change', savePpForm);
+        const span = document.createElement('span');
+        span.textContent = (fmt.label || id) + (unavailable ? ' (n/a)' : '');
+        span.title = fmt.blurb || id;
+        label.appendChild(cb);
+        label.appendChild(span);
+        ppStep4Formats.appendChild(label);
+      });
     }
 
     function getSessionSaveDir() {
@@ -10778,6 +11188,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (ppBatchOverwrite && src.batch_overwrite != null) {
         ppBatchOverwrite.checked = !!src.batch_overwrite;
       }
+      if (ppStep4Root) {
+        ppStep4Root.value = (src.step4_root || src.batch_root || '').trim();
+      }
+      const std = (defaults && defaults.standard_formats) || {};
+      renderStep4Formats(
+        std.choices || [
+          { id: 'lerobot_v21', label: 'LeRobot v2.1', available: 'true' },
+          { id: 'lerobot_v30', label: 'LeRobot v3.0', available: 'true' },
+          { id: 'hdf5', label: 'HDF5', available: 'true' },
+        ],
+        src.step4_formats || std.selected || ['lerobot_v21'],
+      );
       if (ppSessionSaveDir) {
         const savedRoot = (src.session_save_dir || '').trim();
         const defRoot = (defaults && defaults.save_dir) || '';
@@ -10787,7 +11209,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       refreshRatePolicySummary();
     }
 
-    [ppAlign, ppAlignClock, ppPrimaryCamera, ppMaster, ppRatePolicy, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppTcpX, ppTcpY, ppTcpZ, ppAllowInvalid, ppEpisode, ppPackInput, ppPackOutput, ppPackAllowInvalid, ppBatchRoot, ppBatchOverwrite, ppSessionSaveDir].forEach((el) => {
+    [ppAlign, ppAlignClock, ppPrimaryCamera, ppMaster, ppRatePolicy, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppTcpX, ppTcpY, ppTcpZ, ppAllowInvalid, ppEpisode, ppPackInput, ppPackOutput, ppPackAllowInvalid, ppBatchRoot, ppBatchOverwrite, ppStep4Root, ppSessionSaveDir].forEach((el) => {
       if (!el) return;
       el.addEventListener('change', savePpForm);
       el.addEventListener('blur', savePpForm);
@@ -10912,6 +11334,59 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
     }
 
+    async function runSessionGather() {
+      const sid = (ppSessionSelect && ppSessionSelect.value || '').trim();
+      const ep = (ppEpisode && ppEpisode.value || '').trim();
+      if (!sid && !ep) {
+        if (ppSessionHint) ppSessionHint.textContent = t('pp.session_gather_need');
+        return;
+      }
+      const body = {
+        session_id: sid || null,
+        episode: ep || null,
+        save_dir: getSessionSaveDir() || null,
+        force: false,
+      };
+      setPpBusy(true, t('pp.session_gather_running'));
+      if (ppSessionLog) ppSessionLog.textContent = 'running session gather…\\n' + JSON.stringify(body, null, 2);
+      try {
+        const r = await fetch('/api/postprocess/session/gather', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify(body),
+        });
+        const raw = await r.text();
+        let j;
+        try {
+          j = raw ? JSON.parse(raw) : { ok: false, error: 'empty response' };
+        } catch (_) {
+          j = {
+            ok: false,
+            error: 'HTTP ' + r.status + ' non-JSON: ' + String(raw || '').slice(0, 400),
+          };
+        }
+        if (ppSessionLog) ppSessionLog.textContent = JSON.stringify(j, null, 2);
+        if (ppSessionHint) {
+          ppSessionHint.textContent = j.ok
+            ? t('pp.session_gather_done', {
+              session: (j.session_id || sid || '').toString().slice(0, 8),
+              episode: j.episode_index != null ? String(j.episode_index) : '',
+            })
+            : t('pp.session_gather_fail', { error: j.error || ('HTTP ' + r.status) });
+        }
+        try { if (sid) await inspectSelectedSession(sid); } catch (_) {}
+        try { refreshSessionList(); } catch (_) {}
+        return j;
+      } catch (e) {
+        if (ppSessionHint) ppSessionHint.textContent = String(e);
+        if (ppSessionLog) ppSessionLog.textContent = String(e);
+        return { ok: false, error: String(e) };
+      } finally {
+        setPpBusy(false);
+      }
+    }
+
     async function runSessionMerge() {
       if (!ppSessionSelect || !ppSessionSelect.value) {
         if (ppSessionHint) ppSessionHint.textContent = t('pp.session_need');
@@ -10929,7 +11404,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         rate_policy: (ppRatePolicy && ppRatePolicy.value) || null,
         align_clock: (ppAlignClock && ppAlignClock.value) || 'wall',
         primary_camera: (ppPrimaryCamera && ppPrimaryCamera.value) || 'cam-middle',
-        require: (ppRequire && ppRequire.value) || '',
+        // Always send legacy default for linked session: server expands require from the
+        // federated merged manifest (all stations). Avoids stale master-only #ppRequire
+        // left over from inspecting a single-station episode_*.
+        require: 'arm,cam-left,cam-right,cam-middle,gripper-read',
         trim: (ppTrim && ppTrim.value) || 'both',
         materialize: !!(ppMaterialize && ppMaterialize.checked),
         // Empty/null → server resolves configs/hik_camera_map.yaml (avoids stale
@@ -11107,6 +11585,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     const btnPpSessionRefresh = document.getElementById('btnPpSessionRefresh');
     if (btnPpSessionRefresh) btnPpSessionRefresh.addEventListener('click', () => refreshSessionList());
+    const btnPpSessionGather = document.getElementById('btnPpSessionGather');
+    if (btnPpSessionGather) btnPpSessionGather.addEventListener('click', () => runSessionGather());
     const btnPpSessionMerge = document.getElementById('btnPpSessionMerge');
     if (btnPpSessionMerge) btnPpSessionMerge.addEventListener('click', () => runSessionMerge());
     const btnPpBrowseSessionSaveDir = document.getElementById('btnPpBrowseSessionSaveDir');
@@ -11137,6 +11617,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
     if (btnPpBrowseBatchRoot) {
       btnPpBrowseBatchRoot.addEventListener('click', () => openPathPicker({ target: 'batchRoot', pathKind: 'dir' }));
     }
+    const btnPpBrowseStep4Root = document.getElementById('btnPpBrowseStep4Root');
+    if (btnPpBrowseStep4Root) {
+      btnPpBrowseStep4Root.addEventListener('click', () => openPathPicker({
+        target: 'step4Root',
+        pathKind: 'dir',
+        titleKey: 'pathPicker.titleStep4Root',
+      }));
+    }
     const btnPpBrowseRatePolicy = document.getElementById('btnPpBrowseRatePolicy');
     if (btnPpBrowseRatePolicy) {
       btnPpBrowseRatePolicy.addEventListener('click', () => openPathPicker({
@@ -11160,9 +11648,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         'btnPpBrowseEpisode', 'btnPpBrowseCameraMap', 'btnPpPackHik',
         'btnPpBrowsePackInput', 'btnPpBrowsePackOutput',
         'btnPpBatchRun', 'btnPpBrowseBatchRoot',
+        'btnPpStep4One', 'btnPpStep4Batch', 'btnPpBrowseStep4Root',
         'btnPpBrowseRatePolicy', 'btnPpBrowseRateSave',
         'btnPpRateSave', 'btnPpRateApply',
-        'btnPpSessionRefresh', 'btnPpSessionMerge'].forEach((id) => {
+        'btnPpSessionRefresh', 'btnPpSessionGather', 'btnPpSessionMerge'].forEach((id) => {
         const b = document.getElementById(id);
         if (b) b.disabled = !!on;
       });
@@ -11563,6 +12052,83 @@ PREVIEW_HTML = """<!DOCTYPE html>
     if (btnPpPackHik) btnPpPackHik.addEventListener('click', () => runPackHik());
     const btnPpBatchRun = document.getElementById('btnPpBatchRun');
     if (btnPpBatchRun) btnPpBatchRun.addEventListener('click', () => runBatchPostprocess());
+
+    async function runStep4Export(mode) {
+      const formats = getStep4Formats();
+      if (!formats.length) {
+        if (ppStep4Hint) ppStep4Hint.textContent = t('pp.step4_need_format');
+        return { ok: false, error: 'no formats' };
+      }
+      const form = readPpForm();
+      const body = {
+        formats,
+        camera_map: form.camera_map,
+        allow_invalid: !!form.allow_invalid,
+      };
+      let url = '/api/postprocess/standard-export';
+      if (mode === 'batch') {
+        const root = (ppStep4Root && ppStep4Root.value || '').trim()
+          || (form.batch_root || '').trim();
+        if (!root) {
+          if (ppStep4Hint) ppStep4Hint.textContent = t('pp.step4_need_root');
+          return { ok: false, error: 'missing root' };
+        }
+        body.input_root = root;
+        url = '/api/postprocess/standard-export-root';
+      } else {
+        const episode = (form.episode || '').trim();
+        if (!episode) {
+          if (ppStep4Hint) ppStep4Hint.textContent = t('pp.need_episode');
+          return { ok: false, error: 'missing episode' };
+        }
+        body.episode = episode;
+      }
+      savePpForm();
+      setPpBusy(true, t('pp.step4_running'));
+      if (ppStep4Hint) ppStep4Hint.textContent = t('pp.step4_running');
+      if (ppStep4Log) ppStep4Log.textContent = 'running step4…\\n' + JSON.stringify(body, null, 2);
+      try {
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const j = await r.json();
+        if (ppStep4Log) ppStep4Log.textContent = (j.log || '') + '\\n\\n' + JSON.stringify(j, null, 2);
+        if (ppStep4Hint) {
+          if (mode === 'batch') {
+            ppStep4Hint.textContent = j.ok
+              ? t('pp.step4_batch_done', {
+                ok: j.ok_count != null ? j.ok_count : 0,
+                skipped: j.skipped_count != null ? j.skipped_count : 0,
+                failed: j.failed_count != null ? j.failed_count : 0,
+              })
+              : t('pp.step4_batch_fail', {
+                error: j.error || '',
+                ok: j.ok_count != null ? j.ok_count : 0,
+                skipped: j.skipped_count != null ? j.skipped_count : 0,
+                failed: j.failed_count != null ? j.failed_count : 0,
+              });
+          } else {
+            ppStep4Hint.textContent = j.ok
+              ? t('pp.step4_done')
+              : t('pp.fail', { error: j.error || '' });
+          }
+        }
+        try { refreshEpisodeList(); } catch (_) {}
+        return j;
+      } catch (e) {
+        if (ppStep4Hint) ppStep4Hint.textContent = String(e);
+        if (ppStep4Log) ppStep4Log.textContent = String(e);
+        return { ok: false, error: String(e) };
+      } finally {
+        setPpBusy(false);
+      }
+    }
+    const btnPpStep4One = document.getElementById('btnPpStep4One');
+    if (btnPpStep4One) btnPpStep4One.addEventListener('click', () => runStep4Export('one'));
+    const btnPpStep4Batch = document.getElementById('btnPpStep4Batch');
+    if (btnPpStep4Batch) btnPpStep4Batch.addEventListener('click', () => runStep4Export('batch'));
 
     fetch('/api/postprocess/defaults').then((r) => r.json()).then((j) => {
       if (!j.ok) return;
@@ -13442,8 +14008,10 @@ def create_viz_app(
     station_peer_kick: Callable[..., dict[str, Any]] | None = None,
     station_peer_ping: Callable[..., dict[str, Any]] | None = None,
     station_peer_probe: Callable[..., dict[str, Any]] | None = None,
+    session_gather_fn: Callable[..., dict[str, Any]] | None = None,
     record_start_fn: Callable[..., dict[str, Any]] | None = None,
     record_stop_fn: Callable[..., dict[str, Any]] | None = None,
+    record_outcome_fn: Callable[..., dict[str, Any]] | None = None,
     webrtc_preview_status: Callable[[], dict[str, Any]] | None = None,
     webrtc_preview_client_metrics: Callable[..., dict[str, Any]] | None = None,
     webrtc_preview_benchmark_start: Callable[..., dict[str, Any]] | None = None,
@@ -13940,11 +14508,14 @@ def create_viz_app(
         if recorder is None and record_stop_fn is None:
             return {"ok": False, "error": "recorder unavailable", "state": "idle"}
         # Accept JSON ``{"valid": true|false, "async_flush": true|false,
-        # "keep_files": true|false}``. ``keep_files=false`` with ``valid=false``
-        # deletes the episode dir (infer Discard default).
+        # "keep_files": true|false, "task_outcome": {...}, "tags": {...}}``.
+        # ``keep_files=false`` with ``valid=false`` deletes the episode dir
+        # (infer Discard default).
         valid = True
         async_flush = False
         keep_files = True
+        task_outcome = None
+        tags = None
         try:
             ctype = (request.headers.get("content-type") or "").lower()
             if "application/json" in ctype:
@@ -13958,16 +14529,79 @@ def create_viz_app(
                             async_flush = bool(data["async_flush"])
                         if "keep_files" in data:
                             keep_files = bool(data["keep_files"])
+                        if isinstance(data.get("task_outcome"), dict):
+                            task_outcome = data["task_outcome"]
+                        if isinstance(data.get("tags"), dict):
+                            tags = data["tags"]
         except Exception:  # noqa: BLE001
             valid = True
             async_flush = False
             keep_files = True
+            task_outcome = None
+            tags = None
         stopper = record_stop_fn or recorder.stop
+        # Prefer stop without waiting for outcome form; outcome is patched via
+        # /api/record/outcome after the UI modal (keeps disk flush immediate).
         return await asyncio.to_thread(
             stopper,
             valid=valid,
             async_flush=async_flush,
             keep_files=keep_files,
+            task_outcome=task_outcome,
+            tags=tags,
+        )
+
+    @app.post("/api/record/outcome")
+    async def record_outcome(request: Request) -> dict[str, Any]:
+        """Patch task_outcome/tags onto a finished episode; sync to slaves if master."""
+        if _current_boot_error() is not None:
+            return {"ok": False, "error": "collect unavailable (boot error)"}
+        if _station_is_slave():
+            return _deny_slave("patch task outcome")
+        episode_path = None
+        episode_index = None
+        task_outcome = None
+        tags = None
+        sync_peers = True
+        session_id = None
+        try:
+            raw = await request.body()
+            data = json.loads(raw) if raw and raw.strip() else {}
+            if isinstance(data, dict):
+                episode_path = data.get("episode_path") or data.get("path")
+                if data.get("episode_index") is not None:
+                    try:
+                        episode_index = int(data["episode_index"])
+                    except (TypeError, ValueError):
+                        episode_index = None
+                if isinstance(data.get("task_outcome"), dict):
+                    task_outcome = data["task_outcome"]
+                if isinstance(data.get("tags"), dict):
+                    tags = data["tags"]
+                if "sync_peers" in data:
+                    sync_peers = bool(data["sync_peers"])
+                if data.get("session_id"):
+                    session_id = str(data["session_id"])
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"bad json: {e}"}
+        if record_outcome_fn is not None:
+            return await asyncio.to_thread(
+                record_outcome_fn,
+                episode_path=episode_path,
+                episode_index=episode_index,
+                task_outcome=task_outcome,
+                tags=tags,
+                sync_peers=sync_peers,
+                session_id=session_id,
+            )
+        if recorder is None:
+            return {"ok": False, "error": "recorder unavailable"}
+        return await asyncio.to_thread(
+            recorder.apply_episode_outcome,
+            episode_path=episode_path,
+            episode_index=episode_index,
+            task_outcome=task_outcome,
+            tags=tags,
         )
 
     @app.post("/api/record/save_dir")
@@ -14211,6 +14845,50 @@ def create_viz_app(
         finally:
             _pp_lock.release()
 
+    @app.get("/api/postprocess/standard-formats")
+    async def postprocess_standard_formats() -> dict[str, Any]:
+        from sensors_dcs.export.standard_formats import list_standard_formats
+
+        return {"ok": True, "formats": list_standard_formats()}
+
+    @app.post("/api/postprocess/standard-export")
+    async def postprocess_standard_export(req: StandardExportBody) -> dict[str, Any]:
+        from sensors_dcs.postprocess_service import run_standard_export
+
+        if not _pp_lock.acquire(blocking=False):
+            return {"ok": False, "error": "another postprocess job is running"}
+        try:
+            return await asyncio.to_thread(
+                run_standard_export,
+                episode=req.episode,
+                formats=req.formats,
+                camera_map=req.camera_map,
+                allow_invalid=req.allow_invalid,
+                fps=req.fps,
+            )
+        finally:
+            _pp_lock.release()
+
+    @app.post("/api/postprocess/standard-export-root")
+    async def postprocess_standard_export_root(
+        req: StandardExportRootBody,
+    ) -> dict[str, Any]:
+        from sensors_dcs.postprocess_service import run_standard_export_root
+
+        if not _pp_lock.acquire(blocking=False):
+            return {"ok": False, "error": "another postprocess job is running"}
+        try:
+            return await asyncio.to_thread(
+                run_standard_export_root,
+                input_root=req.input_root,
+                formats=req.formats,
+                camera_map=req.camera_map,
+                allow_invalid=req.allow_invalid,
+                fps=req.fps,
+            )
+        finally:
+            _pp_lock.release()
+
     def _pp_save_dir(override: str | None = None) -> str | None:
         if override and str(override).strip():
             return str(Path(str(override).strip()).expanduser().resolve())
@@ -14298,6 +14976,47 @@ def create_viz_app(
             return await asyncio.to_thread(_run)
         finally:
             _pp_lock.release()
+
+    @app.post("/api/postprocess/session/gather")
+    async def postprocess_session_gather(req: SessionGatherBody) -> dict[str, Any]:
+        """Master-only: Peer gather_request → slave LAN push (resume) into sessions/…."""
+        if _station_is_slave():
+            return _deny_slave("session gather")
+        if session_gather_fn is None:
+            return {"ok": False, "error": "session gather unavailable (orchestrator unbound)"}
+        root = _pp_save_dir(req.save_dir)
+        if not root:
+            return {"ok": False, "error": "save_dir unavailable"}
+        sid = (req.session_id or "").strip() or None
+        ep = (req.episode or "").strip() or None
+        if not sid and not ep:
+            return {
+                "ok": False,
+                "error": "session_id or episode path required (linked-session meta)",
+            }
+        if not _pp_lock.acquire(blocking=False):
+            return {"ok": False, "error": "another postprocess/gather job is running"}
+        try:
+            return await asyncio.to_thread(
+                session_gather_fn,
+                save_dir=root,
+                session_id=sid,
+                episode_path=ep,
+                station_ids=req.station_ids,
+                force=bool(req.force),
+            )
+        finally:
+            _pp_lock.release()
+
+    @app.get("/api/postprocess/session/gather/status")
+    async def postprocess_session_gather_status(job_id: str = "") -> dict[str, Any]:
+        from sensors_dcs.session_gather import GATHER_JOBS
+
+        jid = (job_id or "").strip()
+        row = GATHER_JOBS.get(jid) if jid else GATHER_JOBS.latest()
+        if not row:
+            return {"ok": False, "error": "no gather job"}
+        return {"ok": True, "job": row}
 
     @app.post("/api/gripper/command")
     async def gripper_cmd(req: GripperCommandBody) -> dict[str, Any]:

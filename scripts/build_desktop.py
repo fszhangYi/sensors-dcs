@@ -371,6 +371,7 @@ def _verify_bundled_imports(
         "scipy",
         "pandas",
         "pyarrow",
+        "h5py",
         "elite",
         "pyrealsense2",
         "cv2",
@@ -412,6 +413,7 @@ def _verify_bundled_imports(
                 "import fastapi",
                 "import pandas as pd",
                 "import pyarrow",
+                "import h5py",
                 "from scipy.optimize import least_squares",
                 "from scipy.spatial.transform import Rotation",
                 "from elite import EC",
@@ -419,6 +421,9 @@ def _verify_bundled_imports(
                 'p = os.path.join(tempfile.gettempdir(), "sensors_dcs_parquet_smoke.parquet")',
                 'pd.DataFrame({"x": [1]}).to_parquet(p, index=False, engine="pyarrow")',
                 "os.remove(p)",
+                'h = os.path.join(tempfile.gettempdir(), "sensors_dcs_h5py_smoke.h5")',
+                "with h5py.File(h, 'w') as f: f.create_dataset('x', data=[1, 2, 3])",
+                "os.remove(h)",
                 "opt_ok = []",
                 "for m in optional:",
                 "    try:",
@@ -528,10 +533,10 @@ def _verify_bundled_pyarrow(release: Path) -> None:
 
 
 def _bundle_native_libs(built: Path, py_dir: Path) -> None:
-    """Copy ``*.libs`` MSVC runtime folders PyInstaller often drops for pyarrow/pandas/scipy."""
+    """Copy ``*.libs`` MSVC runtime folders PyInstaller often drops for pyarrow/pandas/scipy/h5py."""
     internal = built / "_internal"
     site = py_dir / "Lib" / "site-packages"
-    for name in ("pyarrow", "pandas", "scipy"):
+    for name in ("pyarrow", "pandas", "scipy", "h5py"):
         src = site / f"{name}.libs"
         dst = internal / f"{name}.libs"
         if not src.is_dir():
@@ -539,6 +544,7 @@ def _bundle_native_libs(built: Path, py_dir: Path) -> None:
                 raise SystemExit(
                     f"missing {src} in Wine embed Python — pip install pyarrow in build env"
                 )
+            # h5py wheels often ship hdf5.dll inside the package, not h5py.libs.
             print(f"[warn] {name}.libs not found under {site}")
             continue
         if dst.exists():
@@ -579,15 +585,20 @@ def _verify_frozen_parquet_smoke(
                 f"internal = {internal_w!r}",
                 'pyarrow_libs = internal + r"\\pyarrow.libs"',
                 'pyarrow_dir = internal + r"\\pyarrow"',
-                "path_add = os.pathsep.join([pyarrow_libs, pyarrow_dir, internal])",
+                'h5py_dir = internal + r"\\h5py"',
+                "path_add = os.pathsep.join([pyarrow_libs, pyarrow_dir, h5py_dir, internal])",
                 'os.environ["PATH"] = path_add + os.pathsep + os.environ.get("PATH", "")',
                 "sys.path.insert(0, internal)",
                 "import pyarrow",
                 "import pandas as pd",
+                "import h5py",
                 'p = os.path.join(tempfile.gettempdir(), "sensors_dcs_parquet_smoke.parquet")',
                 'pd.DataFrame({"x": [1]}).to_parquet(p, index=False, engine="pyarrow")',
                 "os.remove(p)",
-                'print("frozen_parquet_ok", pyarrow.__version__)',
+                'h = os.path.join(tempfile.gettempdir(), "sensors_dcs_h5py_smoke.h5")',
+                "with h5py.File(h, 'w') as f: f.create_dataset('x', data=[1])",
+                "os.remove(h)",
+                'print("frozen_parquet_ok", pyarrow.__version__, "h5py", h5py.__version__)',
             ]
         )
         + "\n",
@@ -599,7 +610,7 @@ def _verify_frozen_parquet_smoke(
 
 
 def _verify_frozen_parquet_smoke_native(py_exe: Path, built: Path, env: dict[str, str]) -> None:
-    """Import pyarrow from the onedir _internal tree using host Python (native-win)."""
+    """Import pyarrow/h5py from the onedir _internal tree using host Python (native-win)."""
     internal = str((built / "_internal").resolve())
     script = TMP_BASE / "_verify_frozen_parquet_native.py"
     script.write_text(
@@ -609,15 +620,20 @@ def _verify_frozen_parquet_smoke_native(py_exe: Path, built: Path, env: dict[str
                 f"internal = {internal!r}",
                 'pyarrow_libs = os.path.join(internal, "pyarrow.libs")',
                 'pyarrow_dir = os.path.join(internal, "pyarrow")',
-                "path_add = os.pathsep.join([pyarrow_libs, pyarrow_dir, internal])",
+                'h5py_dir = os.path.join(internal, "h5py")',
+                "path_add = os.pathsep.join([pyarrow_libs, pyarrow_dir, h5py_dir, internal])",
                 'os.environ["PATH"] = path_add + os.pathsep + os.environ.get("PATH", "")',
                 "sys.path.insert(0, internal)",
                 "import pyarrow",
                 "import pandas as pd",
+                "import h5py",
                 'p = os.path.join(tempfile.gettempdir(), "sensors_dcs_parquet_smoke.parquet")',
                 'pd.DataFrame({"x": [1]}).to_parquet(p, index=False, engine="pyarrow")',
                 "os.remove(p)",
-                'print("frozen_parquet_ok", pyarrow.__version__)',
+                'h = os.path.join(tempfile.gettempdir(), "sensors_dcs_h5py_smoke.h5")',
+                "with h5py.File(h, 'w') as f: f.create_dataset('x', data=[1])",
+                "os.remove(h)",
+                'print("frozen_parquet_ok", pyarrow.__version__, "h5py", h5py.__version__)',
             ]
         )
         + "\n",

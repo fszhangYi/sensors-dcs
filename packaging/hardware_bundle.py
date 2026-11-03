@@ -39,10 +39,11 @@ KINEMATICS_PACKAGES = (
     "scipy",
 )
 
-# export-timeline / filter-timeline (requirements-desktop.txt / pyproject [export])
+# export-timeline / filter-timeline / Step4 hdf5 (requirements-desktop.txt / pyproject [export])
 EXPORT_PACKAGES = (
     "pandas",
     "pyarrow",
+    "h5py",
 )
 
 # --ui pywebview window (requirements-desktop.txt; import name is webview)
@@ -67,6 +68,7 @@ _TEST_PATH_MARKERS = (
     "/numpy/typing/tests/",
     "/pandas/tests/",
     "/pyarrow/tests/",
+    "/h5py/tests/",
     "/scipy/stats/tests/",
     "/scipy/optimize/tests/",
     "/scipy/spatial/tests/",
@@ -205,6 +207,9 @@ def extend_analysis(
         "pyarrow",
         "pyarrow.lib",
         "pyarrow.parquet",
+        "h5py",
+        "h5py._hl",
+        "h5py._hl.files",
         "dynamixel_sdk",
         "dynamixel_sdk.robotis_def",
         "dynamixel_sdk.packet_handler",
@@ -243,6 +248,7 @@ def extend_analysis(
         "sensors_dcs.export.timeline",
         "sensors_dcs.export.filter",
         "sensors_dcs.export.parquet_io",
+        "sensors_dcs.export.standard_formats",
         "sensors_dcs.export.hik_grid_video",
         "sensors_dcs.export.raw_grid_video",
         "sensors_dcs.export.align_plot",
@@ -258,7 +264,7 @@ def extend_analysis(
             datas += copy_metadata(pkg)
         except Exception:  # noqa: BLE001
             pass
-        if pkg in ("pyrealsense2", "cv2", "pyarrow", "pandas", "scipy", "elite_cs_sdk", "av"):
+        if pkg in ("pyrealsense2", "cv2", "pyarrow", "pandas", "h5py", "scipy", "elite_cs_sdk", "av"):
             try:
                 binaries += collect_dynamic_libs(pkg)
             except Exception:  # noqa: BLE001

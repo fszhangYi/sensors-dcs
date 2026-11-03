@@ -2,7 +2,7 @@
 
 日期：2026-10-14（P4 同日收口）  
 状态：P0–P4 底线已落地（chrony 文档 + COMMIT 先发紧 barrier）；**不做** Peer 拉取跨站后处理  
-时钟专文：[station-clock-align.md](station-clock-align.md)
+时钟专文：[station-clock-align.md](station-clock-align.md) · 从站数据收集：[session-gather.md](session-gather.md)
 
 ## 1. 目标与硬约束
 
@@ -138,12 +138,14 @@ Stop 同理：STOP → ACK → 各自 finalize
      sessions/<session_id>/session.json
      sessions/<session_id>/<slave_station_id>/episode_XXXXX/ # 从站整目录拷来
    ```
+   自动化 gather 选型（rclone/rsync、不进热路径、不走 Peer）：见 **[session-gather.md](session-gather.md)**。
 3. 联机后处理（与单站相同效果）：
    - UI「联机后处理（同单站三步）」→ `POST /api/postprocess/session/run`
    - 合成 federated episode：`sessions/<id>/merged/episode_XXXXX/`  
      （`t_wall' = master_t0 + τ`；从站 agent 前缀 `{station_id}__`；主站 agent 名不变）
    - 再跑与单站相同的 `export-timeline` → `filter-timeline` → `export-hik-dataset`  
-     → 产物在 `sessions/<id>/merged/episode_XXXXX/export/`（含 `hik_dataset/`）
+     → 产物在 `sessions/<id>/merged/episode_XXXXX/export/`（含 `hik_dataset/`）  
+   - 可选 Step 4：`export-standard` / UI「标准格式导出」→ `lerobot_v21` 等（见 [`standard-export-step4.md`](standard-export-step4.md)；强制覆盖格式目录）
 4. 跨站时间：`τ = t_wall - t0`；federated 默认 `align_clock=wall`（各站 HW 钟不可比）；不要用未同步绝对 `t_wall` 硬并。
 5. barrier 网络延迟：靠 chrony + 紧 COMMIT；主站 UI「测速」可读 RTT/2。
 6. Peer 拉集仍不做；单站 Episode 列表 / 三步流程不变。

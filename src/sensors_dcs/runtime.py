@@ -3,6 +3,7 @@ from __future__ import annotations
 import signal
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import uvicorn
@@ -130,6 +131,8 @@ class Orchestrator:
             on_commit=self._peer_on_commit,
             on_abort=self._peer_on_abort,
             on_stop=self._peer_on_stop,
+            on_task_outcome=self._peer_on_task_outcome,
+            on_gather=self._peer_on_gather,
         )
         self._stop = threading.Event()
         self._viz_thread: threading.Thread | None = None
@@ -429,11 +432,269 @@ class Orchestrator:
         print(f"[sensors-dcs] peer abort session={session_id}: {reason}", flush=True)
 
     def _peer_on_stop(self, body: dict[str, Any]) -> dict[str, Any]:
+        # Outcome form is filled after stop on the master; slaves receive a
+        # separate ``task_outcome`` peer message — do not require it here.
         return self.recorder.stop(
             valid=bool(body.get("valid", True)),
             async_flush=bool(body.get("async_flush", False)),
             keep_files=bool(body.get("keep_files", True)),
         )
+
+    def _peer_on_task_outcome(self, body: dict[str, Any]) -> dict[str, Any]:
+        to = body.get("task_outcome") if isinstance(body.get("task_outcome"), dict) else None
+        tags = body.get("tags") if isinstance(body.get("tags"), dict) else None
+        ep_i = body.get("episode_index")
+        try:
+            ep_i_int = int(ep_i) if ep_i is not None else None
+        except (TypeError, ValueError):
+            ep_i_int = None
+        return self.recorder.apply_episode_outcome(
+            episode_index=ep_i_int,
+            task_outcome=to,
+            tags=tags,
+        )
+
+    def _peer_on_gather(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Slave: ack/run gather push (files via rclone/rsync/resume copy — not Peer)."""
+        from sensors_dcs.session_gather import (
+            GATHER_JOBS,
+            run_slave_gather_push,
+            slave_source_episode_dir,
+        )
+
+        phase = str(body.get("_phase") or "run").strip().lower()
+        try:
+            ep_i = int(body.get("episode_index"))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "episode_index missing"}
+        dest_uri = str(body.get("dest_uri") or "").strip()
+        if not dest_uri:
+            return {"ok": False, "error": "dest_uri missing"}
+        src = slave_source_episode_dir(self.cfg.record.save_dir or "./data", ep_i)
+        if phase == "ack":
+            if not src.is_dir() or not (src / "manifest.json").is_file():
+                return {"ok": False, "error": f"local episode not ready: {src}"}
+            return {"ok": True, "src": str(src), "dest_uri": dest_uri}
+
+        jid = str(body.get("job_id") or "")
+        backend = str(body.get("backend") or getattr(self.cfg.station.gather, "backend", "auto") or "auto")
+        force = bool(body.get("force"))
+        try:
+            timeout_s = float(body.get("timeout_s") or self.cfg.station.gather.timeout_s)
+        except (TypeError, ValueError):
+            timeout_s = float(self.cfg.station.gather.timeout_s)
+        GATHER_JOBS.start(
+            jid,
+            {
+                "role": "slave",
+                "episode_index": ep_i,
+                "src": str(src),
+                "dest_uri": dest_uri,
+            },
+        )
+        result = run_slave_gather_push(
+            source_episode=src,
+            dest_uri=dest_uri,
+            backend=backend,
+            force=force,
+            timeout_s=timeout_s,
+        )
+        GATHER_JOBS.finish(jid, ok=bool(result.get("ok")), **{k: v for k, v in result.items() if k != "ok"})
+        return result
+
+    def run_session_gather(
+        self,
+        *,
+        save_dir: str | None = None,
+        session_id: str | None = None,
+        episode_path: str | None = None,
+        station_ids: list[str] | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Master: resolve session from episode meta, Peer-notify slaves to push (resume sync)."""
+        from sensors_dcs.session_gather import (
+            GATHER_JOBS,
+            build_gather_dest,
+            new_job_id,
+            resolve_session_for_gather,
+            validate_gathered_episode,
+        )
+
+        if self.cfg.station.role != "master":
+            return {"ok": False, "error": "session gather is master-only"}
+        root = save_dir or self.cfg.record.save_dir or "./data"
+        try:
+            resolved = resolve_session_for_gather(
+                save_dir=root,
+                session_id=session_id,
+                episode_path=episode_path,
+            )
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": str(e)}
+
+        sid = resolved["session_id"]
+        ep_i = int(resolved["episode_index"])
+        doc = resolved["doc"]
+        gather_cfg = self.cfg.station.gather
+        publish = (gather_cfg.publish_uri or "").strip() or (self.cfg.station.share_root or "").strip()
+        if not publish:
+            # Same-host / lab without NAS: slaves push into master save_dir tree directly
+            # (only works when slaves can open that path over LAN, e.g. mapped drive).
+            publish = str(resolved["save_dir"])
+        if not publish:
+            return {
+                "ok": False,
+                "error": (
+                    "station.gather.publish_uri (or station.share_root / save_dir) is required "
+                    "so slaves can write to the master layout over LAN"
+                ),
+                "session_id": sid,
+                "episode_index": ep_i,
+            }
+
+        want = {str(x).strip() for x in (station_ids or []) if str(x).strip()}
+        participants = doc.get("participants") if isinstance(doc.get("participants"), list) else []
+        targets: list[dict[str, Any]] = []
+        for p in participants:
+            if not isinstance(p, dict):
+                continue
+            if str(p.get("role") or "").strip().lower() != "slave":
+                continue
+            st_id = str(p.get("station_id") or "").strip()
+            if not st_id:
+                continue
+            if want and st_id not in want:
+                continue
+            dest = build_gather_dest(
+                save_dir=resolved["save_dir"],
+                session_id=sid,
+                station_id=st_id,
+                episode_index=ep_i,
+                publish_uri=publish,
+            )
+            if not dest.get("dest_uri"):
+                return {
+                    "ok": False,
+                    "error": f"failed to build dest_uri for {st_id}",
+                    "session_id": sid,
+                }
+            targets.append(
+                {
+                    "station_id": st_id,
+                    "dest_uri": dest["dest_uri"],
+                    "local_path": dest["local_path"],
+                }
+            )
+        if not targets:
+            return {
+                "ok": False,
+                "error": "no slave participants in session.json",
+                "session_id": sid,
+                "episode_index": ep_i,
+            }
+
+        jid = new_job_id()
+        GATHER_JOBS.start(
+            jid,
+            {
+                "role": "master",
+                "session_id": sid,
+                "episode_index": ep_i,
+                "targets": [t["station_id"] for t in targets],
+            },
+        )
+        peer_out = self.peer.broadcast_gather(
+            session_id=sid,
+            episode_index=ep_i,
+            targets=targets,
+            backend=gather_cfg.backend or "auto",
+            force=force,
+            timeout_s=float(gather_cfg.timeout_s),
+            job_id=jid,
+        )
+        # Validate local convention paths after push
+        validations: list[dict[str, Any]] = []
+        for t in targets:
+            validations.append(
+                {
+                    "station_id": t["station_id"],
+                    **validate_gathered_episode(
+                        t["local_path"],
+                        session_id=sid,
+                        episode_index=ep_i,
+                    ),
+                }
+            )
+        all_valid = all(v.get("ok") for v in validations)
+        ok = bool(peer_out.get("ok")) and all_valid
+        GATHER_JOBS.finish(
+            jid,
+            ok=ok,
+            peer=peer_out,
+            validations=validations,
+            error=None if ok else (peer_out.get("error") or "validation failed"),
+        )
+        return {
+            "ok": ok,
+            "job_id": jid,
+            "session_id": sid,
+            "episode_index": ep_i,
+            "publish_uri": publish,
+            "targets": targets,
+            "peer": peer_out,
+            "validations": validations,
+            "error": None if ok else (peer_out.get("error") or "gather incomplete"),
+            "log": (
+                f"gather job={jid} session={sid} episode={ep_i} "
+                f"slaves={[t['station_id'] for t in targets]} "
+                f"ok={ok}"
+            ),
+        }
+
+    def apply_task_outcome_after_stop(
+        self,
+        *,
+        episode_path: str | None = None,
+        episode_index: int | None = None,
+        task_outcome: dict[str, Any] | None = None,
+        tags: dict[str, Any] | None = None,
+        sync_peers: bool = True,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Patch local episode then fan-out to slaves (master only)."""
+        local = self.recorder.apply_episode_outcome(
+            episode_path=episode_path,
+            episode_index=episode_index,
+            task_outcome=task_outcome,
+            tags=tags,
+        )
+        peer_out = None
+        if sync_peers and self.peer.has_active_slaves():
+            ep_i = episode_index
+            if ep_i is None and local.get("episode_index") is not None:
+                try:
+                    ep_i = int(local["episode_index"])
+                except (TypeError, ValueError):
+                    ep_i = None
+            if ep_i is None and episode_path:
+                name = Path(episode_path).name
+                if name.startswith("episode_"):
+                    try:
+                        ep_i = int(name.split("_", 1)[1])
+                    except ValueError:
+                        ep_i = None
+            peer_out = self.peer.broadcast_task_outcome(
+                task_outcome=task_outcome,
+                tags=tags,
+                episode_index=ep_i,
+                session_id=session_id,
+            )
+        return {
+            "ok": bool(local.get("ok")),
+            "local": local,
+            "peers": peer_out,
+            "error": local.get("error"),
+        }
 
     def coordinated_record_start(self, *, mode: str = "collect") -> dict[str, Any]:
         """Master with slaves → barrier; otherwise legacy RecordController.start."""
@@ -451,6 +712,8 @@ class Orchestrator:
         valid: bool = True,
         async_flush: bool = False,
         keep_files: bool = True,
+        task_outcome: dict[str, Any] | None = None,
+        tags: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if self.peer.has_active_slaves():
             return self.peer.barrier_stop(
@@ -458,9 +721,15 @@ class Orchestrator:
                 valid=valid,
                 async_flush=async_flush,
                 keep_files=keep_files,
+                task_outcome=task_outcome,
+                tags=tags,
             )
         return self.recorder.stop(
-            valid=valid, async_flush=async_flush, keep_files=keep_files
+            valid=valid,
+            async_flush=async_flush,
+            keep_files=keep_files,
+            task_outcome=task_outcome,
+            tags=tags,
         )
 
     def status(self) -> dict[str, Any]:
@@ -4290,8 +4559,10 @@ class Orchestrator:
             station_peer_kick=self.peer.kick_slave,
             station_peer_ping=self.peer.ping_slave,
             station_peer_probe=self.peer.probe_slave,
+            session_gather_fn=self.run_session_gather,
             record_start_fn=self.coordinated_record_start,
             record_stop_fn=self.coordinated_record_stop,
+            record_outcome_fn=self.apply_task_outcome_after_stop,
             webrtc_preview_status=self.webrtc_preview_status,
             webrtc_preview_client_metrics=self.webrtc_preview_client_metrics,
             webrtc_preview_benchmark_start=self.webrtc_preview_benchmark_start,
