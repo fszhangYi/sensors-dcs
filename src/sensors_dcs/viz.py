@@ -1548,21 +1548,73 @@ PREVIEW_HTML = """<!DOCTYPE html>
       display: grid;
       gap: 0.55rem;
     }
-    .pp-card.pp-card-hub {
-      display: block;
-      padding: 0.7rem;
-    }
-    .pp-hub {
+    .pp-card.pp-card-flow {
       display: grid;
-      grid-template-columns: minmax(15rem, 0.95fr) minmax(18rem, 1.35fr) minmax(15rem, 1.05fr);
+      gap: 0.65rem;
+      padding: 0.85rem 1rem 1rem;
+    }
+    .pp-sec-head {
+      display: grid;
+      gap: 0.2rem;
+      margin: 0;
+      min-width: 0;
+    }
+    .pp-sec-head .pp-kicker {
+      margin: 0;
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent, #3dd6c6);
+    }
+    .pp-sec-head > h2 {
+      margin: 0;
+      font-size: 1.02rem;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+    .pp-sec-head > .pp-hint {
+      margin: 0;
+      max-width: 62rem;
+    }
+    .pp-source-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
       gap: 0.7rem;
       align-items: start;
     }
-    .pp-hub-source {
+    .pp-pipeline {
       display: grid;
+      grid-template-columns: minmax(16rem, 0.95fr) minmax(18rem, 1.2fr);
       gap: 0.7rem;
+      align-items: start;
+    }
+    .pp-params {
+      display: grid;
+      gap: 0.65rem;
       align-content: start;
       min-width: 0;
+    }
+    .pp-execute {
+      display: grid;
+      gap: 0.65rem;
+      align-content: start;
+      min-width: 0;
+    }
+    .pp-steps-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.55rem;
+      align-items: start;
+    }
+    .pp-steps-grid .pp-zone-step2 {
+      grid-column: 1 / -1;
+    }
+    .pp-downstream-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.7rem;
+      align-items: start;
     }
     .pp-zone {
       display: grid;
@@ -1606,6 +1658,44 @@ PREVIEW_HTML = """<!DOCTYPE html>
       min-height: 3.25rem;
       max-height: min(9rem, 20vh);
     }
+    .pp-zone-batch #ppBatchLog {
+      margin-top: 0.35rem;
+      min-height: 3.5rem;
+      max-height: min(10rem, 22vh);
+    }
+    details.pp-rate-details {
+      padding: 0;
+      overflow: hidden;
+    }
+    details.pp-rate-details > summary.pp-rate-summary {
+      list-style: none;
+      cursor: pointer;
+      display: grid;
+      gap: 0.2rem;
+      padding: 0.85rem 1rem;
+      user-select: none;
+    }
+    details.pp-rate-details > summary.pp-rate-summary::-webkit-details-marker { display: none; }
+    details.pp-rate-details > summary.pp-rate-summary::after {
+      content: "▸";
+      position: absolute;
+      right: 1.1rem;
+      top: 1rem;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    details.pp-rate-details {
+      position: relative;
+    }
+    details.pp-rate-details[open] > summary.pp-rate-summary::after {
+      content: "▾";
+    }
+    details.pp-rate-details .pp-zone-rate {
+      margin: 0 0.7rem 0.85rem;
+      border: none;
+      background: transparent;
+      padding: 0.2rem 0.3rem 0.4rem;
+    }
     .pp-metrics-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
@@ -1630,10 +1720,36 @@ PREVIEW_HTML = """<!DOCTYPE html>
       color: var(--text);
       font-variant-numeric: tabular-nums;
     }
+    .pp-zone-metrics .pp-metrics-raw {
+      margin-top: 0.45rem;
+      border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--panel, #121212) 92%, transparent);
+      overflow: hidden;
+    }
+    .pp-zone-metrics .pp-metrics-raw > summary {
+      cursor: pointer;
+      user-select: none;
+      list-style: none;
+      padding: 0.4rem 0.65rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+    .pp-zone-metrics .pp-metrics-raw > summary::-webkit-details-marker { display: none; }
+    .pp-zone-metrics .pp-metrics-raw > summary::before {
+      content: "▸ ";
+      color: var(--accent, #3dd6c6);
+    }
+    .pp-zone-metrics .pp-metrics-raw[open] > summary::before {
+      content: "▾ ";
+    }
     .pp-zone-metrics #ppMetricsLog {
-      margin-top: 0.35rem;
-      min-height: 3.5rem;
-      max-height: min(12rem, 24vh);
+      margin: 0;
+      border: none;
+      border-radius: 0;
+      border-top: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+      min-height: 2.5rem;
+      max-height: min(14rem, 28vh);
     }
     .pp-fields {
       display: grid;
@@ -1792,21 +1908,25 @@ PREVIEW_HTML = """<!DOCTYPE html>
       margin-top: 0.15rem;
     }
     @media (max-width: 1180px) {
-      .pp-hub {
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+      .pp-source-grid,
+      .pp-pipeline {
+        grid-template-columns: 1fr;
       }
-      .pp-hub-source { grid-column: 1; }
-      .pp-zone-rate { grid-column: 1 / -1; order: 3; }
-      .pp-zone-align { grid-column: 2; grid-row: 1; }
+      .pp-downstream-grid {
+        grid-template-columns: 1fr 1fr;
+      }
     }
     @media (max-width: 960px) {
-      .pp-hub { grid-template-columns: 1fr; }
-      .pp-hub-source,
-      .pp-zone-rate,
-      .pp-zone-align { grid-column: auto; grid-row: auto; order: 0; }
       .pp-fields { grid-template-columns: 1fr; }
       .pp-rate-body { grid-template-columns: 1fr; }
       .pp-rate-canvas-box { height: 200px; }
+      .pp-downstream-grid,
+      .pp-steps-grid {
+        grid-template-columns: 1fr;
+      }
+      .pp-steps-grid .pp-zone-step2 {
+        grid-column: auto;
+      }
     }
     .pp-card .pp-hint {
       margin: 0;
@@ -3496,331 +3616,372 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
     <div class="tab-panel" id="tab-post" role="tabpanel">
       <div class="pp-grid">
-        <section class="pp-card pp-card-hub">
-          <div class="pp-hub">
-            <div class="pp-hub-source">
-              <div class="pp-zone pp-zone-episode" aria-labelledby="ppZoneEpisode">
-                <h2 id="ppZoneEpisode" data-i18n="pp.episode">Episode</h2>
-                <p class="pp-hint" data-i18n="pp.episode_hint">选择已落盘目录，或粘贴完整路径（如 D:\\data_new\\episode_00016）。</p>
-                <div class="pp-row">
-                  <label for="ppEpisodeSelect" data-i18n="pp.list">列表</label>
-                  <select id="ppEpisodeSelect"></select>
-                  <button type="button" id="btnPpRefresh" data-i18n="btn.refresh">刷新</button>
-                </div>
-                <div class="pp-row">
-                  <label for="ppEpisode" data-i18n="pp.path">路径</label>
-                  <input type="text" class="wide" id="ppEpisode" placeholder="D:\\data_new\\episode_00016" />
-                  <button type="button" id="btnPpBrowseEpisode" data-i18n="pp.browse">浏览…</button>
-                </div>
-                <div class="pp-row">
-                  <label class="quick-collect"><input type="checkbox" id="ppAllowInvalid" /> <span data-i18n="pp.allow_invalid">allow-invalid（作废 episode 也导出）</span></label>
-                </div>
-                <div class="pp-zone pp-zone-session" aria-labelledby="ppZoneSession">
-                  <h3 id="ppZoneSession" data-i18n="pp.session_title">联机会话</h3>
-                  <p class="pp-hint" data-i18n="pp.session_hint">默认扫描当前采集 save_dir 下的 sessions/；可改成解压后的数据集根（内含 episode_* 与 sessions/）。camera-map 与下方 Step 3 共用。</p>
+        <section class="pp-card pp-card-flow" aria-labelledby="ppSecSource">
+          <header class="pp-sec-head">
+            <p class="pp-kicker" data-i18n="pp.sec_source_kicker">1 · 数据源</p>
+            <h2 id="ppSecSource" data-i18n="pp.sec_source">选单集或联机会话</h2>
+            <p class="pp-hint" data-i18n="pp.sec_source_hint">单站：选 episode 后跑三步。联机：先 Gather 齐站，再「联机后处理」。KPI 扫同一数据根下的 episode_*。</p>
+          </header>
+          <div class="pp-source-grid">
+            <div class="pp-zone pp-zone-episode" aria-labelledby="ppZoneEpisode">
+              <h3 id="ppZoneEpisode" data-i18n="pp.episode">Episode</h3>
+              <p class="pp-hint" data-i18n="pp.episode_hint">选择已落盘目录，或粘贴完整路径（如 D:\\data_new\\episode_00016）。</p>
+              <div class="pp-row">
+                <label for="ppEpisodeSelect" data-i18n="pp.list">列表</label>
+                <select id="ppEpisodeSelect"></select>
+                <button type="button" id="btnPpRefresh" data-i18n="btn.refresh">刷新</button>
+              </div>
+              <div class="pp-row">
+                <label for="ppEpisode" data-i18n="pp.path">路径</label>
+                <input type="text" class="wide" id="ppEpisode" placeholder="D:\\data_new\\episode_00016" />
+                <button type="button" id="btnPpBrowseEpisode" data-i18n="pp.browse">浏览…</button>
+              </div>
+              <div class="pp-row">
+                <label class="quick-collect"><input type="checkbox" id="ppAllowInvalid" /> <span data-i18n="pp.allow_invalid">allow-invalid（作废 episode 也导出）</span></label>
+              </div>
+            </div>
+            <div class="pp-zone pp-zone-session" aria-labelledby="ppZoneSession">
+              <h3 id="ppZoneSession" data-i18n="pp.session_title">联机会话</h3>
+              <p class="pp-hint" data-i18n="pp.session_hint">默认扫描当前采集 save_dir 下的 sessions/；可改成解压后的数据集根（内含 episode_* 与 sessions/）。camera-map 与 Step 3 / 参数区共用。</p>
+              <div class="pp-row">
+                <label for="ppSessionSaveDir" data-i18n="pp.session_save_dir">数据根</label>
+                <input type="text" class="wide" id="ppSessionSaveDir" data-i18n-placeholder="pp.session_save_dir_ph" placeholder="例如 D:\\data 或 …\\_dcs_data" />
+                <button type="button" id="btnPpBrowseSessionSaveDir" data-i18n="pp.browse">浏览…</button>
+              </div>
+              <div class="pp-row">
+                <label for="ppSessionSelect" data-i18n="pp.session_list">会话</label>
+                <select id="ppSessionSelect"></select>
+                <button type="button" id="btnPpSessionRefresh" data-i18n="btn.refresh">刷新</button>
+              </div>
+              <pre id="ppSessionHealth" class="pp-session-health" data-i18n="pp.session_health_idle">（未选择会话）</pre>
+              <div class="pp-row">
+                <label class="quick-collect"><input type="checkbox" id="ppSessionAlsoPerStation" /> <span data-i18n="pp.session_also_station">额外再跑各站各自三步</span></label>
+              </div>
+              <div class="pp-actions">
+                <button type="button" id="btnPpSessionGather" data-i18n="pp.session_gather">收集从站（Gather）</button>
+                <button type="button" class="primary" id="btnPpSessionMerge" data-i18n="pp.session_merge">联机后处理（同单站三步）</button>
+                <span class="hint" id="ppSessionHint"></span>
+              </div>
+              <pre id="ppSessionLog" data-i18n="pp.log_idle">（尚未运行）</pre>
+            </div>
+          </div>
+          <div class="pp-zone pp-zone-metrics" aria-labelledby="ppZoneMetrics">
+            <h3 id="ppZoneMetrics" data-i18n="pp.metrics_title">数据集 KPI</h3>
+            <p class="pp-hint" data-i18n="pp.metrics_hint">扫描数据根下 episode_*（不含 sessions 嵌套副本）；缺 E1/E2/对齐分时显示 —。</p>
+            <div class="pp-actions">
+              <button type="button" id="btnPpMetricsRefresh" data-i18n="pp.metrics_refresh">刷新 KPI</button>
+              <button type="button" id="btnPpMetricsWrite" data-i18n="pp.metrics_write">导出 metrics_summary.json</button>
+              <span class="hint" id="ppMetricsHint"></span>
+            </div>
+            <div class="pp-metrics-grid" id="ppMetricsGrid" hidden></div>
+            <details class="pp-metrics-raw">
+              <summary data-i18n="pp.metrics_raw_toggle">原始 JSON（默认折叠）</summary>
+              <pre id="ppMetricsLog" data-i18n="pp.metrics_idle">（尚未扫描）</pre>
+            </details>
+          </div>
+        </section>
+
+        <section class="pp-card pp-card-flow" aria-labelledby="ppSecPipeline">
+          <header class="pp-sec-head">
+            <p class="pp-kicker" data-i18n="pp.sec_pipeline_kicker">2 · 参数与执行</p>
+            <h2 id="ppSecPipeline" data-i18n="pp.sec_pipeline">对齐 / 滤波 / hik → 一键或分步</h2>
+            <p class="pp-hint" data-i18n="pp.sec_pipeline_hint">左侧参数供一键三步、联机后处理、批量与快速采集共用；右侧执行。变频策略在底部折叠区生成后，在「对齐」里加载。</p>
+          </header>
+          <div class="pp-pipeline">
+            <div class="pp-params">
+              <div class="pp-zone pp-zone-align" aria-labelledby="ppZoneAlign">
+                <h3 id="ppZoneAlign" data-i18n="pp.align_title">对齐参数（Step 1 → hik）</h3>
+                <p class="pp-hint" data-i18n="pp.align_hint">加载变频策略 JSON（按时间进度分段 Hz）；align-clock=hw_ts 时主网格来自 primary-camera 的 color_timestamp（默认 wall）。一键三步 / 快速采集转 hik_dataset 时都读这里。</p>
+                <div class="pp-fields">
                   <div class="pp-row">
-                    <label for="ppSessionSaveDir" data-i18n="pp.session_save_dir">数据根</label>
-                    <input type="text" class="wide" id="ppSessionSaveDir" data-i18n-placeholder="pp.session_save_dir_ph" placeholder="例如 D:\\data 或 …\\_dcs_data" />
-                    <button type="button" id="btnPpBrowseSessionSaveDir" data-i18n="pp.browse">浏览…</button>
+                    <label for="ppAlign">align</label>
+                    <select id="ppAlign">
+                      <option value="asof" selected>asof</option>
+                      <option value="nearest">nearest</option>
+                      <option value="grid">grid</option>
+                      <option value="union">union</option>
+                    </select>
                   </div>
                   <div class="pp-row">
-                    <label for="ppSessionSelect" data-i18n="pp.session_list">会话</label>
-                    <select id="ppSessionSelect"></select>
-                    <button type="button" id="btnPpSessionRefresh" data-i18n="btn.refresh">刷新</button>
+                    <label for="ppAlignClock">align-clock</label>
+                    <select id="ppAlignClock">
+                      <option value="wall" selected>wall</option>
+                      <option value="hw_ts">hw_ts</option>
+                    </select>
                   </div>
-                  <pre id="ppSessionHealth" class="pp-session-health" data-i18n="pp.session_health_idle">（未选择会话）</pre>
                   <div class="pp-row">
-                    <label class="quick-collect"><input type="checkbox" id="ppSessionAlsoPerStation" /> <span data-i18n="pp.session_also_station">额外再跑各站各自三步</span></label>
+                    <label for="ppPrimaryCamera">primary-camera</label>
+                    <select id="ppPrimaryCamera">
+                      <option value="cam-middle" selected>cam-middle</option>
+                    </select>
                   </div>
-                  <div class="pp-actions">
-                    <button type="button" id="btnPpSessionGather" data-i18n="pp.session_gather">收集从站（Gather）</button>
-                    <button type="button" class="primary" id="btnPpSessionMerge" data-i18n="pp.session_merge">联机后处理（同单站三步）</button>
-                    <span class="hint" id="ppSessionHint"></span>
+                  <div class="pp-row">
+                    <label for="ppMaster">master</label>
+                    <select id="ppMaster">
+                      <option value="" data-i18n="pp.master_pick">先选择合格 episode…</option>
+                    </select>
                   </div>
-                  <pre id="ppSessionLog" data-i18n="pp.log_idle">（尚未运行）</pre>
+                  <div class="pp-row pp-row-full">
+                    <label for="ppRatePolicySelect" data-i18n="pp.rate_policy_pick">策略候选</label>
+                    <select id="ppRatePolicySelect"></select>
+                  </div>
+                  <div class="pp-row pp-row-full">
+                    <label for="ppRatePolicy" data-i18n="pp.rate_policy">rate-policy</label>
+                    <input type="text" class="wide" id="ppRatePolicy" placeholder="configs/rate_policies/fixed_5hz.json" />
+                    <button type="button" id="btnPpBrowseRatePolicy" data-i18n="pp.browse">浏览…</button>
+                  </div>
                 </div>
-                <div class="pp-zone pp-zone-metrics" aria-labelledby="ppZoneMetrics">
-                  <h3 id="ppZoneMetrics" data-i18n="pp.metrics_title">数据集 KPI</h3>
-                  <p class="pp-hint" data-i18n="pp.metrics_hint">扫描数据根下 episode_*（不含 sessions 嵌套副本）；缺 E1/E2/对齐分时显示 —。</p>
-                  <div class="pp-actions">
-                    <button type="button" id="btnPpMetricsRefresh" data-i18n="pp.metrics_refresh">刷新 KPI</button>
-                    <button type="button" id="btnPpMetricsWrite" data-i18n="pp.metrics_write">导出 metrics_summary.json</button>
-                    <span class="hint" id="ppMetricsHint"></span>
-                  </div>
-                  <div class="pp-metrics-grid" id="ppMetricsGrid" hidden></div>
-                  <pre id="ppMetricsLog" data-i18n="pp.metrics_idle">（尚未扫描）</pre>
+                <p class="pp-hint" id="ppRatePolicySummary" data-i18n="pp.rate_policy_idle">尚未加载策略</p>
+              </div>
+              <div class="pp-zone pp-zone-filter" aria-labelledby="ppZoneFilter">
+                <h3 id="ppZoneFilter" data-i18n="pp.filter_title">滤波参数（Step 2）</h3>
+                <p class="pp-hint" data-i18n="pp.step2_hint">--require arm,cam-left,cam-right,cam-middle,gripper-read --max-match-dt 0.033 --trim both --materialize</p>
+                <div class="pp-row">
+                  <label for="ppRequire">require</label>
+                  <input type="text" class="wide" id="ppRequire" value="arm,cam-left,cam-right,cam-middle,gripper-read" />
+                </div>
+                <div class="pp-row">
+                  <label for="ppMaxDt">max-match-dt</label>
+                  <input type="text" id="ppMaxDt" value="0.033" />
+                  <label for="ppTrim">trim</label>
+                  <select id="ppTrim">
+                    <option value="both" selected>both</option>
+                    <option value="start">start</option>
+                    <option value="end">end</option>
+                    <option value="none">none</option>
+                  </select>
+                  <label class="quick-collect"><input type="checkbox" id="ppMaterialize" checked /> materialize</label>
                 </div>
               </div>
+              <div class="pp-zone pp-zone-hik" aria-labelledby="ppZoneHik">
+                <h3 id="ppZoneHik" data-i18n="pp.hik_title">hik 导出参数（Step 3）</h3>
+                <p class="pp-hint" data-i18n="pp.step3_hint">--camera-map …\\hik_camera_map.yaml；若尚未对齐，请先跑 Step1（rate-policy 见对齐区）或一键三步。TCP 默认同步 DCS YAML tcp_xyz，可在此覆盖。</p>
+                <div class="pp-row">
+                  <label for="ppCameraMap">camera-map</label>
+                  <input type="text" class="wide" id="ppCameraMap" data-i18n-placeholder="pp.camera_map_ph" placeholder="路径到 hik_camera_map.yaml" />
+                  <button type="button" id="btnPpBrowseCameraMap" data-i18n="pp.browse">浏览…</button>
+                </div>
+                <div class="pp-row" data-i18n-title="pp.tcp_xyz_hint" title="法兰→TCP 平移（米）；默认来自启动 YAML tcp_xyz；Step3 / 一键三步 / 快速采集 / 批量导出共用">
+                  <label data-i18n="pp.tcp_xyz">tcp_xyz</label>
+                  <div class="inf-tcp-clip" id="ppTcpXyz">
+                    <label><span>x</span><input type="number" id="ppTcpX" step="0.001" value="0" /></label>
+                    <label><span>y</span><input type="number" id="ppTcpY" step="0.001" value="0" /></label>
+                    <label><span>z</span><input type="number" id="ppTcpZ" step="0.001" value="0.18" /></label>
+                    <span class="arm-abs-unit" data-i18n="pp.tcp_xyz_unit">m</span>
+                    <button type="button" id="btnPpTcpResetYaml" data-i18n="pp.tcp_xyz_reset" data-i18n-title="pp.tcp_xyz_reset_tip" title="恢复为当前 DCS YAML / 进程 tcp_xyz">同步 YAML</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="pp-execute">
               <div class="pp-zone pp-zone-run" aria-labelledby="ppZoneRunAll">
-                <h2 id="ppZoneRunAll" data-i18n="pp.run_all_title">一键三步</h2>
-                <p class="pp-hint" data-i18n="pp.run_all_hint">顺序执行下方三步；「快速采集」勾选后结束/作废也会走同一套参数。</p>
+                <h3 id="ppZoneRunAll" data-i18n="pp.run_all_title">一键三步</h3>
+                <p class="pp-hint" data-i18n="pp.run_all_hint">顺序执行 Step 1→2→3；「快速采集」勾选后结束/作废也会走同一套参数。</p>
                 <div class="pp-actions">
                   <button type="button" class="primary" id="btnPpRunAll" data-i18n="pp.run_all">一键执行三步</button>
                   <span class="hint" id="ppHint"></span>
                 </div>
                 <pre id="ppLog" data-i18n="pp.log_idle">（尚未运行）</pre>
               </div>
-            </div>
-            <div class="pp-zone pp-zone-rate" aria-labelledby="ppZoneRateBuild">
-              <h2 id="ppZoneRateBuild" data-i18n="pp.rate_build_title">0 · 生成变频策略</h2>
-              <p class="pp-hint" data-i18n="pp.rate_build_hint">在双轴图上拖阶梯设定 Hz（可叠加 gripper 曲线）；保存为 JSON 后下方对齐参数再加载。</p>
-              <div class="pp-row">
-                <label for="ppRateName" data-i18n="pp.rate_name">名称</label>
-                <input type="text" id="ppRateName" value="fine_middle_v1" />
+              <div class="pp-zone pp-zone-batch" aria-labelledby="ppZoneBatch">
+                <h3 id="ppZoneBatch" data-i18n="pp.batch_title">批量一键三步</h3>
+                <p class="pp-hint" data-i18n="pp.batch_hint">选择采集根目录，对其中每个 episode_* 按左侧对齐 / require / camera-map 参数顺序跑完三步。默认覆盖：先删除该集 export/ 再重跑；取消覆盖则已有 export/ 的集跳过。valid=false 默认跳过（可用 allow-invalid）。</p>
+                <div class="pp-row">
+                  <label for="ppBatchRoot" data-i18n="pp.batch_root">数据集根</label>
+                  <input type="text" class="wide" id="ppBatchRoot" data-i18n-placeholder="pp.batch_root_ph" placeholder="D:\\data_new" />
+                  <button type="button" id="btnPpBrowseBatchRoot" data-i18n="pp.browse">浏览…</button>
+                </div>
+                <div class="pp-row">
+                  <label class="quick-collect"><input type="checkbox" id="ppBatchOverwrite" checked /> <span data-i18n="pp.batch_overwrite">覆盖（删除原 export/）</span></label>
+                </div>
+                <div class="pp-actions">
+                  <button type="button" class="primary" id="btnPpBatchRun" data-i18n="pp.batch_run">批量执行三步</button>
+                  <span class="hint" id="ppBatchHint"></span>
+                </div>
+                <pre id="ppBatchLog" data-i18n="pp.log_idle">（尚未运行）</pre>
               </div>
-              <div class="pp-rate-body">
-                <div class="pp-rate-chart-wrap">
-                  <div class="pp-rate-overlay">
-                    <div class="pp-hint" data-i18n="pp.rate_chart_overlay_hint">多选 episode，勾选 read/write 后加载曲线作参考（不写入策略 JSON）。</div>
-                    <div id="ppRateEpList" class="pp-rate-ep-list" role="group" aria-label="episodes"></div>
-                    <div class="pp-rate-overlay-row pp-actions">
-                      <button type="button" id="btnPpRateLoadSeries" data-i18n="pp.rate_chart_load">加载曲线</button>
-                      <button type="button" id="btnPpRateClearSeries" data-i18n="pp.rate_chart_clear">清除曲线</button>
-                      <span class="hint" id="ppRateSeriesHint"></span>
-                    </div>
-                  </div>
-                  <div class="pp-rate-canvas-box" id="ppRateCanvasBox">
-                    <canvas id="ppRateCanvas" width="640" height="240"></canvas>
-                    <div class="pp-rate-chart-tip" id="ppRateChartTip" hidden></div>
-                  </div>
-                  <div class="pp-rate-chart-legend" id="ppRateChartLegend"></div>
+              <div class="pp-steps-grid">
+                <div class="pp-zone pp-zone-step1" aria-labelledby="ppZoneStep1">
+                  <h3 id="ppZoneStep1" data-i18n="pp.step1">1 · export-timeline</h3>
+                  <p class="pp-hint" data-i18n="pp.step1_hint">sensors-dcs export-timeline -e … --align / --align-clock / --primary-camera / --master / --rate-policy（见左侧对齐参数）</p>
                   <div class="pp-actions">
-                    <button type="button" id="btnPpRateAddBp" data-i18n="pp.rate_chart_add_bp">添加断点</button>
-                    <button type="button" id="btnPpRateDelBp" data-i18n="pp.rate_chart_del_bp">删除断点</button>
-                    <button type="button" id="btnPpRatePresetFine" data-i18n="pp.rate_preset_fine">填入精细中段模板</button>
-                    <button type="button" id="btnPpRatePresetFixed" data-i18n="pp.rate_preset_fixed">填入固定 5Hz</button>
+                    <button type="button" id="btnPpExport" data-i18n="pp.run1">运行 Step 1</button>
                   </div>
-                  <p class="pp-hint" data-i18n="pp.rate_chart_axes">横轴：episode % · 左轴：gripper(0–1) · 右轴：策略 Hz。拖竖线改边界，拖横条改 Hz。</p>
                 </div>
-                <div class="pp-rate-preview-wrap">
-                  <label for="ppRatePreview" data-i18n="pp.rate_preview">JSON 预览</label>
-                  <textarea id="ppRatePreview" class="wide pp-rate-preview" rows="8" readonly></textarea>
+                <div class="pp-zone pp-zone-step3" aria-labelledby="ppZoneStep3">
+                  <h3 id="ppZoneStep3" data-i18n="pp.step3">3 · export-hik-dataset</h3>
+                  <p class="pp-hint" data-i18n="pp.step3_run_hint">使用左侧 hik 参数；需已有对齐结果或先跑 Step 1 / 一键三步。</p>
+                  <div class="pp-actions">
+                    <button type="button" id="btnPpHik" data-i18n="pp.run3">运行 Step 3</button>
+                  </div>
+                </div>
+                <div class="pp-zone pp-zone-step2" aria-labelledby="ppZoneStep2">
+                  <h3 id="ppZoneStep2" data-i18n="pp.step2">2 · filter-timeline</h3>
+                  <p class="pp-hint" data-i18n="pp.step2_run_hint">使用左侧滤波参数；完成后写出 export/filter_align.png 并刷新下方质量图。</p>
+                  <div class="pp-actions">
+                    <button type="button" id="btnPpFilter" data-i18n="pp.run2">运行 Step 2</button>
+                  </div>
+                  <figure class="pp-align-fig" id="ppAlignFig" hidden>
+                    <figcaption data-i18n="pp.align_fig_caption">对齐效果（filter）</figcaption>
+                    <img id="ppAlignImg" alt="filter alignment overview" />
+                    <p class="pp-hint" id="ppAlignHint" hidden></p>
+                    <div class="pp-align-metrics" id="ppAlignMetrics" hidden>
+                      <div class="pp-align-score-row">
+                        <div class="pp-align-score" id="ppAlignScore">
+                          <span class="pp-align-score-label" data-i18n="pp.align_score_label">对齐评分</span>
+                          <strong class="pp-align-score-value" id="ppAlignScoreValue">—</strong>
+                          <span class="pp-align-grade" id="ppAlignGrade"></span>
+                        </div>
+                        <div class="pp-align-kpis" id="ppAlignKpis"></div>
+                      </div>
+                      <div class="pp-align-agent-wrap">
+                        <table class="pp-align-agent-table" id="ppAlignAgentTable" hidden>
+                          <thead>
+                            <tr>
+                              <th data-i18n="pp.align_th_agent">传感器</th>
+                              <th data-i18n="pp.align_th_mean">mean</th>
+                              <th data-i18n="pp.align_th_p50">p50</th>
+                              <th data-i18n="pp.align_th_p95">p95</th>
+                              <th data-i18n="pp.align_th_max_dt">阈值</th>
+                              <th data-i18n="pp.align_th_sync">sync</th>
+                              <th data-i18n="pp.align_th_budget">budget</th>
+                            </tr>
+                          </thead>
+                          <tbody id="ppAlignAgentBody"></tbody>
+                        </table>
+                      </div>
+                      <details class="pp-align-principle" id="ppAlignPrinciple">
+                        <summary data-i18n="pp.align_principle_title">计算原理</summary>
+                        <div class="pp-align-principle-body" data-i18n="pp.align_principle_body" data-i18n-html>
+                          <p>评分 = 100 × (0.35×保留率 + 0.45×同步紧度 + 0.20×阈值余量)。</p>
+                          <ul>
+                            <li><b>保留率</b>：filter 后行数 / 对齐宽表行数。</li>
+                            <li><b>同步紧度 sync</b>：保留行上 mean(|match_dt|) / max_match_dt 的余量，多传感器取平均（master=1）。</li>
+                            <li><b>阈值余量 budget</b>：同上，用 p95(|match_dt|)；越接近阈值扣分越多。</li>
+                            <li><b>match_dt</b>：as-of backward 匹配时，master 时刻 − 该传感器采样时刻（秒）。</li>
+                          </ul>
+                        </div>
+                      </details>
+                    </div>
+                  </figure>
                 </div>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="pp-card pp-card-flow" aria-labelledby="ppSecDown">
+          <header class="pp-sec-head">
+            <p class="pp-kicker" data-i18n="pp.sec_down_kicker">3 · 下游产物</p>
+            <h2 id="ppSecDown" data-i18n="pp.sec_down">标准格式 / 打包 / 原始预览</h2>
+            <p class="pp-hint" data-i18n="pp.sec_down_hint">Step 4 读 filter 结果；打包只复制已有 hik_dataset；原始视频不经 Step 1–3。</p>
+          </header>
+          <div class="pp-downstream-grid">
+            <div class="pp-zone" id="ppStep4Card" aria-labelledby="ppZoneStep4">
+              <h3 id="ppZoneStep4" data-i18n="pp.step4">4 · 标准格式导出</h3>
+              <p class="pp-hint" data-i18n="pp.step4_hint">只读 Step 2 的 timeline_filtered + 原始 cameras（不经过 export/filtered）。单集选上方 episode；批量选数据集根。强制覆盖格式目录。0 行无法导出。</p>
               <div class="pp-row">
-                <label for="ppRateSavePath" data-i18n="pp.rate_save_path">保存路径</label>
-                <input type="text" class="wide" id="ppRateSavePath" placeholder="configs/rate_policies/fine_middle_v1.json" />
-                <button type="button" id="btnPpBrowseRateSave" data-i18n="pp.browse">浏览…</button>
+                <label data-i18n="pp.step4_formats">格式</label>
+                <div id="ppStep4Formats" class="pp-format-list"></div>
+              </div>
+              <div class="pp-row">
+                <label for="ppStep4Root" data-i18n="pp.step4_batch_root">批量数据集根</label>
+                <input type="text" class="wide" id="ppStep4Root" data-i18n-placeholder="pp.step4_batch_root_ph" placeholder="C:\\Users\\…\\_dcs_data" />
+                <button type="button" id="btnPpBrowseStep4Root" data-i18n="pp.browse">浏览…</button>
               </div>
               <div class="pp-actions">
-                <button type="button" class="primary" id="btnPpRateSave" data-i18n="pp.rate_save">保存策略 JSON</button>
-                <button type="button" id="btnPpRateApply" data-i18n="pp.rate_apply">应用到对齐</button>
-                <span class="hint" id="ppRateBuildHint"></span>
+                <button type="button" class="primary" id="btnPpStep4One" data-i18n="pp.step4_run_one">单集导出 Step 4</button>
+                <button type="button" id="btnPpStep4Batch" data-i18n="pp.step4_run_batch">批量导出 Step 4</button>
+                <span class="hint" id="ppStep4Hint"></span>
+              </div>
+              <pre id="ppStep4Log" data-i18n="pp.log_idle">（尚未运行）</pre>
+            </div>
+            <div class="pp-zone" aria-labelledby="ppZonePack">
+              <h3 id="ppZonePack" data-i18n="pp.pack_title">批量打包 hik_dataset</h3>
+              <p class="pp-hint" data-i18n="pp.pack_hint">扫描采集根下各 episode/export/hik_dataset，复制为输出目录中的 {i}/（去掉 camera_map.yaml），并把 episode_grid.mp4 收到 video/{i}.mp4。valid=false 跳过；输出里已有同序号则跳过不覆盖。不修改源数据。</p>
+              <div class="pp-row">
+                <label for="ppPackInput" data-i18n="pp.pack_input">输入根</label>
+                <input type="text" class="wide" id="ppPackInput" data-i18n-placeholder="pp.pack_input_ph" placeholder="D:\\data_new" />
+                <button type="button" id="btnPpBrowsePackInput" data-i18n="pp.browse">浏览…</button>
+              </div>
+              <div class="pp-row">
+                <label for="ppPackOutput" data-i18n="pp.pack_output">输出根</label>
+                <input type="text" class="wide" id="ppPackOutput" data-i18n-placeholder="pp.pack_output_ph" placeholder="D:\\hik_pack" />
+                <button type="button" id="btnPpBrowsePackOutput" data-i18n="pp.browse">浏览…</button>
+              </div>
+              <div class="pp-row">
+                <label class="quick-collect"><input type="checkbox" id="ppPackAllowInvalid" /> <span data-i18n="pp.pack_allow_invalid">包含作废 episode（valid=false）</span></label>
+              </div>
+              <div class="pp-actions">
+                <button type="button" class="primary" id="btnPpPackHik" data-i18n="pp.pack_run">开始打包</button>
+                <span class="hint" id="ppPackHint"></span>
+              </div>
+              <pre id="ppPackLog" data-i18n="pp.log_idle">（尚未运行）</pre>
+            </div>
+            <div class="pp-zone" aria-labelledby="ppZoneRaw">
+              <h3 id="ppZoneRaw" data-i18n="pp.raw_video_title">原始数据视频</h3>
+              <p class="pp-hint" data-i18n="pp.raw_video_hint">与 Step 1–3 无关：直接读取 episode/cameras 下原始 JPG，按主相机时间轴近邻对齐后合成网格预览 MP4（写出到 episode/raw_grid.mp4）。</p>
+              <div class="pp-actions">
+                <button type="button" id="btnPpRawVideo" data-i18n="pp.raw_video_run">合成原始视频</button>
               </div>
             </div>
-            <div class="pp-zone pp-zone-align" aria-labelledby="ppZoneAlign">
-              <h2 id="ppZoneAlign" data-i18n="pp.align_title">对齐参数（Step 1 → hik）</h2>
-              <p class="pp-hint" data-i18n="pp.align_hint">加载上方生成的变频策略 JSON（按时间进度分段 Hz）；align-clock=hw_ts 时主网格来自 primary-camera 的 color_timestamp（默认 wall）。一键三步 / 快速采集转 hik_dataset 时都读这里。</p>
-              <div class="pp-fields">
-                <div class="pp-row">
-                  <label for="ppAlign">align</label>
-                  <select id="ppAlign">
-                    <option value="asof" selected>asof</option>
-                    <option value="nearest">nearest</option>
-                    <option value="grid">grid</option>
-                    <option value="union">union</option>
-                  </select>
+          </div>
+        </section>
+
+        <details class="pp-card pp-rate-details">
+          <summary class="pp-rate-summary">
+            <header class="pp-sec-head">
+              <p class="pp-kicker" data-i18n="pp.sec_rate_kicker">可选 · 变频策略</p>
+              <h2 id="ppZoneRateBuild" data-i18n="pp.rate_build_title">0 · 生成变频策略</h2>
+              <p class="pp-hint" data-i18n="pp.rate_build_hint">展开后在双轴图上拖阶梯设定 Hz；保存 JSON 后到「对齐参数」加载。日常跑三步可跳过本区。</p>
+            </header>
+          </summary>
+          <div class="pp-zone pp-zone-rate" aria-labelledby="ppZoneRateBuild">
+            <div class="pp-row">
+              <label for="ppRateName" data-i18n="pp.rate_name">名称</label>
+              <input type="text" id="ppRateName" value="fine_middle_v1" />
+            </div>
+            <div class="pp-rate-body">
+              <div class="pp-rate-chart-wrap">
+                <div class="pp-rate-overlay">
+                  <div class="pp-hint" data-i18n="pp.rate_chart_overlay_hint">多选 episode，勾选 read/write 后加载曲线作参考（不写入策略 JSON）。</div>
+                  <div id="ppRateEpList" class="pp-rate-ep-list" role="group" aria-label="episodes"></div>
+                  <div class="pp-rate-overlay-row pp-actions">
+                    <button type="button" id="btnPpRateLoadSeries" data-i18n="pp.rate_chart_load">加载曲线</button>
+                    <button type="button" id="btnPpRateClearSeries" data-i18n="pp.rate_chart_clear">清除曲线</button>
+                    <span class="hint" id="ppRateSeriesHint"></span>
+                  </div>
                 </div>
-                <div class="pp-row">
-                  <label for="ppAlignClock">align-clock</label>
-                  <select id="ppAlignClock">
-                    <option value="wall" selected>wall</option>
-                    <option value="hw_ts">hw_ts</option>
-                  </select>
+                <div class="pp-rate-canvas-box" id="ppRateCanvasBox">
+                  <canvas id="ppRateCanvas" width="640" height="240"></canvas>
+                  <div class="pp-rate-chart-tip" id="ppRateChartTip" hidden></div>
                 </div>
-                <div class="pp-row">
-                  <label for="ppPrimaryCamera">primary-camera</label>
-                  <select id="ppPrimaryCamera">
-                    <option value="cam-middle" selected>cam-middle</option>
-                  </select>
+                <div class="pp-rate-chart-legend" id="ppRateChartLegend"></div>
+                <div class="pp-actions">
+                  <button type="button" id="btnPpRateAddBp" data-i18n="pp.rate_chart_add_bp">添加断点</button>
+                  <button type="button" id="btnPpRateDelBp" data-i18n="pp.rate_chart_del_bp">删除断点</button>
+                  <button type="button" id="btnPpRatePresetFine" data-i18n="pp.rate_preset_fine">填入精细中段模板</button>
+                  <button type="button" id="btnPpRatePresetFixed" data-i18n="pp.rate_preset_fixed">填入固定 5Hz</button>
                 </div>
-                <div class="pp-row">
-                  <label for="ppMaster">master</label>
-                  <select id="ppMaster">
-                    <option value="" data-i18n="pp.master_pick">先选择合格 episode…</option>
-                  </select>
-                </div>
-                <div class="pp-row pp-row-full">
-                  <label for="ppRatePolicySelect" data-i18n="pp.rate_policy_pick">策略候选</label>
-                  <select id="ppRatePolicySelect"></select>
-                </div>
-                <div class="pp-row pp-row-full">
-                  <label for="ppRatePolicy" data-i18n="pp.rate_policy">rate-policy</label>
-                  <input type="text" class="wide" id="ppRatePolicy" placeholder="configs/rate_policies/fixed_5hz.json" />
-                  <button type="button" id="btnPpBrowseRatePolicy" data-i18n="pp.browse">浏览…</button>
-                </div>
+                <p class="pp-hint" data-i18n="pp.rate_chart_axes">横轴：episode % · 左轴：gripper(0–1) · 右轴：策略 Hz。拖竖线改边界，拖横条改 Hz。</p>
               </div>
-              <p class="pp-hint" id="ppRatePolicySummary" data-i18n="pp.rate_policy_idle">尚未加载策略</p>
+              <div class="pp-rate-preview-wrap">
+                <label for="ppRatePreview" data-i18n="pp.rate_preview">JSON 预览</label>
+                <textarea id="ppRatePreview" class="wide pp-rate-preview" rows="8" readonly></textarea>
+              </div>
+            </div>
+            <div class="pp-row">
+              <label for="ppRateSavePath" data-i18n="pp.rate_save_path">保存路径</label>
+              <input type="text" class="wide" id="ppRateSavePath" placeholder="configs/rate_policies/fine_middle_v1.json" />
+              <button type="button" id="btnPpBrowseRateSave" data-i18n="pp.browse">浏览…</button>
+            </div>
+            <div class="pp-actions">
+              <button type="button" class="primary" id="btnPpRateSave" data-i18n="pp.rate_save">保存策略 JSON</button>
+              <button type="button" id="btnPpRateApply" data-i18n="pp.rate_apply">应用到对齐</button>
+              <span class="hint" id="ppRateBuildHint"></span>
             </div>
           </div>
-        </section>
-
-        <section class="pp-card">
-          <h2 data-i18n="pp.batch_title">批量一键三步</h2>
-          <p class="pp-hint" data-i18n="pp.batch_hint">选择采集根目录，对其中每个 episode_* 按上方对齐 / require / camera-map 参数顺序跑完三步。默认覆盖：先删除该集 export/ 再重跑；取消覆盖则已有 export/ 的集跳过。valid=false 默认跳过（可用上方 allow-invalid）。</p>
-          <div class="pp-row">
-            <label for="ppBatchRoot" data-i18n="pp.batch_root">数据集根</label>
-            <input type="text" class="wide" id="ppBatchRoot" data-i18n-placeholder="pp.batch_root_ph" placeholder="D:\\data_new" />
-            <button type="button" id="btnPpBrowseBatchRoot" data-i18n="pp.browse">浏览…</button>
-          </div>
-          <div class="pp-row">
-            <label class="quick-collect"><input type="checkbox" id="ppBatchOverwrite" checked /> <span data-i18n="pp.batch_overwrite">覆盖（删除原 export/）</span></label>
-          </div>
-          <div class="pp-actions">
-            <button type="button" class="primary" id="btnPpBatchRun" data-i18n="pp.batch_run">批量执行三步</button>
-            <span class="hint" id="ppBatchHint"></span>
-          </div>
-          <pre id="ppBatchLog" data-i18n="pp.log_idle">（尚未运行）</pre>
-        </section>
-
-        <section class="pp-card">
-          <h2 data-i18n="pp.raw_video_title">原始数据视频</h2>
-          <p class="pp-hint" data-i18n="pp.raw_video_hint">与 Step 1–3 无关：直接读取 episode/cameras 下原始 JPG，按主相机时间轴近邻对齐后合成网格预览 MP4（写出到 episode/raw_grid.mp4）。</p>
-          <div class="pp-actions">
-            <button type="button" id="btnPpRawVideo" data-i18n="pp.raw_video_run">合成原始视频</button>
-          </div>
-        </section>
-
-        <section class="pp-card">
-          <h2 data-i18n="pp.pack_title">批量打包 hik_dataset</h2>
-          <p class="pp-hint" data-i18n="pp.pack_hint">扫描采集根下各 episode/export/hik_dataset，复制为输出目录中的 {i}/（去掉 camera_map.yaml），并把 episode_grid.mp4 收到 video/{i}.mp4。valid=false 跳过；输出里已有同序号则跳过不覆盖。不修改源数据。</p>
-          <div class="pp-row">
-            <label for="ppPackInput" data-i18n="pp.pack_input">输入根</label>
-            <input type="text" class="wide" id="ppPackInput" data-i18n-placeholder="pp.pack_input_ph" placeholder="D:\\data_new" />
-            <button type="button" id="btnPpBrowsePackInput" data-i18n="pp.browse">浏览…</button>
-          </div>
-          <div class="pp-row">
-            <label for="ppPackOutput" data-i18n="pp.pack_output">输出根</label>
-            <input type="text" class="wide" id="ppPackOutput" data-i18n-placeholder="pp.pack_output_ph" placeholder="D:\\hik_pack" />
-            <button type="button" id="btnPpBrowsePackOutput" data-i18n="pp.browse">浏览…</button>
-          </div>
-          <div class="pp-row">
-            <label class="quick-collect"><input type="checkbox" id="ppPackAllowInvalid" /> <span data-i18n="pp.pack_allow_invalid">包含作废 episode（valid=false）</span></label>
-          </div>
-          <div class="pp-actions">
-            <button type="button" class="primary" id="btnPpPackHik" data-i18n="pp.pack_run">开始打包</button>
-            <span class="hint" id="ppPackHint"></span>
-          </div>
-          <pre id="ppPackLog" data-i18n="pp.log_idle">（尚未运行）</pre>
-        </section>
-
-        <section class="pp-card">
-          <h2 data-i18n="pp.step1">1 · export-timeline</h2>
-          <p class="pp-hint" data-i18n="pp.step1_hint">sensors-dcs export-timeline -e … --align / --align-clock / --primary-camera / --master / --rate-policy（见上方对齐参数）</p>
-          <div class="pp-actions">
-            <button type="button" id="btnPpExport" data-i18n="pp.run1">运行 Step 1</button>
-          </div>
-        </section>
-
-        <section class="pp-card">
-          <h2 data-i18n="pp.step2">2 · filter-timeline</h2>
-          <p class="pp-hint" data-i18n="pp.step2_hint">--require arm,cam-left,cam-right,cam-middle,gripper-read --max-match-dt 0.033 --trim both --materialize</p>
-          <div class="pp-row">
-            <label for="ppRequire">require</label>
-            <input type="text" class="wide" id="ppRequire" value="arm,cam-left,cam-right,cam-middle,gripper-read" />
-          </div>
-          <div class="pp-row">
-            <label for="ppMaxDt">max-match-dt</label>
-            <input type="text" id="ppMaxDt" value="0.033" />
-            <label for="ppTrim">trim</label>
-            <select id="ppTrim">
-              <option value="both" selected>both</option>
-              <option value="start">start</option>
-              <option value="end">end</option>
-              <option value="none">none</option>
-            </select>
-            <label class="quick-collect"><input type="checkbox" id="ppMaterialize" checked /> materialize</label>
-          </div>
-          <div class="pp-actions">
-            <button type="button" id="btnPpFilter" data-i18n="pp.run2">运行 Step 2</button>
-          </div>
-          <figure class="pp-align-fig" id="ppAlignFig" hidden>
-            <figcaption data-i18n="pp.align_fig_caption">对齐效果（filter）</figcaption>
-            <img id="ppAlignImg" alt="filter alignment overview" />
-            <p class="pp-hint" id="ppAlignHint" hidden></p>
-            <div class="pp-align-metrics" id="ppAlignMetrics" hidden>
-              <div class="pp-align-score-row">
-                <div class="pp-align-score" id="ppAlignScore">
-                  <span class="pp-align-score-label" data-i18n="pp.align_score_label">对齐评分</span>
-                  <strong class="pp-align-score-value" id="ppAlignScoreValue">—</strong>
-                  <span class="pp-align-grade" id="ppAlignGrade"></span>
-                </div>
-                <div class="pp-align-kpis" id="ppAlignKpis"></div>
-              </div>
-              <div class="pp-align-agent-wrap">
-                <table class="pp-align-agent-table" id="ppAlignAgentTable" hidden>
-                  <thead>
-                    <tr>
-                      <th data-i18n="pp.align_th_agent">传感器</th>
-                      <th data-i18n="pp.align_th_mean">mean</th>
-                      <th data-i18n="pp.align_th_p50">p50</th>
-                      <th data-i18n="pp.align_th_p95">p95</th>
-                      <th data-i18n="pp.align_th_max_dt">阈值</th>
-                      <th data-i18n="pp.align_th_sync">sync</th>
-                      <th data-i18n="pp.align_th_budget">budget</th>
-                    </tr>
-                  </thead>
-                  <tbody id="ppAlignAgentBody"></tbody>
-                </table>
-              </div>
-              <details class="pp-align-principle" id="ppAlignPrinciple">
-                <summary data-i18n="pp.align_principle_title">计算原理</summary>
-                <div class="pp-align-principle-body" data-i18n="pp.align_principle_body" data-i18n-html>
-                  <p>评分 = 100 × (0.35×保留率 + 0.45×同步紧度 + 0.20×阈值余量)。</p>
-                  <ul>
-                    <li><b>保留率</b>：filter 后行数 / 对齐宽表行数。</li>
-                    <li><b>同步紧度 sync</b>：保留行上 mean(|match_dt|) / max_match_dt 的余量，多传感器取平均（master=1）。</li>
-                    <li><b>阈值余量 budget</b>：同上，用 p95(|match_dt|)；越接近阈值扣分越多。</li>
-                    <li><b>match_dt</b>：as-of backward 匹配时，master 时刻 − 该传感器采样时刻（秒）。</li>
-                  </ul>
-                </div>
-              </details>
-            </div>
-          </figure>
-        </section>
-
-        <section class="pp-card">
-          <h2 data-i18n="pp.step3">3 · export-hik-dataset</h2>
-          <p class="pp-hint" data-i18n="pp.step3_hint">--camera-map …\\hik_camera_map.yaml；若尚未对齐，请先跑 Step1（rate-policy 见上方）或一键三步。TCP 默认同步 DCS YAML tcp_xyz，可在此覆盖。</p>
-          <div class="pp-row">
-            <label for="ppCameraMap">camera-map</label>
-            <input type="text" class="wide" id="ppCameraMap" data-i18n-placeholder="pp.camera_map_ph" placeholder="路径到 hik_camera_map.yaml" />
-            <button type="button" id="btnPpBrowseCameraMap" data-i18n="pp.browse">浏览…</button>
-          </div>
-          <div class="pp-row" data-i18n-title="pp.tcp_xyz_hint" title="法兰→TCP 平移（米）；默认来自启动 YAML tcp_xyz；Step3 / 一键三步 / 快速采集 / 批量导出共用">
-            <label data-i18n="pp.tcp_xyz">tcp_xyz</label>
-            <div class="inf-tcp-clip" id="ppTcpXyz">
-              <label><span>x</span><input type="number" id="ppTcpX" step="0.001" value="0" /></label>
-              <label><span>y</span><input type="number" id="ppTcpY" step="0.001" value="0" /></label>
-              <label><span>z</span><input type="number" id="ppTcpZ" step="0.001" value="0.18" /></label>
-              <span class="arm-abs-unit" data-i18n="pp.tcp_xyz_unit">m</span>
-              <button type="button" id="btnPpTcpResetYaml" data-i18n="pp.tcp_xyz_reset" data-i18n-title="pp.tcp_xyz_reset_tip" title="恢复为当前 DCS YAML / 进程 tcp_xyz">同步 YAML</button>
-            </div>
-          </div>
-          <div class="pp-actions">
-            <button type="button" id="btnPpHik" data-i18n="pp.run3">运行 Step 3</button>
-          </div>
-        </section>
-
-        <section class="pp-card" id="ppStep4Card">
-          <h2 data-i18n="pp.step4">4 · 标准格式导出</h2>
-          <p class="pp-hint" data-i18n="pp.step4_hint">只读 Step 2 的 timeline_filtered + 原始 cameras（不经过 export/filtered）。单集选上方 episode；批量选数据集根。强制覆盖格式目录。0 行无法导出。</p>
-          <div class="pp-row">
-            <label data-i18n="pp.step4_formats">格式</label>
-            <div id="ppStep4Formats" class="pp-format-list"></div>
-          </div>
-          <div class="pp-row">
-            <label for="ppStep4Root" data-i18n="pp.step4_batch_root">批量数据集根</label>
-            <input type="text" class="wide" id="ppStep4Root" data-i18n-placeholder="pp.step4_batch_root_ph" placeholder="C:\\Users\\…\\_dcs_data" />
-            <button type="button" id="btnPpBrowseStep4Root" data-i18n="pp.browse">浏览…</button>
-          </div>
-          <div class="pp-actions">
-            <button type="button" class="primary" id="btnPpStep4One" data-i18n="pp.step4_run_one">单集导出 Step 4</button>
-            <button type="button" id="btnPpStep4Batch" data-i18n="pp.step4_run_batch">批量导出 Step 4</button>
-            <span class="hint" id="ppStep4Hint"></span>
-          </div>
-          <pre id="ppStep4Log" data-i18n="pp.log_idle">（尚未运行）</pre>
-        </section>
+        </details>
       </div>
     </div>
   </main>
@@ -10705,6 +10866,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (typeof ResizeObserver !== 'undefined' && ppRateCanvasBox) {
         const ro = new ResizeObserver(() => drawRateChart());
         ro.observe(ppRateCanvasBox);
+      }
+      const rateDetails = ppRateCanvasBox && ppRateCanvasBox.closest('details.pp-rate-details');
+      if (rateDetails) {
+        rateDetails.addEventListener('toggle', () => {
+          if (rateDetails.open) requestAnimationFrame(() => drawRateChart());
+        });
       }
     }
 
