@@ -90,6 +90,49 @@ def _count_merged_episodes(root: Path) -> int:
     return n
 
 
+def _new_pivot_row() -> dict[str, Any]:
+    return {
+        "episodes": 0,
+        "success": 0,
+        "fail": 0,
+        "partial": 0,
+        "void": 0,
+        "unknown": 0,
+        "unlabeled": 0,
+        "completion_denom": 0,
+        "completion_rate": None,
+    }
+
+
+def _pivot_touch(store: dict[str, dict[str, Any]], key: str, outcome: str | None) -> None:
+    k = str(key or "").strip()
+    if not k:
+        return
+    row = store.get(k)
+    if row is None:
+        row = _new_pivot_row()
+        store[k] = row
+    row["episodes"] = int(row["episodes"]) + 1
+    if outcome is None:
+        row["unlabeled"] = int(row["unlabeled"]) + 1
+        return
+    if outcome in ("success", "fail", "partial", "void", "unknown"):
+        row[outcome] = int(row[outcome]) + 1
+    else:
+        row["unknown"] = int(row["unknown"]) + 1
+
+
+def _finalize_pivots(store: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for key in sorted(store.keys()):
+        row = dict(store[key])
+        denom = int(row["success"]) + int(row["fail"]) + int(row["partial"])
+        row["completion_denom"] = denom
+        row["completion_rate"] = (int(row["success"]) / denom) if denom else None
+        out[key] = row
+    return out
+
+
 def aggregate_metrics(root: str | Path, *, write: bool = False) -> dict[str, Any]:
     """Aggregate KPIs under a collect / dataset root.
 
@@ -124,6 +167,13 @@ def aggregate_metrics(root: str | Path, *, write: bool = False) -> dict[str, Any
     by_mode = {"collect": 0, "infer": 0, "other": 0}
     durations: list[float] = []
     align_scores: list[float] = []
+    by_task: dict[str, dict[str, Any]] = {}
+    by_env: dict[str, dict[str, Any]] = {}
+    by_object: dict[str, dict[str, Any]] = {}
+    n_with_task = 0
+    n_with_env = 0
+    n_with_object = 0
+    n_untagged = 0
 
     for ep in episodes:
         man = _read_json(ep / "manifest.json")
@@ -152,11 +202,14 @@ def aggregate_metrics(root: str | Path, *, write: bool = False) -> dict[str, Any
             pass
 
         to = man.get("task_outcome")
+        outcome_key: str | None
         if not isinstance(to, dict) or not to.get("outcome"):
             n_unlabeled += 1
+            outcome_key = None
         else:
             n_with_outcome += 1
             oc = normalize_outcome(to.get("outcome"))
+            outcome_key = oc
             if oc == "success":
                 n_success += 1
             elif oc == "fail":
@@ -167,6 +220,29 @@ def aggregate_metrics(root: str | Path, *, write: bool = False) -> dict[str, Any
                 n_void += 1
             else:
                 n_unknown += 1
+
+        tags = man.get("tags") if isinstance(man.get("tags"), dict) else {}
+        tid = str(tags.get("task_id") or "").strip()
+        eid = str(tags.get("env_id") or "").strip()
+        objs_raw = tags.get("object_ids") or []
+        if isinstance(objs_raw, str):
+            objs = [x.strip() for x in objs_raw.replace(";", ",").split(",") if x.strip()]
+        elif isinstance(objs_raw, (list, tuple)):
+            objs = [str(x).strip() for x in objs_raw if str(x).strip()]
+        else:
+            objs = []
+        if tid:
+            n_with_task += 1
+            _pivot_touch(by_task, tid, outcome_key)
+        if eid:
+            n_with_env += 1
+            _pivot_touch(by_env, eid, outcome_key)
+        if objs:
+            n_with_object += 1
+            for oid in objs:
+                _pivot_touch(by_object, oid, outcome_key)
+        if not tid and not eid and not objs:
+            n_untagged += 1
 
         iv = man.get("intervention_summary")
         if isinstance(iv, dict) and iv.get("any"):
@@ -226,6 +302,15 @@ def aggregate_metrics(root: str | Path, *, write: bool = False) -> dict[str, Any
         "by_mode": dict(by_mode),
         "sessions": _count_sessions(base),
         "merged_episodes": _count_merged_episodes(base),
+        "tag_coverage": {
+            "with_task_id": n_with_task,
+            "with_env_id": n_with_env,
+            "with_object_id": n_with_object,
+            "untagged": n_untagged,
+        },
+        "by_task_id": _finalize_pivots(by_task),
+        "by_env_id": _finalize_pivots(by_env),
+        "by_object_id": _finalize_pivots(by_object),
     }
 
     out["kpis"] = kpis

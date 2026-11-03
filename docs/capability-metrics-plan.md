@@ -1,7 +1,7 @@
 # 数采能力量化指标 — 详细说明与开发计划（易 / 中）
 
 日期：2026-11-02  
-状态：E1/E2/E3 已落地（E3：metrics aggregate + API/UI/CLI/`metrics_summary.json`）；E4–M3 仍待开发  
+状态：E1–E4 已落地（E4：tags 录入 + `tag_vocab.yaml` 下拉 + metrics 按 tag 透视）；M1–M3 仍待开发  
 范围：`sensors-dcs` 采集/后处理 + 可选对接 `embody_model_eval` 离线门控  
 相关：[`pi05-infer-flywheel.md`](pi05-infer-flywheel.md) · [`filter-timeline.md`](filter-timeline.md) · [`station-multi-machine.md`](station-multi-machine.md) · [`session-gather.md`](session-gather.md)（从站 gather） · [`known-gaps.md`](known-gaps.md) · [`standard-export-step4.md`](standard-export-step4.md)（Step 4 主流格式）
 
@@ -237,11 +237,11 @@ episode_XXXXX/
 
 #### 2.12 开发任务
 
-| ID | 任务 | 估时 |
-|----|------|------|
-| E4.1 | `tags` 写入 manifest（与 E1 同模态） | 0.5d（可与 E1.3 合并） |
-| E4.2 | 可选词表 YAML + UI 下拉 | 0.5–1d |
-| E4.3 | E3 汇总增加按 tag 透视 | 0.5d |
+| ID | 任务 | 估时 | 状态 |
+|----|------|------|------|
+| E4.1 | `tags` 写入 manifest（与 E1 同模态） | 0.5d（可与 E1.3 合并） | ✅（E1 停录弹窗已写） |
+| E4.2 | 可选词表 YAML + UI 下拉 | 0.5–1d | ✅ `configs/tag_vocab.yaml` + `/api/tag-vocab` + datalist |
+| E4.3 | E3 汇总增加按 tag 透视 | 0.5d | ✅ `by_object_id` / `by_env_id` / `by_task_id` + UI |
 
 **验收：** 同一 `object_id` 多条 episode 能在 summary 透视表中合并计数与完成率。
 
@@ -414,7 +414,8 @@ Week 4–5   M1 FT agent + grasp 启发（有硬件再启）
 | 停录 UX | `viz.py` Collect/Infer |
 | 写入 | `record.py` `_write_manifest` |
 | 干预 | `intervention_log.py` + runtime 打点 |
-| 汇总 | `sensors_dcs/metrics/` + `/api/metrics/summary` |
+| 汇总 | `sensors_dcs/metrics/` + `/api/metrics/summary`（含 E4 tag 透视） |
+| 标签词表 | `tag_vocab.py` + `configs/tag_vocab.yaml` + `/api/tag-vocab` |
 | 抓取启发 | `sensors_dcs/export/grasp_heuristic.py`（名可调） |
 | 离线质量 | `export/quality/` + embody 适配器 |
 | 配置 | `runtime.require_task_outcome`；FT example YAML |
@@ -427,3 +428,4 @@ Week 4–5   M1 FT agent + grasp 启发（有硬件再启）
 |------|------|
 | 2026-11-02 | 初稿：易 E1–E4、中 M1–M3 与排期 |
 | 2026-11-02 | E1 实现：`task_outcome`/`tags` 写入 manifest、停录弹窗、`sensors-dcs outcomes summary` |
+| 2026-11-03 | E4：词表 YAML/API/停录 datalist；metrics 按 object/env/task 透视与 KPI UI |

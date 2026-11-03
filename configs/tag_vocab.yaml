@@ -1,0 +1,21 @@
+# E4 controlled vocab for stop-recording outcome tags (optional).
+# Override via runtime.tag_vocab, SENSORS_DCS_TAG_VOCAB, or a sibling tag_vocab.yaml.
+# UI uses these as <datalist> suggestions; free-text / new values are always allowed.
+
+schema: dcs_tag_vocab_v1
+
+task_ids:
+  - pick_place_v1
+  - open_drawer
+  - wipe_table
+
+env_ids:
+  - lab_table_a
+  - lab_table_b
+  - kitchen_sim
+
+object_ids:
+  - cup_red
+  - cup_blue
+  - bowl
+  - sponge

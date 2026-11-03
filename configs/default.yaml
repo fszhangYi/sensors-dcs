@@ -46,6 +46,8 @@ runtime:
   preview_app_bind_host: "0.0.0.0"
   # E1：true 时点「结束」必须在弹窗确认任务结果，取消则不停录
   require_task_outcome: false
+  # E4：可选标签词表（相对本 YAML 或绝对路径）；缺省则找同目录 / configs/tag_vocab.yaml
+  # tag_vocab: tag_vocab.yaml
 
 gello_arm_sync:
   align_max_rad: 0.8

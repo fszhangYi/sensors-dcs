@@ -1720,14 +1720,16 @@ PREVIEW_HTML = """<!DOCTYPE html>
       color: var(--text);
       font-variant-numeric: tabular-nums;
     }
-    .pp-zone-metrics .pp-metrics-raw {
+    .pp-zone-metrics .pp-metrics-raw,
+    .pp-zone-metrics .pp-metrics-pivots {
       margin-top: 0.45rem;
       border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
       border-radius: 8px;
       background: color-mix(in srgb, var(--panel, #121212) 92%, transparent);
       overflow: hidden;
     }
-    .pp-zone-metrics .pp-metrics-raw > summary {
+    .pp-zone-metrics .pp-metrics-raw > summary,
+    .pp-zone-metrics .pp-metrics-pivots > summary {
       cursor: pointer;
       user-select: none;
       list-style: none;
@@ -1735,12 +1737,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
       font-size: 0.78rem;
       color: var(--muted);
     }
-    .pp-zone-metrics .pp-metrics-raw > summary::-webkit-details-marker { display: none; }
-    .pp-zone-metrics .pp-metrics-raw > summary::before {
+    .pp-zone-metrics .pp-metrics-raw > summary::-webkit-details-marker,
+    .pp-zone-metrics .pp-metrics-pivots > summary::-webkit-details-marker { display: none; }
+    .pp-zone-metrics .pp-metrics-raw > summary::before,
+    .pp-zone-metrics .pp-metrics-pivots > summary::before {
       content: "▸ ";
       color: var(--accent, #3dd6c6);
     }
-    .pp-zone-metrics .pp-metrics-raw[open] > summary::before {
+    .pp-zone-metrics .pp-metrics-raw[open] > summary::before,
+    .pp-zone-metrics .pp-metrics-pivots[open] > summary::before {
       content: "▾ ";
     }
     .pp-zone-metrics #ppMetricsLog {
@@ -1750,6 +1755,41 @@ PREVIEW_HTML = """<!DOCTYPE html>
       border-top: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
       min-height: 2.5rem;
       max-height: min(14rem, 28vh);
+    }
+    .pp-metrics-pivots-body {
+      padding: 0.35rem 0.55rem 0.55rem;
+      display: grid;
+      gap: 0.55rem;
+      max-height: min(22rem, 40vh);
+      overflow: auto;
+      border-top: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+    }
+    .pp-metrics-pivots-body .pp-pivot-block h4 {
+      margin: 0 0 0.25rem;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .pp-metrics-pivots-body table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.74rem;
+      font-variant-numeric: tabular-nums;
+    }
+    .pp-metrics-pivots-body th,
+    .pp-metrics-pivots-body td {
+      border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+      padding: 0.22rem 0.35rem;
+      text-align: left;
+    }
+    .pp-metrics-pivots-body th {
+      color: var(--muted);
+      font-weight: 500;
+      background: color-mix(in srgb, var(--chrome, var(--panel)) 70%, transparent);
+    }
+    .outcome-modal .outcome-tags .pp-hint {
+      margin: 0.15rem 0 0;
+      grid-column: 1 / -1;
     }
     .pp-fields {
       display: grid;
@@ -3674,6 +3714,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
               <span class="hint" id="ppMetricsHint"></span>
             </div>
             <div class="pp-metrics-grid" id="ppMetricsGrid" hidden></div>
+            <details class="pp-metrics-pivots" id="ppMetricsPivotsWrap" hidden>
+              <summary data-i18n="pp.metrics_pivots_toggle">按标签透视（默认折叠）</summary>
+              <div id="ppMetricsPivots" class="pp-metrics-pivots-body"></div>
+            </details>
             <details class="pp-metrics-raw">
               <summary data-i18n="pp.metrics_raw_toggle">原始 JSON（默认折叠）</summary>
               <pre id="ppMetricsLog" data-i18n="pp.metrics_idle">（尚未扫描）</pre>
@@ -4012,10 +4056,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
         </div>
       </div>
       <div class="outcome-tags">
-        <label><span data-i18n="outcome.task_id">task_id</span><input type="text" id="outcomeTaskId" autocomplete="off" placeholder="pick_place_v1" /></label>
-        <label><span data-i18n="outcome.env_id">env_id</span><input type="text" id="outcomeEnvId" autocomplete="off" placeholder="lab_table_a" /></label>
-        <label><span data-i18n="outcome.object_ids">object_ids</span><input type="text" id="outcomeObjectIds" autocomplete="off" placeholder="cup_red, bowl" /></label>
+        <label><span data-i18n="outcome.task_id">task_id</span><input type="text" id="outcomeTaskId" list="outcomeTaskIdList" autocomplete="off" placeholder="pick_place_v1" /></label>
+        <label><span data-i18n="outcome.env_id">env_id</span><input type="text" id="outcomeEnvId" list="outcomeEnvIdList" autocomplete="off" placeholder="lab_table_a" /></label>
+        <label><span data-i18n="outcome.object_ids">object_ids</span><input type="text" id="outcomeObjectIds" list="outcomeObjectIdList" autocomplete="off" placeholder="cup_red, bowl" /></label>
         <label><span data-i18n="outcome.note">备注</span><input type="text" id="outcomeNote" autocomplete="off" /></label>
+        <datalist id="outcomeTaskIdList"></datalist>
+        <datalist id="outcomeEnvIdList"></datalist>
+        <datalist id="outcomeObjectIdList"></datalist>
+        <p class="pp-hint" id="outcomeVocabHint" data-i18n="outcome.vocab_hint">可选词表：configs/tag_vocab.yaml（可自由输入新值）</p>
       </div>
       <div class="outcome-actions">
         <label class="outcome-actions-follow" for="outcomeFollowLast">
@@ -4837,10 +4885,46 @@ PREVIEW_HTML = """<!DOCTYPE html>
         tags: Object.keys(tags).length ? tags : null,
       };
     }
+    let _tagVocabLoaded = false;
+    function _fillDatalist(id, values) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const uniq = [];
+      const seen = new Set();
+      (values || []).forEach((v) => {
+        const s = String(v || '').trim();
+        if (!s || seen.has(s)) return;
+        seen.add(s);
+        uniq.push(s);
+      });
+      el.innerHTML = uniq.map((s) => '<option value="' + s.replace(/"/g, '&quot;') + '"></option>').join('');
+    }
+    async function ensureTagVocab() {
+      if (_tagVocabLoaded) return;
+      try {
+        const r = await fetch('/api/tag-vocab', { credentials: 'same-origin' });
+        const j = await r.json();
+        _fillDatalist('outcomeTaskIdList', j.task_ids || []);
+        _fillDatalist('outcomeEnvIdList', j.env_ids || []);
+        _fillDatalist('outcomeObjectIdList', j.object_ids || []);
+        const hint = document.getElementById('outcomeVocabHint');
+        if (hint) {
+          if (j.path) {
+            hint.textContent = t('outcome.vocab_loaded', { path: j.path });
+          } else {
+            hint.textContent = t('outcome.vocab_hint');
+          }
+        }
+        _tagVocabLoaded = !!(j && j.ok);
+      } catch (_) {
+        /* suggestions optional */
+      }
+    }
     function openOutcomeModal(opts) {
       opts = opts || {};
       return new Promise((resolve) => {
         _outcomeResolve = resolve;
+        ensureTagVocab();
         if (outcomeFollowLast) outcomeFollowLast.checked = _readOutcomeFollow();
         const follow = !!(outcomeFollowLast && outcomeFollowLast.checked);
         if (follow) {
@@ -11799,6 +11883,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const ppMetricsGrid = document.getElementById('ppMetricsGrid');
     const ppMetricsLog = document.getElementById('ppMetricsLog');
     const ppMetricsHint = document.getElementById('ppMetricsHint');
+    const ppMetricsPivots = document.getElementById('ppMetricsPivots');
+    const ppMetricsPivotsWrap = document.getElementById('ppMetricsPivotsWrap');
     function _ppFmtRate(x) {
       if (x == null || !Number.isFinite(Number(x))) return '—';
       return (Number(x) * 100).toFixed(1) + '%';
@@ -11811,6 +11897,50 @@ PREVIEW_HTML = """<!DOCTYPE html>
     function _ppFmtScore(x) {
       if (x == null || !Number.isFinite(Number(x))) return '—';
       return Number(x).toFixed(1);
+    }
+    function _ppEsc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+    function _renderPivotTable(title, map) {
+      const entries = Object.keys(map || {}).map((key) => [key, map[key]]);
+      if (!entries.length) {
+        return '<div class="pp-pivot-block"><h4>' + _ppEsc(title) + '</h4><p class="pp-hint">' + _ppEsc(t('pp.metrics_pivots_empty')) + '</p></div>';
+      }
+      const rows = entries.map(([key, row]) => {
+        const r = row || {};
+        return '<tr><td>' + _ppEsc(key) + '</td><td>' + _ppEsc(r.episodes != null ? r.episodes : '—')
+          + '</td><td>' + _ppEsc(_ppFmtRate(r.completion_rate))
+          + '</td><td>' + _ppEsc(r.success != null ? r.success : 0)
+          + '</td><td>' + _ppEsc(r.fail != null ? r.fail : 0)
+          + '</td><td>' + _ppEsc(r.unlabeled != null ? r.unlabeled : 0)
+          + '</td></tr>';
+      }).join('');
+      return '<div class="pp-pivot-block"><h4>' + _ppEsc(title) + '</h4><table><thead><tr>'
+        + '<th>' + _ppEsc(t('pp.metrics_pivot_id')) + '</th>'
+        + '<th>' + _ppEsc(t('pp.metrics_pivot_n')) + '</th>'
+        + '<th>' + _ppEsc(t('pp.metrics.completion_rate')) + '</th>'
+        + '<th>ok</th><th>fail</th><th>—</th>'
+        + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+    }
+    function renderMetricsPivots(j) {
+      if (!ppMetricsPivots || !ppMetricsPivotsWrap) return;
+      const k = (j && j.kpis) || {};
+      const cov = k.tag_coverage || {};
+      const covLine = '<p class="pp-hint">' + _ppEsc(t('pp.metrics_tag_coverage', {
+        task: cov.with_task_id != null ? cov.with_task_id : 0,
+        env: cov.with_env_id != null ? cov.with_env_id : 0,
+        obj: cov.with_object_id != null ? cov.with_object_id : 0,
+        none: cov.untagged != null ? cov.untagged : 0,
+      })) + '</p>';
+      ppMetricsPivots.innerHTML = covLine
+        + _renderPivotTable(t('pp.metrics_by_object'), k.by_object_id || {})
+        + _renderPivotTable(t('pp.metrics_by_env'), k.by_env_id || {})
+        + _renderPivotTable(t('pp.metrics_by_task'), k.by_task_id || {});
+      ppMetricsPivotsWrap.hidden = false;
     }
     function renderMetricsGrid(j) {
       if (!ppMetricsGrid) return;
@@ -11836,6 +11966,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         '<div class="pp-metric"><span class="k">' + label + '</span><span class="v">' + val + '</span></div>'
       )).join('');
       ppMetricsGrid.hidden = false;
+      renderMetricsPivots(j);
     }
     async function runMetricsSummary(opts) {
       opts = opts || {};
@@ -14975,6 +15106,18 @@ def create_viz_app(
         if not base:
             return {"ok": False, "error": "root unavailable"}
         return await asyncio.to_thread(aggregate_metrics, base, write=bool(write))
+
+    @app.get("/api/tag-vocab")
+    async def tag_vocab_api(path: str = "") -> dict[str, Any]:
+        """E4: controlled vocab for outcome modal datalists (optional file)."""
+        from sensors_dcs.tag_vocab import load_tag_vocab
+
+        explicit = (path or "").strip() or None
+        return await asyncio.to_thread(
+            load_tag_vocab,
+            explicit=explicit,
+            config_path=config_path,
+        )
 
     @app.get("/api/postprocess/defaults")
     async def postprocess_defaults() -> dict[str, Any]:

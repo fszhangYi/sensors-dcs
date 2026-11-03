@@ -19,6 +19,7 @@ def _write_ep(
     intervention_any: bool | None = False,
     align_score: float | None = None,
     provisional: bool = False,
+    tags: dict | None = None,
 ) -> Path:
     ep = root / name
     ep.mkdir(parents=True, exist_ok=True)
@@ -33,6 +34,8 @@ def _write_ep(
         man["provisional"] = True
     if outcome is not None:
         man["task_outcome"] = {"outcome": outcome, "labels": [], "source": "operator"}
+    if tags is not None:
+        man["tags"] = tags
     if intervention_any is not None:
         man["intervention_summary"] = {
             "any": bool(intervention_any),
@@ -128,3 +131,40 @@ def test_missing_root() -> None:
     out = aggregate_metrics("/no/such/dcs/root/ever")
     assert out["ok"] is False
     assert "error" in out
+
+
+def test_tag_pivots_merge_object_completion(tmp_path: Path) -> None:
+    """E4.3: same object_id across episodes merges counts + completion_rate."""
+    tags_cup = {"task_id": "pick_place_v1", "env_id": "lab_table_a", "object_ids": ["cup_red"]}
+    _write_ep(tmp_path, "episode_00000", outcome="success", tags=tags_cup)
+    _write_ep(tmp_path, "episode_00001", outcome="fail", tags=tags_cup)
+    _write_ep(
+        tmp_path,
+        "episode_00002",
+        outcome="success",
+        tags={"task_id": "pick_place_v1", "env_id": "lab_table_b", "object_ids": ["cup_red", "bowl"]},
+    )
+    _write_ep(tmp_path, "episode_00003", outcome="success", tags=None)  # untagged
+
+    out = aggregate_metrics(tmp_path)
+    k = out["kpis"]
+    cov = k["tag_coverage"]
+    assert cov["with_object_id"] == 3
+    assert cov["with_task_id"] == 3
+    assert cov["with_env_id"] == 3
+    assert cov["untagged"] == 1
+
+    cup = k["by_object_id"]["cup_red"]
+    assert cup["episodes"] == 3
+    assert cup["success"] == 2
+    assert cup["fail"] == 1
+    assert cup["completion_denom"] == 3
+    assert abs(cup["completion_rate"] - (2 / 3)) < 1e-9
+
+    bowl = k["by_object_id"]["bowl"]
+    assert bowl["episodes"] == 1
+    assert bowl["success"] == 1
+    assert abs(bowl["completion_rate"] - 1.0) < 1e-9
+
+    assert k["by_env_id"]["lab_table_a"]["episodes"] == 2
+    assert k["by_task_id"]["pick_place_v1"]["episodes"] == 3
