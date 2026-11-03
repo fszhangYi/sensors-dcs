@@ -1,7 +1,7 @@
 # 数采能力量化指标 — 详细说明与开发计划（易 / 中）
 
 日期：2026-11-02  
-状态：E1 已落地；E2 已落地（interventions.jsonl + manifest summary + CLI）；E3–M3 仍待开发  
+状态：E1/E2/E3 已落地（E3：metrics aggregate + API/UI/CLI/`metrics_summary.json`）；E4–M3 仍待开发  
 范围：`sensors-dcs` 采集/后处理 + 可选对接 `embody_model_eval` 离线门控  
 相关：[`pi05-infer-flywheel.md`](pi05-infer-flywheel.md) · [`filter-timeline.md`](filter-timeline.md) · [`station-multi-machine.md`](station-multi-machine.md) · [`session-gather.md`](session-gather.md)（从站 gather） · [`known-gaps.md`](known-gaps.md) · [`standard-export-step4.md`](standard-export-step4.md)（Step 4 主流格式）
 

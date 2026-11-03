@@ -1,0 +1,251 @@
+"""E3: scan a collect root for dataset KPIs (read-only aggregation).
+
+Missing E1/E2/align fields degrade to null / zero — never raise for absent data.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import time
+from pathlib import Path
+from typing import Any
+
+from sensors_dcs.task_outcome import normalize_outcome
+
+SCHEMA = "dcs_metrics_summary_v1"
+
+
+def _read_json(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _percentile(sorted_vals: list[float], p: float) -> float | None:
+    if not sorted_vals:
+        return None
+    if len(sorted_vals) == 1:
+        return float(sorted_vals[0])
+    p = min(100.0, max(0.0, float(p)))
+    k = (len(sorted_vals) - 1) * (p / 100.0)
+    f = math.floor(k)
+    c = math.ceil(k)
+    if f == c:
+        return float(sorted_vals[int(k)])
+    return float(sorted_vals[f] * (c - k) + sorted_vals[c] * (k - f))
+
+
+def _align_score(ep: Path) -> float | None:
+    meta = _read_json(ep / "export" / "filter_meta.json")
+    if not meta:
+        return None
+    aq = meta.get("align_quality")
+    if not isinstance(aq, dict):
+        # Some writers nest under filter_meta key; tolerate flat score too.
+        if meta.get("score") is not None and meta.get("grade") is not None:
+            aq = meta
+        else:
+            return None
+    try:
+        s = float(aq.get("score"))
+    except (TypeError, ValueError):
+        return None
+    if s != s:  # NaN
+        return None
+    return s
+
+
+def _list_top_episodes(root: Path) -> list[Path]:
+    if not root.is_dir():
+        return []
+    return sorted(
+        p for p in root.glob("episode_*") if p.is_dir() and p.name.startswith("episode_")
+    )
+
+
+def _count_sessions(root: Path) -> int:
+    sess = root / "sessions"
+    if not sess.is_dir():
+        return 0
+    n = 0
+    for d in sess.iterdir():
+        if d.is_dir() and (d / "session.json").is_file():
+            n += 1
+    return n
+
+
+def _count_merged_episodes(root: Path) -> int:
+    sess = root / "sessions"
+    if not sess.is_dir():
+        return 0
+    n = 0
+    for d in sess.glob("*/merged/episode_*"):
+        if d.is_dir():
+            n += 1
+    return n
+
+
+def aggregate_metrics(root: str | Path, *, write: bool = False) -> dict[str, Any]:
+    """Aggregate KPIs under a collect / dataset root.
+
+    Primary cohort = ``root/episode_*`` (station-local finalized episodes).
+    Nested session copies are counted separately so rates are not double-counted.
+    """
+    base = Path(root).expanduser().resolve()
+    out: dict[str, Any] = {
+        "ok": True,
+        "schema": SCHEMA,
+        "root": str(base),
+        "t_wall": float(time.time()),
+        "error": None,
+    }
+    if not base.is_dir():
+        out["ok"] = False
+        out["error"] = f"root not found: {base}"
+        return out
+
+    episodes = _list_top_episodes(base)
+    n_final = 0
+    n_valid = 0
+    n_invalid = 0
+    n_with_outcome = 0
+    n_unlabeled = 0
+    n_success = 0
+    n_fail = 0
+    n_partial = 0
+    n_void = 0
+    n_unknown = 0
+    n_intervene = 0
+    by_mode = {"collect": 0, "infer": 0, "other": 0}
+    durations: list[float] = []
+    align_scores: list[float] = []
+
+    for ep in episodes:
+        man = _read_json(ep / "manifest.json")
+        if man is None:
+            continue
+        if man.get("provisional"):
+            continue
+        n_final += 1
+        if man.get("valid") is True:
+            n_valid += 1
+        elif man.get("valid") is False:
+            n_invalid += 1
+
+        mode = str(man.get("record_mode") or "collect").strip().lower()
+        if mode in by_mode:
+            by_mode[mode] += 1
+        else:
+            by_mode["other"] += 1
+
+        try:
+            if man.get("duration_s") is not None:
+                d = float(man["duration_s"])
+                if d == d:
+                    durations.append(d)
+        except (TypeError, ValueError):
+            pass
+
+        to = man.get("task_outcome")
+        if not isinstance(to, dict) or not to.get("outcome"):
+            n_unlabeled += 1
+        else:
+            n_with_outcome += 1
+            oc = normalize_outcome(to.get("outcome"))
+            if oc == "success":
+                n_success += 1
+            elif oc == "fail":
+                n_fail += 1
+            elif oc == "partial":
+                n_partial += 1
+            elif oc == "void":
+                n_void += 1
+            else:
+                n_unknown += 1
+
+        iv = man.get("intervention_summary")
+        if isinstance(iv, dict) and iv.get("any"):
+            n_intervene += 1
+        else:
+            # Fall back to sidecar presence with any events
+            from sensors_dcs.intervention_log import (
+                read_intervention_events,
+                summarize_intervention_events,
+            )
+
+            try:
+                ev = read_intervention_events(ep)
+                if summarize_intervention_events(ev).get("any"):
+                    n_intervene += 1
+            except Exception:  # noqa: BLE001
+                pass
+
+        sc = _align_score(ep)
+        if sc is not None:
+            align_scores.append(sc)
+
+    durations_sorted = sorted(durations)
+    align_sorted = sorted(align_scores)
+    completion_denom = n_success + n_fail + n_partial
+
+    kpis = {
+        "episodes": n_final,
+        "keep_rate": (n_valid / n_final) if n_final else None,
+        "valid_true": n_valid,
+        "valid_false": n_invalid,
+        "completion_rate": (n_success / completion_denom) if completion_denom else None,
+        "completion_denom": completion_denom,
+        "unlabeled_rate": (n_unlabeled / n_final) if n_final else None,
+        "unlabeled": n_unlabeled,
+        "with_outcome": n_with_outcome,
+        "outcome_counts": {
+            "success": n_success,
+            "fail": n_fail,
+            "partial": n_partial,
+            "void": n_void,
+            "unknown": n_unknown,
+        },
+        "intervention_rate": (n_intervene / n_final) if n_final else None,
+        "with_intervention": n_intervene,
+        "duration_s": {
+            "n": len(durations_sorted),
+            "mean": (sum(durations_sorted) / len(durations_sorted)) if durations_sorted else None,
+            "p50": _percentile(durations_sorted, 50),
+            "p95": _percentile(durations_sorted, 95),
+        },
+        "align_quality": {
+            "n": len(align_sorted),
+            "mean": (sum(align_sorted) / len(align_sorted)) if align_sorted else None,
+            "p50": _percentile(align_sorted, 50),
+        },
+        "by_mode": dict(by_mode),
+        "sessions": _count_sessions(base),
+        "merged_episodes": _count_merged_episodes(base),
+    }
+
+    out["kpis"] = kpis
+    if write:
+        written = write_metrics_summary(base, out)
+        out["written"] = written
+    return out
+
+
+def write_metrics_summary(
+    root: str | Path,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Write ``metrics_summary.json`` under root. Re-aggregates if payload omitted."""
+    base = Path(root).expanduser().resolve()
+    data = payload if isinstance(payload, dict) else aggregate_metrics(base, write=False)
+    path = base / "metrics_summary.json"
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return {"ok": True, "path": str(path)}
+    except OSError as e:
+        return {"ok": False, "error": str(e), "path": str(path)}

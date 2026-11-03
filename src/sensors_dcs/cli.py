@@ -249,6 +249,23 @@ def main(argv: list[str] | None = None) -> int:
         help="also pack episodes with manifest.valid=false",
     )
 
+    p_metrics = sub.add_parser(
+        "metrics-summary",
+        help="E3: aggregate dataset KPIs under a collect root (optional write JSON)",
+    )
+    p_metrics.add_argument(
+        "-c",
+        "--root",
+        required=True,
+        help="collect root containing episode_* (e.g. D:/data or _dcs_data)",
+    )
+    p_metrics.add_argument(
+        "--write",
+        action="store_true",
+        default=False,
+        help="also write <root>/metrics_summary.json",
+    )
+
     p_outcomes = sub.add_parser(
         "outcomes",
         help="summarize task_outcome (E1) + intervention (E2) KPIs under a collect root",
@@ -570,6 +587,13 @@ def main(argv: list[str] | None = None) -> int:
             output_root=args.output_root,
             skip_invalid=not bool(getattr(args, "allow_invalid", False)),
         )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+
+    if args.cmd == "metrics-summary":
+        from sensors_dcs.metrics.aggregate import aggregate_metrics
+
+        result = aggregate_metrics(args.root, write=bool(getattr(args, "write", False)))
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
 

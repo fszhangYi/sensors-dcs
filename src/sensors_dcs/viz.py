@@ -1606,6 +1606,35 @@ PREVIEW_HTML = """<!DOCTYPE html>
       min-height: 3.25rem;
       max-height: min(9rem, 20vh);
     }
+    .pp-metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+      gap: 0.45rem;
+      margin: 0.45rem 0 0.35rem;
+    }
+    .pp-metrics-grid .pp-metric {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.45rem 0.55rem;
+      background: color-mix(in srgb, var(--panel) 88%, transparent);
+    }
+    .pp-metrics-grid .pp-metric .k {
+      display: block;
+      font-size: 0.72rem;
+      color: var(--muted);
+      margin-bottom: 0.15rem;
+    }
+    .pp-metrics-grid .pp-metric .v {
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+    .pp-zone-metrics #ppMetricsLog {
+      margin-top: 0.35rem;
+      min-height: 3.5rem;
+      max-height: min(12rem, 24vh);
+    }
     .pp-fields {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -3509,6 +3538,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
                     <span class="hint" id="ppSessionHint"></span>
                   </div>
                   <pre id="ppSessionLog" data-i18n="pp.log_idle">（尚未运行）</pre>
+                </div>
+                <div class="pp-zone pp-zone-metrics" aria-labelledby="ppZoneMetrics">
+                  <h3 id="ppZoneMetrics" data-i18n="pp.metrics_title">数据集 KPI</h3>
+                  <p class="pp-hint" data-i18n="pp.metrics_hint">扫描数据根下 episode_*（不含 sessions 嵌套副本）；缺 E1/E2/对齐分时显示 —。</p>
+                  <div class="pp-actions">
+                    <button type="button" id="btnPpMetricsRefresh" data-i18n="pp.metrics_refresh">刷新 KPI</button>
+                    <button type="button" id="btnPpMetricsWrite" data-i18n="pp.metrics_write">导出 metrics_summary.json</button>
+                    <span class="hint" id="ppMetricsHint"></span>
+                  </div>
+                  <div class="pp-metrics-grid" id="ppMetricsGrid" hidden></div>
+                  <pre id="ppMetricsLog" data-i18n="pp.metrics_idle">（尚未扫描）</pre>
                 </div>
               </div>
               <div class="pp-zone pp-zone-run" aria-labelledby="ppZoneRunAll">
@@ -11589,6 +11629,81 @@ PREVIEW_HTML = """<!DOCTYPE html>
     if (btnPpSessionGather) btnPpSessionGather.addEventListener('click', () => runSessionGather());
     const btnPpSessionMerge = document.getElementById('btnPpSessionMerge');
     if (btnPpSessionMerge) btnPpSessionMerge.addEventListener('click', () => runSessionMerge());
+    const ppMetricsGrid = document.getElementById('ppMetricsGrid');
+    const ppMetricsLog = document.getElementById('ppMetricsLog');
+    const ppMetricsHint = document.getElementById('ppMetricsHint');
+    function _ppFmtRate(x) {
+      if (x == null || !Number.isFinite(Number(x))) return '—';
+      return (Number(x) * 100).toFixed(1) + '%';
+    }
+    function _ppFmtSec(x) {
+      if (x == null || !Number.isFinite(Number(x))) return '—';
+      const n = Number(x);
+      return (n < 10 ? n.toFixed(2) : n.toFixed(1)) + ' s';
+    }
+    function _ppFmtScore(x) {
+      if (x == null || !Number.isFinite(Number(x))) return '—';
+      return Number(x).toFixed(1);
+    }
+    function renderMetricsGrid(j) {
+      if (!ppMetricsGrid) return;
+      const k = (j && j.kpis) || {};
+      const dur = k.duration_s || {};
+      const aq = k.align_quality || {};
+      const mode = k.by_mode || {};
+      const cells = [
+        [t('pp.metrics.episodes'), k.episodes != null ? String(k.episodes) : '—'],
+        [t('pp.metrics.keep_rate'), _ppFmtRate(k.keep_rate)],
+        [t('pp.metrics.completion_rate'), _ppFmtRate(k.completion_rate)],
+        [t('pp.metrics.unlabeled_rate'), _ppFmtRate(k.unlabeled_rate)],
+        [t('pp.metrics.intervention_rate'), _ppFmtRate(k.intervention_rate)],
+        [t('pp.metrics.duration_mean'), _ppFmtSec(dur.mean)],
+        [t('pp.metrics.duration_p50'), _ppFmtSec(dur.p50)],
+        [t('pp.metrics.duration_p95'), _ppFmtSec(dur.p95)],
+        [t('pp.metrics.align_mean'), _ppFmtScore(aq.mean)],
+        [t('pp.metrics.sessions'), k.sessions != null ? String(k.sessions) : '—'],
+        [t('pp.metrics.collect'), mode.collect != null ? String(mode.collect) : '—'],
+        [t('pp.metrics.infer'), mode.infer != null ? String(mode.infer) : '—'],
+      ];
+      ppMetricsGrid.innerHTML = cells.map(([label, val]) => (
+        '<div class="pp-metric"><span class="k">' + label + '</span><span class="v">' + val + '</span></div>'
+      )).join('');
+      ppMetricsGrid.hidden = false;
+    }
+    async function runMetricsSummary(opts) {
+      opts = opts || {};
+      const write = !!opts.write;
+      const root = getSessionSaveDir() || '';
+      const q = '?root=' + encodeURIComponent(root) + (write ? '&write=true' : '');
+      setPpBusy(true, t('pp.metrics_running'));
+      if (ppMetricsHint) ppMetricsHint.textContent = t('pp.metrics_running');
+      try {
+        const r = await fetch('/api/metrics/summary' + q, { credentials: 'same-origin' });
+        const j = await r.json();
+        if (ppMetricsLog) ppMetricsLog.textContent = JSON.stringify(j, null, 2);
+        if (!j.ok) {
+          if (ppMetricsHint) ppMetricsHint.textContent = t('pp.metrics_fail', { error: j.error || ('HTTP ' + r.status) });
+          return j;
+        }
+        renderMetricsGrid(j);
+        let tip = t('pp.metrics_done', { n: (j.kpis && j.kpis.episodes) != null ? j.kpis.episodes : '—' });
+        if (write && j.written && j.written.path) {
+          tip += ' · ' + t('pp.metrics_written', { path: j.written.path });
+        }
+        if (ppMetricsHint) ppMetricsHint.textContent = tip;
+        return j;
+      } catch (e) {
+        if (ppMetricsHint) ppMetricsHint.textContent = t('pp.metrics_fail', { error: String(e) });
+        if (ppMetricsLog) ppMetricsLog.textContent = String(e);
+        return { ok: false, error: String(e) };
+      } finally {
+        setPpBusy(false);
+      }
+    }
+    const btnPpMetricsRefresh = document.getElementById('btnPpMetricsRefresh');
+    if (btnPpMetricsRefresh) btnPpMetricsRefresh.addEventListener('click', () => runMetricsSummary({ write: false }));
+    const btnPpMetricsWrite = document.getElementById('btnPpMetricsWrite');
+    if (btnPpMetricsWrite) btnPpMetricsWrite.addEventListener('click', () => runMetricsSummary({ write: true }));
     const btnPpBrowseSessionSaveDir = document.getElementById('btnPpBrowseSessionSaveDir');
     if (btnPpBrowseSessionSaveDir) {
       btnPpBrowseSessionSaveDir.addEventListener('click', () => openPathPicker({
@@ -11651,7 +11766,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
         'btnPpStep4One', 'btnPpStep4Batch', 'btnPpBrowseStep4Root',
         'btnPpBrowseRatePolicy', 'btnPpBrowseRateSave',
         'btnPpRateSave', 'btnPpRateApply',
-        'btnPpSessionRefresh', 'btnPpSessionGather', 'btnPpSessionMerge'].forEach((id) => {
+        'btnPpSessionRefresh', 'btnPpSessionGather', 'btnPpSessionMerge',
+        'btnPpMetricsRefresh', 'btnPpMetricsWrite'].forEach((id) => {
         const b = document.getElementById(id);
         if (b) b.disabled = !!on;
       });
@@ -14666,6 +14782,32 @@ def create_viz_app(
         return await asyncio.to_thread(station_peer_probe, sid)
 
     _pp_lock = threading.Lock()
+
+    @app.get("/api/metrics/summary")
+    async def metrics_summary(
+        root: str = "",
+        write: bool = False,
+    ) -> dict[str, Any]:
+        """E3: read-only dataset KPIs under a collect root (optional write JSON)."""
+        from pathlib import Path as _Path
+
+        from sensors_dcs.metrics.aggregate import aggregate_metrics
+
+        # Prefer explicit root; else postprocess/session save_dir / recorder.
+        override = (root or "").strip() or None
+        if override:
+            base = str(_Path(override).expanduser().resolve())
+        else:
+            base = postprocess_save_dir
+            if recorder is not None:
+                try:
+                    base = recorder.status().get("save_dir") or base
+                except Exception:  # noqa: BLE001
+                    pass
+            base = str(_Path(str(base)).expanduser().resolve()) if base else ""
+        if not base:
+            return {"ok": False, "error": "root unavailable"}
+        return await asyncio.to_thread(aggregate_metrics, base, write=bool(write))
 
     @app.get("/api/postprocess/defaults")
     async def postprocess_defaults() -> dict[str, Any]:
