@@ -1,12 +1,9 @@
 # 数采能力量化指标 — 详细说明与开发计划（易 / 中）
 
 日期：2026-11-02  
-状态：E1–E4 + **M3** + **薄 M2** 已落地（薄 M2：关节/TCP 动力学 → `export/quality/traj_quality.json` + KPI `quality`；完整 M2 碰撞/near-miss 仍待）；M1 仍待开发  
-
-范围：`sensors-dcs` 采集/后处理 + 可选对接 `embody_model_eval` 离线门控  
-相关：[`pi05-infer-flywheel.md`](pi05-infer-flywheel.md) · [`filter-timeline.md`](filter-timeline.md) · [`sensor-coverage.md`](sensor-coverage.md)（M3 ↔ E4 术语） · [`station-multi-machine.md`](station-multi-machine.md) · [`session-gather.md`](session-gather.md)（从站 gather） · [`known-gaps.md`](known-gaps.md) · [`standard-export-step4.md`](standard-export-step4.md)（Step 4 主流格式）
-
----
+状态：E1–E4 + **M3** + **薄 M2** 已落地；**厚 M2** 走 sensors.traj_safety（文档 + v0 SDK），不再长期依赖 embody JS；M1 仍待  
+范围：sensors-dcs 采集/后处理 + sensors 共享轨迹安全 SDK；embody 后续迁到同一核心库  
+相关：[pi05-infer-flywheel.md](pi05-infer-flywheel.md) · [filter-timeline.md](filter-timeline.md) · [sensor-coverage.md](sensor-coverage.md)（M3 ↔ E4 术语） · [station-multi-machine.md](station-multi-machine.md) · [session-gather.md](session-gather.md)（从站 gather） · [known-gaps.md](known-gaps.md) · [standard-export-step4.md](standard-export-step4.md)（Step 4 主流格式） · sensors [traj-safety-sdk.md](../../sensors/docs/traj-safety-sdk.md)
 
 ## 0. 背景与定案
 
@@ -287,26 +284,25 @@ episode_XXXXX/
 
 #### 3.4 解释
 
-采集热路径不做在线碰撞检测。完整 M2 在 **已有 episode 或 compare JSON** 上跑 embody 已有能力：
-
-- 关节超速 / TCP 误差类门控（`batch_score` / `tcp_metrics`）  
-- URDF 自碰 / 桌面碰（`collision_geom` / `advanced_cd`）  
+采集热路径不做在线碰撞检测。厚 M2 在 **已有 episode** 上跑 **`sensors.traj_safety`**（从 embody `collision_geom` / `advanced_cd` 迁出的可移植几何分析），**不**把 DCS 长期绑在 embody JS 上。
 
 产出 sidecar，例如：
 
 ```text
 episode_XXXXX/export/quality/
-  traj_quality.json      # score, gates[], overspeed_count
-  near_miss.json         # events[{t, kind, clearance_m}]
+  traj_quality.json      # thin and/or thick grade, gates[]
+  near_miss.json         # events[{t, kind, clearance_m}]  （厚）
 ```
 
-「轨迹质量」KPI v1 建议合成：门控全过 = good；仅超速 = warn；几何碰撞 = bad。与 `align_quality` **分目录/分字段**。
+「轨迹质量」KPI：动力学（薄）与几何（厚）可合并——门控全过 = good；仅超速/near-miss = warn；几何碰撞 = bad。与 `align_quality` **分目录/分字段**。
 
-near-miss：无真机接触传感时，用 **最小间隙 &lt; 阈值且未碰** 定义为 near-miss；真碰记 collision。阈值进配置。
+near-miss：无真机接触传感时，用 **最小间隙 ∈ (hit, hit+margin]** 定义为 near-miss；真碰记 collision。阈值进 `SafetyConfig`。
+
+架构与 API：**[`sensors/docs/traj-safety-sdk.md`](../../sensors/docs/traj-safety-sdk.md)**。
 
 #### 3.4b 薄 M2（已落地，2026-11）
 
-不依赖 embody / URDF。本地读 `states/arm*.jsonl`（优先 arm_read），写：
+不依赖 URDF。本地读 `states/arm*.jsonl`（优先 arm_read），写：
 
 ```text
 episode_XXXXX/export/quality/traj_quality.json   # kind=thin, grade good|warn|missing
@@ -315,24 +311,24 @@ episode_XXXXX/export/quality/traj_quality.json   # kind=thin, grade good|warn|mi
 | 入口 | 说明 |
 |------|------|
 | CLI | `sensors-dcs traj-quality -e <ep>` 或 `-c <root>` |
-| 后处理可选步 | `traj-quality` ∈ `OPTIONAL_STEPS`；**不在** `DEFAULT_STEPS` / 快速采集 |
+| 后处理可选步 | `traj-quality` ∈ `OPTIONAL_STEPS` / `INDEPENDENT_STEPS`；**不在** `DEFAULT_STEPS` / 快速采集 |
 | UI | 「附带 traj-quality」默认关；「仅运行 traj-quality」；KPI 折叠「轨迹质量薄 M2」 |
 | E3 | `metrics_summary.json` → `quality`（`dcs_traj_quality_summary_v1`） |
-
-完整 M2（碰撞 / near_miss）仍按下方任务表。
 
 #### 3.5 开发任务
 
 | ID | 任务 | 估时 | 状态 |
 |----|------|------|------|
 | M2.0 | **薄 M2**：arm.jsonl 动力学 → traj_quality + CLI + 可选后处理 + E3/UI | 0.5–1d | **done** |
-| M2.1 | 适配器：DCS `states/arm.jsonl` (+ URDF 包路径) → embody 批处理输入 | 1–2d | pending |
-| M2.2 | 批跑 CLI + 写 `export/quality/*`（含 near_miss） | 1d | thin done / collision pending |
-| M2.3 | E3 汇总接入 quality 分布 | 0.5d | **thin done** |
-| M2.4 | 与后处理「一键三步」可选（默认关） | 0.5–1d | **thin done** |
+| M2.1a | **核心 SDK 文档 + v0**：`sensors.traj_safety`（sphere/hull + near_miss schema） | 0.5–1d | **done** |
+| M2.1b | 连杆 FK / capsule profile + DCS 适配写 thick sidecar + UI | 1–2d | **done** |
+| M2.1c | mesh/STL 采样进 sensors；embody 消费同一 SDK | 1–2d | **SDK done** / embody pending |
+| M2.2 | 批跑 CLI + 写 `export/quality/*`（含 near_miss） | 1d | thin done / thick pending |
+| M2.3 | E3 汇总接入 quality 分布（thin+thick） | 0.5d | **done** |
+| M2.4 | 与后处理「一键三步」可选（默认关；薄+厚） | 0.5–1d | **done** |
 
 **薄 M2 验收：** 干净轨迹 → good；人为超速/跳变 → warn；无 arm jsonl → missing；默认三步/快速采集耗时不变（默认关）。  
-**完整 M2 验收：** 对已知碰撞夹具集标出 collision；干净轨迹标 good。
+**厚 M2 验收：** 已知桌面/自碰夹具 → bad；near-miss 带 → warn；干净 → good；算法在 `sensors`，DCS/embody 只做适配。
 
 ---
 

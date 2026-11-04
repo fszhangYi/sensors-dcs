@@ -297,6 +297,42 @@ def main(argv: list[str] | None = None) -> int:
         help="per-sample joint jump limit rad (default 0.35)",
     )
 
+    p_ts = sub.add_parser(
+        "traj-safety",
+        help="Thick M2: FK link spheres via sensors.traj_safety → "
+        "export/quality/traj_quality.json + near_miss.json (optional; not default three steps)",
+    )
+    p_ts.add_argument("-e", "--episode", default=None, help="single episode directory")
+    p_ts.add_argument(
+        "-c",
+        "--root",
+        default=None,
+        help="collect root: every episode_* (alternative to -e)",
+    )
+    p_ts.add_argument(
+        "--no-write",
+        action="store_true",
+        default=False,
+        help="analyze only; do not write sidecars",
+    )
+    p_ts.add_argument(
+        "--profile",
+        default="elite_cs66",
+        help="sensors.traj_safety profile id (default elite_cs66)",
+    )
+    p_ts.add_argument(
+        "--stride",
+        type=int,
+        default=1,
+        help="evaluate every N-th joint sample (default 1)",
+    )
+    p_ts.add_argument(
+        "--no-thin",
+        action="store_true",
+        default=False,
+        help="skip merging thin dynamics into traj_quality.json",
+    )
+
     p_outcomes = sub.add_parser(
         "outcomes",
         help="summarize task_outcome (E1) + intervention (E2) KPIs under a collect root",
@@ -657,6 +693,47 @@ def main(argv: list[str] | None = None) -> int:
         else:
             result = run_traj_quality_root(
                 root, write=write, omega_max_rad_s=omega, jump_rad=jump
+            )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+
+    if args.cmd == "traj-safety":
+        from sensors_dcs.export.traj_safety_thick import (
+            run_traj_safety_thick,
+            run_traj_safety_thick_root,
+        )
+
+        write = not bool(getattr(args, "no_write", False))
+        ep = (getattr(args, "episode", None) or "").strip() or None
+        root = (getattr(args, "root", None) or "").strip() or None
+        if bool(ep) == bool(root):
+            print(
+                json.dumps(
+                    {"ok": False, "error": "provide exactly one of -e/--episode or -c/--root"},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 1
+        profile = str(getattr(args, "profile", None) or "elite_cs66")
+        stride = max(1, int(getattr(args, "stride", 1) or 1))
+        also_thin = not bool(getattr(args, "no_thin", False))
+
+        if ep:
+            result = run_traj_safety_thick(
+                ep,
+                write=write,
+                profile_id=profile,
+                stride=stride,
+                also_thin=also_thin,
+            )
+        else:
+            result = run_traj_safety_thick_root(
+                root,
+                write=write,
+                profile_id=profile,
+                stride=stride,
+                also_thin=also_thin,
             )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1

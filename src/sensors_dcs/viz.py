@@ -1765,6 +1765,11 @@ PREVIEW_HTML = """<!DOCTYPE html>
       border-top: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
       min-height: 2.5rem;
       max-height: min(14rem, 28vh);
+      overflow: auto;
+      overflow-x: auto;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--scrollbar-thumb) transparent;
     }
     .pp-metrics-pivots-body {
       padding: 0.35rem 0.55rem 0.55rem;
@@ -2176,7 +2181,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     pre#ppLog,
     pre#ppSessionLog,
-    pre#ppSessionHealth {
+    pre#ppSessionHealth,
+    pre#ppMetricsLog,
+    pre#ppBatchLog {
       margin: 0;
       padding: 0.65rem 0.85rem;
       overflow: auto;
@@ -2202,19 +2209,25 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     pre#ppLog::-webkit-scrollbar,
     pre#ppSessionLog::-webkit-scrollbar,
-    pre#ppSessionHealth::-webkit-scrollbar {
+    pre#ppSessionHealth::-webkit-scrollbar,
+    pre#ppMetricsLog::-webkit-scrollbar,
+    pre#ppBatchLog::-webkit-scrollbar {
       width: var(--scrollbar-size);
       height: var(--scrollbar-size);
     }
     pre#ppLog::-webkit-scrollbar-thumb,
     pre#ppSessionLog::-webkit-scrollbar-thumb,
-    pre#ppSessionHealth::-webkit-scrollbar-thumb {
+    pre#ppSessionHealth::-webkit-scrollbar-thumb,
+    pre#ppMetricsLog::-webkit-scrollbar-thumb,
+    pre#ppBatchLog::-webkit-scrollbar-thumb {
       background: var(--scrollbar-thumb);
       border-radius: 999px;
     }
     pre#ppLog::-webkit-scrollbar-thumb:hover,
     pre#ppSessionLog::-webkit-scrollbar-thumb:hover,
-    pre#ppSessionHealth::-webkit-scrollbar-thumb:hover {
+    pre#ppSessionHealth::-webkit-scrollbar-thumb:hover,
+    pre#ppMetricsLog::-webkit-scrollbar-thumb:hover,
+    pre#ppBatchLog::-webkit-scrollbar-thumb:hover {
       background: var(--scrollbar-thumb-hover);
     }
     .inf-pi05-panel {
@@ -3889,10 +3902,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
                     <input type="checkbox" id="ppOptTrajQuality" />
                     <span data-i18n="pp.opt_traj_quality">附带 traj-quality（薄 M2，默认关）</span>
                   </label>
+                  <label class="quick-collect" data-i18n-title="pp.opt_traj_safety_tip" title="可选：FK 几何安全（厚 M2）；independent，filter/hik 失败仍会跑">
+                    <input type="checkbox" id="ppOptTrajSafety" />
+                    <span data-i18n="pp.opt_traj_safety">附带 traj-safety（厚 M2，默认关）</span>
+                  </label>
                 </div>
                 <div class="pp-actions">
                   <button type="button" class="primary" id="btnPpRunAll" data-i18n="pp.run_all">一键执行三步</button>
                   <button type="button" id="btnPpTrajQuality" data-i18n="pp.run_traj">仅运行 traj-quality</button>
+                  <button type="button" id="btnPpTrajSafety" data-i18n="pp.run_traj_safety">仅运行 traj-safety</button>
                   <span class="hint" id="ppHint"></span>
                 </div>
                 <pre id="ppLog" data-i18n="pp.log_idle">（尚未运行）</pre>
@@ -3910,6 +3928,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
                   <label class="quick-collect" data-i18n-title="pp.opt_traj_tip" title="可选：在三步后追加关节/TCP 动力学 sidecar">
                     <input type="checkbox" id="ppBatchOptTrajQuality" />
                     <span data-i18n="pp.opt_traj_quality">附带 traj-quality（薄 M2，默认关）</span>
+                  </label>
+                  <label class="quick-collect" data-i18n-title="pp.opt_traj_safety_tip" title="可选：FK 几何安全（厚 M2）">
+                    <input type="checkbox" id="ppBatchOptTrajSafety" />
+                    <span data-i18n="pp.opt_traj_safety">附带 traj-safety（厚 M2，默认关）</span>
                   </label>
                 </div>
                 <div class="pp-actions">
@@ -8760,7 +8782,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const ppBatchRoot = document.getElementById('ppBatchRoot');
     const ppBatchOverwrite = document.getElementById('ppBatchOverwrite');
     const ppBatchOptTrajQuality = document.getElementById('ppBatchOptTrajQuality');
+    const ppBatchOptTrajSafety = document.getElementById('ppBatchOptTrajSafety');
     const ppOptTrajQuality = document.getElementById('ppOptTrajQuality');
+    const ppOptTrajSafety = document.getElementById('ppOptTrajSafety');
     const ppBatchHint = document.getElementById('ppBatchHint');
     const ppBatchLog = document.getElementById('ppBatchLog');
     const ppStep4Formats = document.getElementById('ppStep4Formats');
@@ -11512,7 +11536,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
         batch_root: (ppBatchRoot && ppBatchRoot.value || '').trim() || '',
         batch_overwrite: !(ppBatchOverwrite && ppBatchOverwrite.checked === false),
         opt_traj_quality: !!(ppOptTrajQuality && ppOptTrajQuality.checked),
+        opt_traj_safety: !!(ppOptTrajSafety && ppOptTrajSafety.checked),
         batch_opt_traj_quality: !!(ppBatchOptTrajQuality && ppBatchOptTrajQuality.checked),
+        batch_opt_traj_safety: !!(ppBatchOptTrajSafety && ppBatchOptTrajSafety.checked),
         step4_root: (ppStep4Root && ppStep4Root.value || '').trim() || '',
         step4_formats: getStep4Formats(),
         session_save_dir: (ppSessionSaveDir && ppSessionSaveDir.value || '').trim() || '',
@@ -11688,8 +11714,14 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (ppOptTrajQuality && src.opt_traj_quality != null) {
         ppOptTrajQuality.checked = !!src.opt_traj_quality;
       }
+      if (ppOptTrajSafety && src.opt_traj_safety != null) {
+        ppOptTrajSafety.checked = !!src.opt_traj_safety;
+      }
       if (ppBatchOptTrajQuality && src.batch_opt_traj_quality != null) {
         ppBatchOptTrajQuality.checked = !!src.batch_opt_traj_quality;
+      }
+      if (ppBatchOptTrajSafety && src.batch_opt_traj_safety != null) {
+        ppBatchOptTrajSafety.checked = !!src.batch_opt_traj_safety;
       }
       if (ppStep4Root) {
         ppStep4Root.value = (src.step4_root || src.batch_root || '').trim();
@@ -11712,7 +11744,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       refreshRatePolicySummary();
     }
 
-    [ppAlign, ppAlignClock, ppPrimaryCamera, ppMaster, ppRatePolicy, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppTcpX, ppTcpY, ppTcpZ, ppAllowInvalid, ppEpisode, ppPackInput, ppPackOutput, ppPackAllowInvalid, ppBatchRoot, ppBatchOverwrite, ppOptTrajQuality, ppBatchOptTrajQuality, ppStep4Root, ppSessionSaveDir].forEach((el) => {
+    [ppAlign, ppAlignClock, ppPrimaryCamera, ppMaster, ppRatePolicy, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppTcpX, ppTcpY, ppTcpZ, ppAllowInvalid, ppEpisode, ppPackInput, ppPackOutput, ppPackAllowInvalid, ppBatchRoot, ppBatchOverwrite, ppOptTrajQuality, ppOptTrajSafety, ppBatchOptTrajQuality, ppBatchOptTrajSafety, ppStep4Root, ppSessionSaveDir].forEach((el) => {
       if (!el) return;
       el.addEventListener('change', savePpForm);
       el.addEventListener('blur', savePpForm);
@@ -12226,6 +12258,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
         warn: by.warn != null ? by.warn : 0,
         bad: by.bad != null ? by.bad : 0,
         overspeed: sum.overspeed_episodes != null ? sum.overspeed_episodes : 0,
+        thick: sum.thick != null ? sum.thick : 0,
+        table: sum.table_hit_episodes != null ? sum.table_hit_episodes : 0,
+        self: sum.self_hit_episodes != null ? sum.self_hit_episodes : 0,
+        near: sum.near_miss_episodes != null ? sum.near_miss_episodes : 0,
       })) + '</p>');
       const rows = Array.isArray(q.episodes) ? q.episodes : [];
       if (!rows.length) {
@@ -12233,18 +12269,20 @@ PREVIEW_HTML = """<!DOCTYPE html>
       } else {
         const body = rows.map((r) => {
           return '<tr><td>' + _ppEsc(r.episode || '')
+            + '</td><td>' + _ppEsc(r.kind || '—')
             + '</td><td>' + _ppEsc(r.grade || '—')
             + '</td><td>' + _ppEsc(r.overspeed_count != null ? r.overspeed_count : '—')
-            + '</td><td>' + _ppEsc(r.jump_count != null ? r.jump_count : '—')
-            + '</td><td>' + _ppEsc(r.tcp_overspeed_count != null ? r.tcp_overspeed_count : '—')
+            + '</td><td>' + _ppEsc(r.n_table != null ? r.n_table : '—')
+            + '</td><td>' + _ppEsc(r.n_self != null ? r.n_self : '—')
+            + '</td><td>' + _ppEsc(r.n_near_miss != null ? r.n_near_miss : '—')
             + '</td><td>' + _ppEsc(r.agent_id || '—')
             + '</td></tr>';
         }).join('');
         lines.push('<div class="pp-pivot-block"><h4>' + _ppEsc(t('pp.metrics_quality_rows'))
           + '</h4><table><thead><tr>'
-          + '<th>episode</th>'
+          + '<th>episode</th><th>kind</th>'
           + '<th>' + _ppEsc(t('pp.metrics_quality_grade')) + '</th>'
-          + '<th>overspeed</th><th>jump</th><th>tcp_v</th><th>agent</th>'
+          + '<th>overspeed</th><th>table</th><th>self</th><th>near</th><th>agent</th>'
           + '</tr></thead><tbody>' + body + '</tbody></table></div>');
       }
       ppMetricsQuality.innerHTML = lines.join('');
@@ -12275,7 +12313,9 @@ PREVIEW_HTML = """<!DOCTYPE html>
         [t('pp.metrics_cov_unprocessed'), covSum.unprocessed != null ? String(covSum.unprocessed) : '—'],
         [t('pp.metrics_cov_alerts'), covSum.alert_count != null ? String(covSum.alert_count) : '—'],
         [t('pp.metrics_quality_warn'), qBy.warn != null ? String(qBy.warn) : '—'],
+        [t('pp.metrics_quality_bad'), qBy.bad != null ? String(qBy.bad) : '—'],
         [t('pp.metrics_quality_missing'), qSum.missing != null ? String(qSum.missing) : '—'],
+        [t('pp.metrics_quality_thick'), qSum.thick != null ? String(qSum.thick) : '—'],
       ];
       ppMetricsGrid.innerHTML = cells.map(([label, val]) => (
         '<div class="pp-metric"><span class="k">' + label + '</span><span class="v">' + val + '</span></div>'
@@ -12288,10 +12328,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
     function defaultThreeSteps() {
       return ['export-timeline', 'filter-timeline', 'export-hik-dataset'];
     }
-    function stepsWithOptionalTraj(base, includeTraj) {
+    function stepsWithOptionalTraj(base, includeTraj, includeSafety) {
       const steps = (base && base.length) ? base.slice() : defaultThreeSteps();
-      // Prefixed: traj-quality reads raw states/ and should not wait behind hik.
-      // Server also continues INDEPENDENT_STEPS after mid-pipeline failure.
+      // Prefixed independent steps: read raw states/; survive hik failure.
+      if (includeSafety && steps.indexOf('traj-safety') < 0) steps.unshift('traj-safety');
       if (includeTraj && steps.indexOf('traj-quality') < 0) steps.unshift('traj-quality');
       return steps;
     }
@@ -12384,7 +12424,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
     function setPpBusy(on, text) {
       ppBusy = !!on;
-      ['btnPpExport', 'btnPpFilter', 'btnPpHik', 'btnPpRunAll', 'btnPpTrajQuality', 'btnPpRawVideo', 'btnPpRefresh',
+      ['btnPpExport', 'btnPpFilter', 'btnPpHik', 'btnPpRunAll', 'btnPpTrajQuality', 'btnPpTrajSafety', 'btnPpRawVideo', 'btnPpRefresh',
         'btnPpBrowseEpisode', 'btnPpBrowseCameraMap', 'btnPpPackHik',
         'btnPpBrowsePackInput', 'btnPpBrowsePackOutput',
         'btnPpBatchRun', 'btnPpBrowseBatchRoot',
@@ -12722,6 +12762,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         steps: stepsWithOptionalTraj(
           defaultThreeSteps(),
           !!(ppBatchOptTrajQuality && ppBatchOptTrajQuality.checked),
+          !!(ppBatchOptTrajSafety && ppBatchOptTrajSafety.checked),
         ),
         align: form.align,
         align_clock: form.align_clock,
@@ -12793,12 +12834,18 @@ PREVIEW_HTML = """<!DOCTYPE html>
         steps: stepsWithOptionalTraj(
           defaultThreeSteps(),
           !!(ppOptTrajQuality && ppOptTrajQuality.checked),
+          !!(ppOptTrajSafety && ppOptTrajSafety.checked),
         ),
       }));
     const btnPpTrajQuality = document.getElementById('btnPpTrajQuality');
     if (btnPpTrajQuality) {
       btnPpTrajQuality.addEventListener('click', () =>
         runPostprocess({ steps: ['traj-quality'] }));
+    }
+    const btnPpTrajSafety = document.getElementById('btnPpTrajSafety');
+    if (btnPpTrajSafety) {
+      btnPpTrajSafety.addEventListener('click', () =>
+        runPostprocess({ steps: ['traj-safety'] }));
     }
     const btnPpRawVideo = document.getElementById('btnPpRawVideo');
     if (btnPpRawVideo) btnPpRawVideo.addEventListener('click', () => runRawVideo());

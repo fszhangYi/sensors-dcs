@@ -19,11 +19,11 @@ DEFAULT_MAX_MATCH_DT = "0.033"
 DEFAULT_TRIM = "both"
 DEFAULT_STEPS = ("export-timeline", "filter-timeline", "export-hik-dataset")
 # Thin M2: optional; never included in DEFAULT_STEPS / quick-collect.
-OPTIONAL_STEPS = ("traj-quality",)
+OPTIONAL_STEPS = ("traj-quality", "traj-safety")
 ALL_STEPS = DEFAULT_STEPS + OPTIONAL_STEPS
 # Steps that read raw episode data and must still run after a mid-pipeline failure
-# (e.g. filter keep=0 → hik fails, but traj-quality should still write sidecar).
-INDEPENDENT_STEPS = frozenset({"traj-quality"})
+# (e.g. filter keep=0 → hik fails, but traj-quality/safety should still write sidecars).
+INDEPENDENT_STEPS = frozenset({"traj-quality", "traj-safety"})
 DEFAULT_RATE_POLICY_NAME = "fixed_5hz.json"
 
 
@@ -991,6 +991,17 @@ def run_postprocess(
                 log_lines.append(
                     f"traj_quality grade={meta.get('grade')} "
                     f"overspeed={meta.get('overspeed_count')} jump={meta.get('jump_count')}"
+                )
+            elif step == "traj-safety":
+                from sensors_dcs.export.traj_safety_thick import run_traj_safety_thick
+
+                meta = run_traj_safety_thick(ep, write=True, also_thin=True)
+                if not meta.get("ok"):
+                    raise RuntimeError(meta.get("error") or "traj-safety failed")
+                log_lines.append(
+                    f"traj_safety grade={meta.get('grade')} "
+                    f"table={meta.get('n_table')} self={meta.get('n_self')} "
+                    f"near={meta.get('n_near_miss')}"
                 )
             elif step == "export-hik-dataset":
                 if not cam_map:

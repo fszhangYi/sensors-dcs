@@ -92,11 +92,31 @@ def test_aggregate_quality_block(tmp_path: Path) -> None:
             "agent_id": "arm",
         },
     )
+    ep2 = tmp_path / "episode_00002"
+    _write_json(ep2 / "manifest.json", {"format": "dcs_episode_v1", "valid": True})
+    _write_json(
+        ep2 / "export" / "quality" / "traj_quality.json",
+        {
+            "schema": "dcs_traj_quality_v1",
+            "kind": "thick",
+            "grade": "bad",
+            "n_table": 2,
+            "n_self": 1,
+            "n_near_miss": 3,
+            "thin": {"overspeed_count": 0},
+            "agent_id": "arm-cs66",
+        },
+    )
     out = aggregate_metrics(tmp_path)
     assert out["ok"] is True
     q = out["quality"]
     assert q["schema"] == "dcs_traj_quality_summary_v1"
-    assert q["summary"]["with_traj_quality"] == 1
+    assert q["summary"]["with_traj_quality"] == 2
     assert q["summary"]["missing"] == 1
+    assert q["summary"]["thick"] == 1
     assert q["summary"]["by_grade"]["warn"] == 1
+    assert q["summary"]["by_grade"]["bad"] == 1
     assert q["summary"]["overspeed_episodes"] == 1
+    assert q["summary"]["table_hit_episodes"] == 1
+    assert q["summary"]["self_hit_episodes"] == 1
+    assert q["summary"]["near_miss_episodes"] == 1

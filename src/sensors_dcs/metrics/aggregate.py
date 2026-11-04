@@ -329,51 +329,94 @@ def aggregate_metrics(root: str | Path, *, write: bool = False) -> dict[str, Any
             "summary": {},
             "episodes": [],
         }
-    # Thin M2: read export/quality/traj_quality.json sidecars
+    # M2: read export/quality/traj_quality.json (+ near_miss for thick)
     try:
         from sensors_dcs.export.traj_quality import read_traj_quality
 
         by_grade = {"good": 0, "warn": 0, "bad": 0, "missing": 0}
         n_with = 0
+        n_thick = 0
         n_overspeed_eps = 0
+        n_table_eps = 0
+        n_self_eps = 0
+        n_near_eps = 0
         q_rows: list[dict[str, Any]] = []
         for ep in finalized_eps:
             tq = read_traj_quality(ep)
             if not isinstance(tq, dict):
                 by_grade["missing"] = int(by_grade["missing"]) + 1
-                q_rows.append({"episode": ep.name, "grade": "missing"})
+                q_rows.append({"episode": ep.name, "grade": "missing", "kind": "missing"})
                 continue
             n_with += 1
+            kind = str(tq.get("kind") or "thin").strip().lower()
+            if kind == "thick":
+                n_thick += 1
             grade = str(tq.get("grade") or "missing").strip().lower()
             if grade not in by_grade:
                 grade = "missing"
             by_grade[grade] = int(by_grade[grade]) + 1
+            thin = tq.get("thin") if isinstance(tq.get("thin"), dict) else {}
             oc = tq.get("overspeed_count")
+            if oc is None:
+                oc = thin.get("overspeed_count")
             try:
                 if oc is not None and int(oc) > 0:
                     n_overspeed_eps += 1
             except (TypeError, ValueError):
                 pass
+            n_table = tq.get("n_table")
+            n_self = tq.get("n_self")
+            n_near = tq.get("n_near_miss")
+            geo = tq.get("geometry") if isinstance(tq.get("geometry"), dict) else {}
+            if n_table is None:
+                n_table = geo.get("n_table")
+            if n_self is None:
+                n_self = geo.get("n_self")
+            if n_near is None:
+                n_near = geo.get("n_near_miss")
+            try:
+                if n_table is not None and int(n_table) > 0:
+                    n_table_eps += 1
+                if n_self is not None and int(n_self) > 0:
+                    n_self_eps += 1
+                if n_near is not None and int(n_near) > 0:
+                    n_near_eps += 1
+            except (TypeError, ValueError):
+                pass
             q_rows.append(
                 {
                     "episode": ep.name,
+                    "kind": kind,
                     "grade": grade,
-                    "overspeed_count": tq.get("overspeed_count"),
-                    "jump_count": tq.get("jump_count"),
-                    "tcp_overspeed_count": tq.get("tcp_overspeed_count"),
+                    "overspeed_count": oc,
+                    "jump_count": tq.get("jump_count", thin.get("jump_count")),
+                    "tcp_overspeed_count": tq.get(
+                        "tcp_overspeed_count", thin.get("tcp_overspeed_count")
+                    ),
+                    "n_table": n_table,
+                    "n_self": n_self,
+                    "n_near_miss": n_near,
                     "agent_id": tq.get("agent_id"),
                 }
             )
         out["quality"] = {
             "schema": "dcs_traj_quality_summary_v1",
-            "kind": "thin",
-            "note": "Thin M2 traj_quality sidecars (joint/TCP dynamics). Not URDF collision.",
+            "kind": "mixed",
+            "note": (
+                "M2 traj_quality sidecars: kind=thin (dynamics) and/or thick "
+                "(sensors.traj_safety geometry). near_miss.json optional."
+            ),
             "summary": {
                 "episodes": len(finalized_eps),
                 "with_traj_quality": n_with,
                 "missing": int(by_grade["missing"]),
+                "thick": n_thick,
+                "thin": max(0, n_with - n_thick),
                 "by_grade": dict(by_grade),
                 "overspeed_episodes": n_overspeed_eps,
+                "table_hit_episodes": n_table_eps,
+                "self_hit_episodes": n_self_eps,
+                "near_miss_episodes": n_near_eps,
             },
             "episodes": q_rows,
         }
