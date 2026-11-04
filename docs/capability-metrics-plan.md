@@ -15,7 +15,7 @@
 |----|------|------------|
 | 已有 | 单次任务耗时 | `manifest.duration_s` / `t_start` / `t_end` |
 | **易** | 任务完成率、干预率、汇总看板、物体/场景标签 | 差停录标注与事件落盘 |
-| **中** | 抓取启发、轨迹/near-miss（离线）、同步覆盖报表 | 有半成品信号，需接链路 |
+| **中** | 抓取辅助标注（夹爪±FT 启发）、轨迹/near-miss（离线）、同步覆盖报表 | 有半成品信号，需接链路 |
 | 难 / 非本栈 | 恢复成功率、在线 near-miss、回充、自动泛化评估 | 本文不排期 |
 
 **硬约束（与现网一致）：**
@@ -40,7 +40,7 @@
 | `align_quality`（score/grade/keep_rate…） | `export/align_plot.py` → `filter_meta.json` | 同步门控 |
 | Gello 遥操开关、Infer `delta_pose_offset`、Estop | runtime + Collect/Infer UI | 干预事件源 |
 | embody `meta.task_outcome` / `meta.objects` | `embody_model_eval/.../task_events.js` | 标注图式对齐目标 |
-| `sensors` 的 `ft` / `tactile` kinds | 驱动已有，DCS YAML 未接 | 抓取启发输入 |
+| `sensors` 的 `ft` / `tactile` kinds | 驱动已有，DCS YAML 未接 | 抓取辅助标注输入 |
 | embody 碰撞 / TCP 门控 | `collision_geom.js` / `batch_score.py` 等 | 离线轨迹与 near-miss |
 
 ---
@@ -57,7 +57,7 @@
 \text{任务完成率} = \frac{\#\{\texttt{outcome}=\texttt{success}\}}{\#\{\text{有 outcome 且}\notin\{\texttt{void},\texttt{unknown}\}\}}
 \]
 
-可选子标签（grasp / place / other）支撑「抓取/操作成功率」的**人工版**（自动版见 M1）。
+可选子标签（grasp / place / other）支撑「抓取/操作成功率」的**人工金标**（停录后辅助预填 / 启发见 M1）。
 
 #### 2.2 数据契约（建议）
 
@@ -247,17 +247,24 @@ episode_XXXXX/
 
 ## 3. 「中等」项目详解
 
-### M1 — 力觉进 DCS + 离线抓取成功启发
+### M1 — 力觉进 DCS + 抓取**辅助标注**（启发预填 → 人工金标）
 
 #### 3.1 解释
 
-人工 `labels: ["grasp"]`（E1）给出监督标签；M1 用 **夹爪行程 +（可选）FT** 做弱自动启发，降低每条都手点的成本，但 **不替代** 人工金标（除非校准后明确切换）。
+M1 是 **辅助标注飞轮**，不是替代标注：采集停录后立刻从 **夹爪行程 +（可选）FT** 抽出力学/夹持特征 → **自动预填**抓取相关表单并落盘启发结果 → 操作员给出 **E1 人工金标**；启发与金标的差异进入对照表，用来调阈值或升级下一版辅助模型。
+
+```text
+停录 → 特征/启发（预填 + sidecar） → 人工确认/改正（金标） → 差异回流（阈值/模型）
+         ↑________________ 辅助标注 ________________↑      ↑____ 监督信号 ____↑
+```
+
+**边界：** 启发 **默认不覆盖** `task_outcome` / 人工 `labels`；只有校准后明确切换才可讨论「默认采用启发」。无 FT 时仍可用夹爪规则跑，并标注 `ft=false`。
 
 启发示例（可配置阈值）：
 
 - 闭合过程中夹爪位置进入夹持区间并维持 ≥ \(T\) 秒  
 - 若有 FT：法向力超过 \(F_{\min}\) 且未触发安全上限  
-- 与 E1 `outcome` 不一致时记 `grasp_heuristic` 仅供对照，不覆盖 `task_outcome`
+- 与 E1 金标不一致时保留双方：`grasp_heuristic`（辅助）vs `task_outcome` / `labels`（金标）
 
 #### 3.2 前置
 
@@ -266,17 +273,18 @@ episode_XXXXX/
 | DCS agent | 增加 `type` 对应 FT（或复用 sensors kind），写入 `states/<ft>.jsonl` |
 | 配置 | 至少一份 example YAML；默认配置可不启用 |
 | 导出 | timeline 已泛化 jsonl 则可自动带上；hik 映射另议 |
+| 停录 UX | 与 E1 弹窗衔接：启发结果预填可改字段，确认后写金标 |
 
 #### 3.3 开发任务
 
 | ID | 任务 | 估时 |
 |----|------|------|
 | M1.1 | DCS 接入 FT agent（只读 ring → recorder） | 1–2d |
-| M1.2 | 离线脚本：`grasp_heuristic.py` 读 gripper±FT → 报告 | 1d |
-| M1.3 | 与人工 labels 混淆矩阵小报表 | 0.5d |
-| M1.4 | 文档：阈值标定流程、假阳性说明 | 0.5d |
+| M1.2 | `grasp_heuristic.py`：读 gripper±FT → 特征 + 启发标签（可停录后即时或后处理触发） | 1d |
+| M1.3 | 预填 E1/抓取表单 + 写 sidecar；与人工金标混淆矩阵 / 差异报表 | 0.5–1d |
+| M1.4 | 文档：阈值标定、假阳性、差异回流如何升级辅助规则/模型 | 0.5d |
 
-**验收：** 有 FT 的夹具集上启发与人工 grasp 标签一致率有记录；无 FT 时仅用夹爪规则仍可跑并标注 `ft=false`。
+**验收：** 停录后能看到预填启发；人工可改正；有 FT 夹具集上启发↔金标一致率有记录；差异可导出供调参；无 FT 时夹爪规则仍可跑并标 `ft=false`。
 
 ---
 
@@ -369,7 +377,7 @@ Week 1–2   E2 干预 jsonl + summary
 Week 2     E3 汇总 API/UI（先 consum 旧字段，再接 E1/E2）
 Week 3     M3 同步覆盖并入 E3
 Week 3–4   M2 离线 quality/near-miss（默认关）
-Week 4–5   M1 FT agent + grasp 启发（有硬件再启）
+Week 4–5   M1 FT agent + 抓取辅助标注飞轮（有硬件再启）
 ```
 
 | 里程碑 | 交付物 |
@@ -418,7 +426,7 @@ Week 4–5   M1 FT agent + grasp 启发（有硬件再启）
 | 标签覆盖 | 按 object/env 透视非空 |
 | 同步覆盖 | keep_rate / 缺失 agent 报表 |
 | 轨迹 / near-miss | 可选 sidecar；与 align 分字段 |
-| 抓取启发 | 有对照表；不覆盖人工金标 |
+| 抓取辅助标注 | 停录预填 + sidecar；对照表；不覆盖人工金标；差异可回流 |
 
 ---
 
@@ -433,7 +441,7 @@ Week 4–5   M1 FT agent + grasp 启发（有硬件再启）
 | 汇总 | `sensors_dcs/metrics/` + `/api/metrics/summary`（含 E4 tag 透视 + M3 `coverage`） |
 | 标签词表 | `tag_vocab.py` + `configs/tag_vocab.yaml` + `/api/tag-vocab` |
 | 传感器覆盖 | `metrics/coverage.py` · [`sensor-coverage.md`](sensor-coverage.md) |
-| 抓取启发 | `sensors_dcs/export/grasp_heuristic.py`（名可调） |
+| 抓取辅助标注 | `sensors_dcs/export/grasp_heuristic.py`（名可调）+ 停录预填 / 差异 sidecar |
 | 离线质量 | `export/quality/` + embody 适配器 |
 | 配置 | `runtime.require_task_outcome`；FT example YAML |
 
@@ -443,6 +451,7 @@ Week 4–5   M1 FT agent + grasp 启发（有硬件再启）
 
 | 日期 | 说明 |
 |------|------|
+| 2026-11-04 | M1 改写为「辅助标注飞轮」：停录预填 → 人工金标 → 差异回流 |
 | 2026-11-02 | 初稿：易 E1–E4、中 M1–M3 与排期 |
 | 2026-11-02 | E1 实现：`task_outcome`/`tags` 写入 manifest、停录弹窗、`sensors-dcs outcomes summary` |
 | 2026-11-03 | E4：词表 YAML/API/停录 datalist；metrics 按 object/env/task 透视与 KPI UI |
