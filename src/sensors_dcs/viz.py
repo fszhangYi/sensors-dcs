@@ -1722,7 +1722,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .pp-zone-metrics .pp-metrics-raw,
     .pp-zone-metrics .pp-metrics-pivots,
-    .pp-zone-metrics .pp-metrics-coverage {
+    .pp-zone-metrics .pp-metrics-coverage,
+    .pp-zone-metrics .pp-metrics-quality {
       margin-top: 0.45rem;
       border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
       border-radius: 8px;
@@ -1731,7 +1732,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .pp-zone-metrics .pp-metrics-raw > summary,
     .pp-zone-metrics .pp-metrics-pivots > summary,
-    .pp-zone-metrics .pp-metrics-coverage > summary {
+    .pp-zone-metrics .pp-metrics-coverage > summary,
+    .pp-zone-metrics .pp-metrics-quality > summary {
       cursor: pointer;
       user-select: none;
       list-style: none;
@@ -1741,16 +1743,19 @@ PREVIEW_HTML = """<!DOCTYPE html>
     }
     .pp-zone-metrics .pp-metrics-raw > summary::-webkit-details-marker,
     .pp-zone-metrics .pp-metrics-pivots > summary::-webkit-details-marker,
-    .pp-zone-metrics .pp-metrics-coverage > summary::-webkit-details-marker { display: none; }
+    .pp-zone-metrics .pp-metrics-coverage > summary::-webkit-details-marker,
+    .pp-zone-metrics .pp-metrics-quality > summary::-webkit-details-marker { display: none; }
     .pp-zone-metrics .pp-metrics-raw > summary::before,
     .pp-zone-metrics .pp-metrics-pivots > summary::before,
-    .pp-zone-metrics .pp-metrics-coverage > summary::before {
+    .pp-zone-metrics .pp-metrics-coverage > summary::before,
+    .pp-zone-metrics .pp-metrics-quality > summary::before {
       content: "▸ ";
       color: var(--accent, #3dd6c6);
     }
     .pp-zone-metrics .pp-metrics-raw[open] > summary::before,
     .pp-zone-metrics .pp-metrics-pivots[open] > summary::before,
-    .pp-zone-metrics .pp-metrics-coverage[open] > summary::before {
+    .pp-zone-metrics .pp-metrics-coverage[open] > summary::before,
+    .pp-zone-metrics .pp-metrics-quality[open] > summary::before {
       content: "▾ ";
     }
     .pp-zone-metrics #ppMetricsLog {
@@ -3772,6 +3777,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
               <summary data-i18n="pp.metrics_coverage_toggle">传感器/同步覆盖（默认折叠）</summary>
               <div id="ppMetricsCoverage" class="pp-metrics-pivots-body"></div>
             </details>
+            <details class="pp-metrics-quality" id="ppMetricsQualityWrap" hidden>
+              <summary data-i18n="pp.metrics_quality_toggle">轨迹质量薄 M2（默认折叠）</summary>
+              <div id="ppMetricsQuality" class="pp-metrics-pivots-body"></div>
+            </details>
             <details class="pp-metrics-raw">
               <summary data-i18n="pp.metrics_raw_toggle">原始 JSON（默认折叠）</summary>
               <pre id="ppMetricsLog" data-i18n="pp.metrics_idle">（尚未扫描）</pre>
@@ -3875,8 +3884,15 @@ PREVIEW_HTML = """<!DOCTYPE html>
               <div class="pp-zone pp-zone-run" aria-labelledby="ppZoneRunAll">
                 <h3 id="ppZoneRunAll" data-i18n="pp.run_all_title">一键三步</h3>
                 <p class="pp-hint" data-i18n="pp.run_all_hint">顺序执行 Step 1→2→3；「快速采集」勾选后结束/作废也会走同一套参数。</p>
+                <div class="pp-row">
+                  <label class="quick-collect" data-i18n-title="pp.opt_traj_tip" title="可选：在三步后追加关节/TCP 动力学 sidecar（不影响快速采集默认三步）">
+                    <input type="checkbox" id="ppOptTrajQuality" />
+                    <span data-i18n="pp.opt_traj_quality">附带 traj-quality（薄 M2，默认关）</span>
+                  </label>
+                </div>
                 <div class="pp-actions">
                   <button type="button" class="primary" id="btnPpRunAll" data-i18n="pp.run_all">一键执行三步</button>
+                  <button type="button" id="btnPpTrajQuality" data-i18n="pp.run_traj">仅运行 traj-quality</button>
                   <span class="hint" id="ppHint"></span>
                 </div>
                 <pre id="ppLog" data-i18n="pp.log_idle">（尚未运行）</pre>
@@ -3891,6 +3907,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
                 </div>
                 <div class="pp-row">
                   <label class="quick-collect"><input type="checkbox" id="ppBatchOverwrite" checked /> <span data-i18n="pp.batch_overwrite">覆盖（删除原 export/）</span></label>
+                  <label class="quick-collect" data-i18n-title="pp.opt_traj_tip" title="可选：在三步后追加关节/TCP 动力学 sidecar">
+                    <input type="checkbox" id="ppBatchOptTrajQuality" />
+                    <span data-i18n="pp.opt_traj_quality">附带 traj-quality（薄 M2，默认关）</span>
+                  </label>
                 </div>
                 <div class="pp-actions">
                   <button type="button" class="primary" id="btnPpBatchRun" data-i18n="pp.batch_run">批量执行三步</button>
@@ -8739,6 +8759,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const ppPackLog = document.getElementById('ppPackLog');
     const ppBatchRoot = document.getElementById('ppBatchRoot');
     const ppBatchOverwrite = document.getElementById('ppBatchOverwrite');
+    const ppBatchOptTrajQuality = document.getElementById('ppBatchOptTrajQuality');
+    const ppOptTrajQuality = document.getElementById('ppOptTrajQuality');
     const ppBatchHint = document.getElementById('ppBatchHint');
     const ppBatchLog = document.getElementById('ppBatchLog');
     const ppStep4Formats = document.getElementById('ppStep4Formats');
@@ -11489,6 +11511,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
         pack_allow_invalid: !!(ppPackAllowInvalid && ppPackAllowInvalid.checked),
         batch_root: (ppBatchRoot && ppBatchRoot.value || '').trim() || '',
         batch_overwrite: !(ppBatchOverwrite && ppBatchOverwrite.checked === false),
+        opt_traj_quality: !!(ppOptTrajQuality && ppOptTrajQuality.checked),
+        batch_opt_traj_quality: !!(ppBatchOptTrajQuality && ppBatchOptTrajQuality.checked),
         step4_root: (ppStep4Root && ppStep4Root.value || '').trim() || '',
         step4_formats: getStep4Formats(),
         session_save_dir: (ppSessionSaveDir && ppSessionSaveDir.value || '').trim() || '',
@@ -11661,6 +11685,12 @@ PREVIEW_HTML = """<!DOCTYPE html>
       if (ppBatchOverwrite && src.batch_overwrite != null) {
         ppBatchOverwrite.checked = !!src.batch_overwrite;
       }
+      if (ppOptTrajQuality && src.opt_traj_quality != null) {
+        ppOptTrajQuality.checked = !!src.opt_traj_quality;
+      }
+      if (ppBatchOptTrajQuality && src.batch_opt_traj_quality != null) {
+        ppBatchOptTrajQuality.checked = !!src.batch_opt_traj_quality;
+      }
       if (ppStep4Root) {
         ppStep4Root.value = (src.step4_root || src.batch_root || '').trim();
       }
@@ -11682,7 +11712,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
       refreshRatePolicySummary();
     }
 
-    [ppAlign, ppAlignClock, ppPrimaryCamera, ppMaster, ppRatePolicy, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppTcpX, ppTcpY, ppTcpZ, ppAllowInvalid, ppEpisode, ppPackInput, ppPackOutput, ppPackAllowInvalid, ppBatchRoot, ppBatchOverwrite, ppStep4Root, ppSessionSaveDir].forEach((el) => {
+    [ppAlign, ppAlignClock, ppPrimaryCamera, ppMaster, ppRatePolicy, ppRequire, ppMaxDt, ppTrim, ppMaterialize, ppCameraMap, ppTcpX, ppTcpY, ppTcpZ, ppAllowInvalid, ppEpisode, ppPackInput, ppPackOutput, ppPackAllowInvalid, ppBatchRoot, ppBatchOverwrite, ppOptTrajQuality, ppBatchOptTrajQuality, ppStep4Root, ppSessionSaveDir].forEach((el) => {
       if (!el) return;
       el.addEventListener('change', savePpForm);
       el.addEventListener('blur', savePpForm);
@@ -12069,6 +12099,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
     const ppMetricsPivotsWrap = document.getElementById('ppMetricsPivotsWrap');
     const ppMetricsCoverage = document.getElementById('ppMetricsCoverage');
     const ppMetricsCoverageWrap = document.getElementById('ppMetricsCoverageWrap');
+    const ppMetricsQuality = document.getElementById('ppMetricsQuality');
+    const ppMetricsQualityWrap = document.getElementById('ppMetricsQualityWrap');
     function _ppFmtRate(x) {
       if (x == null || !Number.isFinite(Number(x))) return '—';
       return (Number(x) * 100).toFixed(1) + '%';
@@ -12180,6 +12212,44 @@ PREVIEW_HTML = """<!DOCTYPE html>
       ppMetricsCoverage.innerHTML = lines.join('');
       ppMetricsCoverageWrap.hidden = false;
     }
+    function renderMetricsQuality(j) {
+      if (!ppMetricsQuality || !ppMetricsQualityWrap) return;
+      const q = (j && j.quality) || {};
+      const sum = q.summary || {};
+      const by = sum.by_grade || {};
+      const lines = [];
+      lines.push('<p class="pp-hint">' + _ppEsc(t('pp.metrics_quality_note')) + '</p>');
+      lines.push('<p class="pp-hint">' + _ppEsc(t('pp.metrics_quality_summary', {
+        with_q: sum.with_traj_quality != null ? sum.with_traj_quality : 0,
+        missing: sum.missing != null ? sum.missing : 0,
+        good: by.good != null ? by.good : 0,
+        warn: by.warn != null ? by.warn : 0,
+        bad: by.bad != null ? by.bad : 0,
+        overspeed: sum.overspeed_episodes != null ? sum.overspeed_episodes : 0,
+      })) + '</p>');
+      const rows = Array.isArray(q.episodes) ? q.episodes : [];
+      if (!rows.length) {
+        lines.push('<p class="pp-hint">' + _ppEsc(t('pp.metrics_pivots_empty')) + '</p>');
+      } else {
+        const body = rows.map((r) => {
+          return '<tr><td>' + _ppEsc(r.episode || '')
+            + '</td><td>' + _ppEsc(r.grade || '—')
+            + '</td><td>' + _ppEsc(r.overspeed_count != null ? r.overspeed_count : '—')
+            + '</td><td>' + _ppEsc(r.jump_count != null ? r.jump_count : '—')
+            + '</td><td>' + _ppEsc(r.tcp_overspeed_count != null ? r.tcp_overspeed_count : '—')
+            + '</td><td>' + _ppEsc(r.agent_id || '—')
+            + '</td></tr>';
+        }).join('');
+        lines.push('<div class="pp-pivot-block"><h4>' + _ppEsc(t('pp.metrics_quality_rows'))
+          + '</h4><table><thead><tr>'
+          + '<th>episode</th>'
+          + '<th>' + _ppEsc(t('pp.metrics_quality_grade')) + '</th>'
+          + '<th>overspeed</th><th>jump</th><th>tcp_v</th><th>agent</th>'
+          + '</tr></thead><tbody>' + body + '</tbody></table></div>');
+      }
+      ppMetricsQuality.innerHTML = lines.join('');
+      ppMetricsQualityWrap.hidden = false;
+    }
     function renderMetricsGrid(j) {
       if (!ppMetricsGrid) return;
       const k = (j && j.kpis) || {};
@@ -12187,6 +12257,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
       const aq = k.align_quality || {};
       const mode = k.by_mode || {};
       const covSum = ((j && j.coverage) || {}).summary || {};
+      const qSum = ((j && j.quality) || {}).summary || {};
+      const qBy = qSum.by_grade || {};
       const cells = [
         [t('pp.metrics.episodes'), k.episodes != null ? String(k.episodes) : '—'],
         [t('pp.metrics.keep_rate'), _ppFmtRate(k.keep_rate)],
@@ -12202,6 +12274,8 @@ PREVIEW_HTML = """<!DOCTYPE html>
         [t('pp.metrics.infer'), mode.infer != null ? String(mode.infer) : '—'],
         [t('pp.metrics_cov_unprocessed'), covSum.unprocessed != null ? String(covSum.unprocessed) : '—'],
         [t('pp.metrics_cov_alerts'), covSum.alert_count != null ? String(covSum.alert_count) : '—'],
+        [t('pp.metrics_quality_warn'), qBy.warn != null ? String(qBy.warn) : '—'],
+        [t('pp.metrics_quality_missing'), qSum.missing != null ? String(qSum.missing) : '—'],
       ];
       ppMetricsGrid.innerHTML = cells.map(([label, val]) => (
         '<div class="pp-metric"><span class="k">' + label + '</span><span class="v">' + val + '</span></div>'
@@ -12209,6 +12283,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
       ppMetricsGrid.hidden = false;
       renderMetricsPivots(j);
       renderMetricsCoverage(j);
+      renderMetricsQuality(j);
+    }
+    function defaultThreeSteps() {
+      return ['export-timeline', 'filter-timeline', 'export-hik-dataset'];
+    }
+    function stepsWithOptionalTraj(base, includeTraj) {
+      const steps = (base && base.length) ? base.slice() : defaultThreeSteps();
+      // Prefixed: traj-quality reads raw states/ and should not wait behind hik.
+      // Server also continues INDEPENDENT_STEPS after mid-pipeline failure.
+      if (includeTraj && steps.indexOf('traj-quality') < 0) steps.unshift('traj-quality');
+      return steps;
     }
     async function runMetricsSummary(opts) {
       opts = opts || {};
@@ -12299,7 +12384,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
 
     function setPpBusy(on, text) {
       ppBusy = !!on;
-      ['btnPpExport', 'btnPpFilter', 'btnPpHik', 'btnPpRunAll', 'btnPpRawVideo', 'btnPpRefresh',
+      ['btnPpExport', 'btnPpFilter', 'btnPpHik', 'btnPpRunAll', 'btnPpTrajQuality', 'btnPpRawVideo', 'btnPpRefresh',
         'btnPpBrowseEpisode', 'btnPpBrowseCameraMap', 'btnPpPackHik',
         'btnPpBrowsePackInput', 'btnPpBrowsePackOutput',
         'btnPpBatchRun', 'btnPpBrowseBatchRoot',
@@ -12634,7 +12719,10 @@ PREVIEW_HTML = """<!DOCTYPE html>
       }
       const body = {
         input_root: inputRoot,
-        steps: ['export-timeline', 'filter-timeline', 'export-hik-dataset'],
+        steps: stepsWithOptionalTraj(
+          defaultThreeSteps(),
+          !!(ppBatchOptTrajQuality && ppBatchOptTrajQuality.checked),
+        ),
         align: form.align,
         align_clock: form.align_clock,
         primary_camera: form.primary_camera,
@@ -12701,7 +12789,17 @@ PREVIEW_HTML = """<!DOCTYPE html>
     document.getElementById('btnPpHik').addEventListener('click', () =>
       runPostprocess({ steps: ['export-hik-dataset'] }));
     document.getElementById('btnPpRunAll').addEventListener('click', () =>
-      runPostprocess({ steps: ['export-timeline', 'filter-timeline', 'export-hik-dataset'] }));
+      runPostprocess({
+        steps: stepsWithOptionalTraj(
+          defaultThreeSteps(),
+          !!(ppOptTrajQuality && ppOptTrajQuality.checked),
+        ),
+      }));
+    const btnPpTrajQuality = document.getElementById('btnPpTrajQuality');
+    if (btnPpTrajQuality) {
+      btnPpTrajQuality.addEventListener('click', () =>
+        runPostprocess({ steps: ['traj-quality'] }));
+    }
     const btnPpRawVideo = document.getElementById('btnPpRawVideo');
     if (btnPpRawVideo) btnPpRawVideo.addEventListener('click', () => runRawVideo());
     const btnPpPackHik = document.getElementById('btnPpPackHik');

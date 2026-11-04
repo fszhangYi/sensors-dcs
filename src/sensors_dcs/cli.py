@@ -266,6 +266,37 @@ def main(argv: list[str] | None = None) -> int:
         help="also write <root>/metrics_summary.json",
     )
 
+    p_tq = sub.add_parser(
+        "traj-quality",
+        help="Thin M2: joint/TCP dynamics → episode/export/quality/traj_quality.json "
+        "(no URDF collision; not part of default three steps)",
+    )
+    p_tq.add_argument("-e", "--episode", default=None, help="single episode directory")
+    p_tq.add_argument(
+        "-c",
+        "--root",
+        default=None,
+        help="collect root: run on every episode_* (alternative to -e)",
+    )
+    p_tq.add_argument(
+        "--no-write",
+        action="store_true",
+        default=False,
+        help="analyze only; do not write traj_quality.json",
+    )
+    p_tq.add_argument(
+        "--omega-max",
+        type=float,
+        default=None,
+        help="joint speed limit rad/s (default 2.0)",
+    )
+    p_tq.add_argument(
+        "--jump-rad",
+        type=float,
+        default=None,
+        help="per-sample joint jump limit rad (default 0.35)",
+    )
+
     p_outcomes = sub.add_parser(
         "outcomes",
         help="summarize task_outcome (E1) + intervention (E2) KPIs under a collect root",
@@ -594,6 +625,39 @@ def main(argv: list[str] | None = None) -> int:
         from sensors_dcs.metrics.aggregate import aggregate_metrics
 
         result = aggregate_metrics(args.root, write=bool(getattr(args, "write", False)))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+
+    if args.cmd == "traj-quality":
+        from sensors_dcs.export.traj_quality import (
+            DEFAULT_JUMP_RAD,
+            DEFAULT_OMEGA_MAX_RAD_S,
+            run_traj_quality,
+            run_traj_quality_root,
+        )
+
+        write = not bool(getattr(args, "no_write", False))
+        omega = float(args.omega_max) if args.omega_max is not None else DEFAULT_OMEGA_MAX_RAD_S
+        jump = float(args.jump_rad) if args.jump_rad is not None else DEFAULT_JUMP_RAD
+        ep = (getattr(args, "episode", None) or "").strip() or None
+        root = (getattr(args, "root", None) or "").strip() or None
+        if bool(ep) == bool(root):
+            print(
+                json.dumps(
+                    {"ok": False, "error": "provide exactly one of -e/--episode or -c/--root"},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 1
+        if ep:
+            result = run_traj_quality(
+                ep, write=write, omega_max_rad_s=omega, jump_rad=jump
+            )
+        else:
+            result = run_traj_quality_root(
+                root, write=write, omega_max_rad_s=omega, jump_rad=jump
+            )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
 

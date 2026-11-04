@@ -18,6 +18,12 @@ DEFAULT_REQUIRE = "arm,cam-left,cam-right,cam-middle,gripper-read"
 DEFAULT_MAX_MATCH_DT = "0.033"
 DEFAULT_TRIM = "both"
 DEFAULT_STEPS = ("export-timeline", "filter-timeline", "export-hik-dataset")
+# Thin M2: optional; never included in DEFAULT_STEPS / quick-collect.
+OPTIONAL_STEPS = ("traj-quality",)
+ALL_STEPS = DEFAULT_STEPS + OPTIONAL_STEPS
+# Steps that read raw episode data and must still run after a mid-pipeline failure
+# (e.g. filter keep=0 → hik fails, but traj-quality should still write sidecar).
+INDEPENDENT_STEPS = frozenset({"traj-quality"})
 DEFAULT_RATE_POLICY_NAME = "fixed_5hz.json"
 
 
@@ -138,6 +144,7 @@ def postprocess_defaults(
         "allow_invalid": False,
         "tcp_xyz": tcp,
         "steps": list(DEFAULT_STEPS),
+        "optional_steps": list(OPTIONAL_STEPS),
         "standard_formats": _standard_format_defaults(),
         "episodes": list_episodes(save_dir) if save_dir else [],
         "sessions": list_sessions(save_dir) if save_dir else [],
@@ -820,7 +827,12 @@ def run_postprocess(
     allow_invalid: bool = False,
     tcp_xyz: list[float] | tuple[float, float, float] | None = None,
 ) -> dict[str, Any]:
-    """Run selected postprocess steps sequentially. Stops on first failure."""
+    """Run selected postprocess steps sequentially.
+
+    Dependent steps are skipped after the first failure. ``INDEPENDENT_STEPS``
+    (e.g. ``traj-quality``) still run so raw-state sidecars are written even when
+    filter keep=0 causes hik to fail.
+    """
     from sensors_dcs.export.filter import filter_episode_timeline
     from sensors_dcs.export.hik_dataset import export_hik_dataset
     from sensors_dcs.export.timeline import (
@@ -831,7 +843,7 @@ def run_postprocess(
 
     ep = resolve_episode_dir(episode)
     wanted = list(steps or DEFAULT_STEPS)
-    unknown = [s for s in wanted if s not in DEFAULT_STEPS]
+    unknown = [s for s in wanted if s not in ALL_STEPS]
     if unknown:
         return {"ok": False, "error": f"unknown steps: {unknown}", "episode": str(ep), "results": []}
 
@@ -926,6 +938,8 @@ def run_postprocess(
     )
     results: list[dict[str, Any]] = []
     log_lines: list[str] = []
+    pipeline_failed = False
+    pipeline_error: str | None = None
     if cam_map_requested and cam_map and cam_map != cam_map_requested:
         log_lines.append(
             f"camera_map missing ({cam_map_requested}); using fallback {cam_map}"
@@ -934,6 +948,17 @@ def run_postprocess(
         log_lines.append(f"camera_map missing and no fallback found: {cam_map_requested}")
 
     for step in wanted:
+        if pipeline_failed and step not in INDEPENDENT_STEPS:
+            results.append(
+                {
+                    "step": step,
+                    "ok": False,
+                    "skipped": True,
+                    "error": f"skipped after prior failure: {pipeline_error}",
+                }
+            )
+            log_lines.append(f"SKIP {step}: prior failure")
+            continue
         log_lines.append(f"==> {step}")
         try:
             if step == "export-timeline":
@@ -957,7 +982,17 @@ def run_postprocess(
                     materialize=bool(materialize),
                     allow_invalid=allow_invalid,
                 )
-            else:  # export-hik-dataset
+            elif step == "traj-quality":
+                from sensors_dcs.export.traj_quality import run_traj_quality
+
+                meta = run_traj_quality(ep, write=True)
+                if not meta.get("ok"):
+                    raise RuntimeError(meta.get("error") or "traj-quality failed")
+                log_lines.append(
+                    f"traj_quality grade={meta.get('grade')} "
+                    f"overspeed={meta.get('overspeed_count')} jump={meta.get('jump_count')}"
+                )
+            elif step == "export-hik-dataset":
                 if not cam_map:
                     raise ValueError(
                         "camera_map is required for export-hik-dataset "
@@ -972,6 +1007,8 @@ def run_postprocess(
                     tcp_xyz=export_tcp,
                 )
                 log_lines.append(f"tcp_xyz={list(export_tcp)}")
+            else:
+                raise ValueError(f"unsupported step: {step}")
             results.append({"step": step, "ok": True, "meta": meta})
             log_lines.append(f"ok {step}")
             if step == "filter-timeline" and isinstance(meta, dict):
@@ -990,6 +1027,17 @@ def run_postprocess(
                         f"sync={((aq.get('components') or {}).get('sync'))} "
                         f"budget={((aq.get('components') or {}).get('budget'))}"
                     )
+                # Empty keep is not a hard filter exception, but hik will usually fail.
+                # Surface it early so logs show why the dependent chain breaks.
+                try:
+                    rows_out = int(meta.get("rows_out") or 0)
+                except (TypeError, ValueError):
+                    rows_out = 0
+                if rows_out <= 0:
+                    log_lines.append(
+                        "filter keep=0 (all rows discarded); downstream hik will likely fail; "
+                        "independent steps (traj-quality) still run if requested"
+                    )
         except Exception as e:  # noqa: BLE001
             err = f"{type(e).__name__}: {e}"
             results.append(
@@ -1001,13 +1049,25 @@ def run_postprocess(
                 }
             )
             log_lines.append(f"FAIL {step}: {err}")
-            return {
-                "ok": False,
-                "error": err,
-                "episode": str(ep),
-                "results": results,
-                "log": "\n".join(log_lines),
-            }
+            if step in INDEPENDENT_STEPS:
+                # Independent step failure does not block other independent steps,
+                # but still marks the overall run failed.
+                pipeline_failed = True
+                if pipeline_error is None:
+                    pipeline_error = err
+                continue
+            pipeline_failed = True
+            pipeline_error = err
+            continue
+
+    if pipeline_failed:
+        return {
+            "ok": False,
+            "error": pipeline_error,
+            "episode": str(ep),
+            "results": results,
+            "log": "\n".join(log_lines),
+        }
 
     return {
         "ok": True,
@@ -1097,6 +1157,18 @@ def run_postprocess_root(
         }
 
     wanted = list(steps or DEFAULT_STEPS)
+    unknown = [s for s in wanted if s not in ALL_STEPS]
+    if unknown:
+        return {
+            "ok": False,
+            "error": f"unknown steps: {unknown}",
+            "input_root": str(root),
+            "ok_count": 0,
+            "skipped": 0,
+            "failed": 0,
+            "items": [],
+            "log": "\n".join(log_lines + [f"unknown steps: {unknown}"]),
+        }
     episodes = sorted(
         (p for p in root.glob("episode_*") if p.is_dir()),
         key=lambda p: p.name,

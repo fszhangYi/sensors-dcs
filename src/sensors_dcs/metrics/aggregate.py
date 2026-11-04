@@ -329,6 +329,62 @@ def aggregate_metrics(root: str | Path, *, write: bool = False) -> dict[str, Any
             "summary": {},
             "episodes": [],
         }
+    # Thin M2: read export/quality/traj_quality.json sidecars
+    try:
+        from sensors_dcs.export.traj_quality import read_traj_quality
+
+        by_grade = {"good": 0, "warn": 0, "bad": 0, "missing": 0}
+        n_with = 0
+        n_overspeed_eps = 0
+        q_rows: list[dict[str, Any]] = []
+        for ep in finalized_eps:
+            tq = read_traj_quality(ep)
+            if not isinstance(tq, dict):
+                by_grade["missing"] = int(by_grade["missing"]) + 1
+                q_rows.append({"episode": ep.name, "grade": "missing"})
+                continue
+            n_with += 1
+            grade = str(tq.get("grade") or "missing").strip().lower()
+            if grade not in by_grade:
+                grade = "missing"
+            by_grade[grade] = int(by_grade[grade]) + 1
+            oc = tq.get("overspeed_count")
+            try:
+                if oc is not None and int(oc) > 0:
+                    n_overspeed_eps += 1
+            except (TypeError, ValueError):
+                pass
+            q_rows.append(
+                {
+                    "episode": ep.name,
+                    "grade": grade,
+                    "overspeed_count": tq.get("overspeed_count"),
+                    "jump_count": tq.get("jump_count"),
+                    "tcp_overspeed_count": tq.get("tcp_overspeed_count"),
+                    "agent_id": tq.get("agent_id"),
+                }
+            )
+        out["quality"] = {
+            "schema": "dcs_traj_quality_summary_v1",
+            "kind": "thin",
+            "note": "Thin M2 traj_quality sidecars (joint/TCP dynamics). Not URDF collision.",
+            "summary": {
+                "episodes": len(finalized_eps),
+                "with_traj_quality": n_with,
+                "missing": int(by_grade["missing"]),
+                "by_grade": dict(by_grade),
+                "overspeed_episodes": n_overspeed_eps,
+            },
+            "episodes": q_rows,
+        }
+    except Exception as e:  # noqa: BLE001
+        out["quality"] = {
+            "schema": "dcs_traj_quality_summary_v1",
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+            "summary": {},
+            "episodes": [],
+        }
     if write:
         written = write_metrics_summary(base, out)
         out["written"] = written
