@@ -14,7 +14,7 @@ import yaml
 
 # Cache-bust when meshes / URDF change (browsers cache /assets/*.urdf).
 _EC616_URDF = "/assets/models/ec616/ec616.urdf?v=ee-full-1"
-_CS66_URDF = "/assets/models/cs66/cs66.urdf?v=cs66-efg-c65-3"
+_CS66_URDF = "/assets/models/cs66/cs66.urdf?v=cs66-efg-c65-d405-1"
 
 # Mirrors sensors-arm BUILTIN_MODELS / models_catalog.yaml (elite_ec616, elite_cs66*).
 ARM_VIZ_MODELS: dict[str, dict[str, Any]] = {

@@ -429,4 +429,122 @@
     <parent link="ft_kwr75_link"/>
     <child link="gripper_centor_link"/>
   </joint>
+
+  <!-- Cell C EOAT tooling on EFG-C65: dual fingertips + D405 bracket/clamp/camera.
+       Meshes converted from SolidWorks OUT assembly (mm) into this tool frame (m);
+       see sensors-arm/scripts/import_efg_c65_d405_eoat.py -->
+  <link name="gripper_fingertip_l_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/EFG-C65_D405_fingertip_l.STL"/>
+      </geometry>
+      <material name="eoat_fingertip">
+        <color rgba="0.75 0.78 0.82 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/EFG-C65_D405_fingertip_l.STL"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="gripper_fingertip_l_fixed" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="gripper_centor_link"/>
+    <child link="gripper_fingertip_l_link"/>
+  </joint>
+
+  <link name="gripper_fingertip_r_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/EFG-C65_D405_fingertip_r.STL"/>
+      </geometry>
+      <material name="eoat_fingertip">
+        <color rgba="0.75 0.78 0.82 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/EFG-C65_D405_fingertip_r.STL"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="gripper_fingertip_r_fixed" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="gripper_centor_link"/>
+    <child link="gripper_fingertip_r_link"/>
+  </joint>
+
+  <link name="wrist_cam_bracket_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/EFG-C65_D405_bracket.STL"/>
+      </geometry>
+      <material name="eoat_bracket">
+        <color rgba="0.35 0.38 0.42 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/EFG-C65_D405_bracket.STL"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="wrist_cam_bracket_fixed" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="gripper_centor_link"/>
+    <child link="wrist_cam_bracket_link"/>
+  </joint>
+
+  <link name="wrist_cam_l_clamp_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/EFG-C65_D405_l_clamp.STL"/>
+      </geometry>
+      <material name="eoat_clamp">
+        <color rgba="0.4 0.42 0.45 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/EFG-C65_D405_l_clamp.STL"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="wrist_cam_l_clamp_fixed" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="gripper_centor_link"/>
+    <child link="wrist_cam_l_clamp_link"/>
+  </joint>
+
+  <link name="wrist_cam_d405_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/D405_camera.STL"/>
+      </geometry>
+      <material name="eoat_d405">
+        <color rgba="0.12 0.12 0.14 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/D405_camera.STL"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="wrist_cam_d405_fixed" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="gripper_centor_link"/>
+    <child link="wrist_cam_d405_link"/>
+  </joint>
 </robot>
