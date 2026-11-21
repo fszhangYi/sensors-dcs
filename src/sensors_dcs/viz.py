@@ -6662,7 +6662,7 @@ PREVIEW_HTML = """<!DOCTYPE html>
         if (![rx, ry, rz].some((v) => Math.abs(v) > 1e-12)) return;
         const links = robotRoot.links || {};
         const link =
-          links.gripper_centor_link ||
+          links.gripper_base_link ||
           links.gripper_center_link ||
           links.ee_link ||
           null;
